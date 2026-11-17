@@ -24,8 +24,9 @@ Defaults live only in role defaults (the `*_defaults` roles), the lowest precede
 there is, so inventory values always win. Not in play `vars:`, and not in a
 playbook-adjacent `group_vars/all/`, both of which outrank inventory-level variables.
 
-Secrets are Ansible Vault files that are git-ignored; each has a committed
-`vault.yml.example` showing the expected keys.
+Secrets are never committed. In AAP they come from a custom credential type that
+injects them as extra vars (see [`ipam-vm/README.md`](ipam-vm/README.md)); on the CLI,
+from a git-ignored Ansible Vault file. Each `vault.yml.example` lists the expected keys.
 
 ## Execution environment
 
