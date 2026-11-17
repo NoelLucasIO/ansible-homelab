@@ -18,8 +18,8 @@
   become: true
   gather_facts: true
 
-  # Defaults live in group_vars/all/observability-agents.yml (lower precedence than
-  # inventory host/group vars, so per-host settings in AAP override them).
+  # Defaults live in roles/observability_agents_defaults (role defaults: the lowest
+  # precedence, so any inventory value in AAP overrides them).
 
   handlers:
     - name: Restart alloy
@@ -34,6 +34,8 @@
         state: restarted
         daemon_reload: true
 
+  roles:
+    - observability_agents_defaults
   tasks:
     # ============================================================== Alloy
     - name: Alloy

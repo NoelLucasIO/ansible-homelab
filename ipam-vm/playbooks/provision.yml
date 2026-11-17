@@ -15,6 +15,8 @@
       return_content: true
       status_code: [200, 201]
       timeout: 60
+  roles:
+    - ipam_vm_defaults
   pre_tasks:
     - name: Check inputs
       ansible.builtin.assert:
@@ -22,7 +24,7 @@
           - vm_name is defined
           - vm_name is match('^[a-z0-9][a-z0-9-]{0,62}$')
           - vm_ssh_pubkeys | select('search', 'CHANGE_ME') | list | length == 0
-        fail_msg: "Pass -e vm_name=<lowercase-hostname> and set vm_ssh_pubkeys in group_vars/all/vars.yml."
+        fail_msg: "Pass -e vm_name=<lowercase-hostname> and set vm_ssh_pubkeys in the inventory."
 
     - name: Name it
       ansible.builtin.set_fact:
@@ -71,6 +73,7 @@
   vars:
     baseline_manage_firewalld: true
   roles:
+    - ipam_vm_defaults
     - baseline
   post_tasks:
     - name: Done

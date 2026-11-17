@@ -20,8 +20,9 @@ with a custom execution environment (ansible-core 2.20).
 No real addresses, hostnames or keys are committed. Defaults use the RFC 5737
 documentation range (`192.0.2.0/24`) and `example.com`; real values are set as
 inventory variables in AAP (or passed with `-e @site-vars.yml` on the CLI).
-Defaults live in `group_vars/` and role defaults, never in play `vars:`, so
-inventory values always win.
+Defaults live only in role defaults (the `*_defaults` roles), the lowest precedence
+there is, so inventory values always win. Not in play `vars:`, and not in a
+playbook-adjacent `group_vars/all/`, both of which outrank inventory-level variables.
 
 Secrets are Ansible Vault files that are git-ignored; each has a committed
 `vault.yml.example` showing the expected keys.

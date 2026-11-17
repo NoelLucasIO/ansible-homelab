@@ -1,4 +1,7 @@
 ---
+# Defaults only. Role defaults have the lowest precedence, so anything set in the
+# inventory (AAP inventory variables included) or with -e overrides them.
+# A playbook-adjacent group_vars/all would NOT: it outranks inventory-level vars.
 # Defaults for bootstrap-host.yml (inventory host/group vars override these).
 automation_user: ansible
 automation_pubkey: ""          # set in inventory: public key of the AAP machine credential

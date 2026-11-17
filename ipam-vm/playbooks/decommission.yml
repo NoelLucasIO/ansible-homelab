@@ -17,6 +17,8 @@
       return_content: true
       status_code: [200]
       timeout: 60
+  roles:
+    - ipam_vm_defaults
   tasks:
     - name: Confirm by repeating the name
       ansible.builtin.assert:

@@ -19,9 +19,30 @@ Destroys and undefines the VM, removes its disk and ISO, and deletes the host re
 
 ## Setup
 
-1. **SSH key:** set `vm_ssh_pubkey` in `playbooks/group_vars/all/vars.yml` to the public half of the homelab-ssh key (`ssh-keygen -y -f <private key>`).
-2. **Vault:** `cp playbooks/group_vars/all/vault.yml.example playbooks/group_vars/all/vault.yml`, fill it in, then `ansible-vault encrypt` it (it is git-ignored).
-3. **AAP job templates**, each with credentials `homelab-ssh` + `homelab vault`:
+1. **SSH keys:** set `vm_ssh_pubkeys` (inventory variable). The key whose comment contains `aap-automation` goes to the automation user; the rest go to `baseline_admin_user`.
+2. **Secrets.** The playbooks need four: `nios_api_password`, `npm_identity`, `npm_secret`, `baseline_admin_password_hash` (`openssl passwd -6`).
+   - **CLI:** copy `playbooks/group_vars/all/vault.yml.example` to `vault.yml`, fill it in, then `ansible-vault encrypt` it (it is git-ignored).
+   - **AAP:** create a custom credential type that injects them as extra vars, and attach a credential of that type to both job templates:
+
+     ```yaml
+     # Input configuration
+     fields:
+       - {id: nios_api_password, label: NIOS API password, type: string, secret: true}
+       - {id: npm_identity, label: NPM login email, type: string}
+       - {id: npm_secret, label: NPM password, type: string, secret: true}
+       - {id: baseline_admin_password_hash, label: Admin password hash (SHA-512 crypt), type: string, secret: true}
+     required: [nios_api_password, npm_identity, npm_secret, baseline_admin_password_hash]
+     ```
+
+     ```yaml
+     # Injector configuration
+     extra_vars:
+       nios_api_password: '{{ nios_api_password }}'
+       npm_identity: '{{ npm_identity }}'
+       npm_secret: '{{ npm_secret }}'
+       baseline_admin_password_hash: '{{ baseline_admin_password_hash }}'
+     ```
+3. **AAP job templates**, each with the machine credential and the secrets credential:
    - **VM provision**, playbook `ipam-vm/playbooks/provision.yml`. Survey: `vm_name` (text, required), `vm_vcpus`, `vm_memory_mb`, `vm_disk_gb` (integers, with defaults 2 / 4096 / 40).
    - **VM decommission**, playbook `ipam-vm/playbooks/decommission.yml`. Survey: `vm_name`, `confirm`.
 
@@ -118,4 +139,4 @@ One-time setup in NPM:
 - **Access Lists → Add**: `LAN only`, allow `192.0.2.0/24`, then deny all.
 - **Users → Add**: an AAP user. Set visibility to All items, Proxy Hosts to Manage, Certificates and Access Lists to View Only, and everything else to Hidden.
 
-Put its login in the vault as `npm_identity` (email) and `npm_secret`.
+Its login is `npm_identity` (email) and `npm_secret` (see Secrets above).

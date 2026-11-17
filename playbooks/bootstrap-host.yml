@@ -20,7 +20,9 @@
   become: true
   gather_facts: true
 
-  # Defaults live in group_vars/all/bootstrap-host.yml so inventory values override them.
+  # Defaults live in roles/bootstrap_host_defaults (role defaults: inventory values override them).
+  roles:
+    - bootstrap_host_defaults
   vars:
     is_rhel: "{{ ansible_facts['distribution'] == 'RedHat' }}"
 

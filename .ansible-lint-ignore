@@ -1,0 +1,4 @@
+# Site-default roles hold shared variables for several plays, so they don't use a role-name prefix.
+ipam-vm/playbooks/roles/ipam_vm_defaults/defaults/main.yml var-naming[no-role-prefix]
+playbooks/roles/bootstrap_host_defaults/defaults/main.yml var-naming[no-role-prefix]
+playbooks/roles/observability_agents_defaults/defaults/main.yml var-naming[no-role-prefix]

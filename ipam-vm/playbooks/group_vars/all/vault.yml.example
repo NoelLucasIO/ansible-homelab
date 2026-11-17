@@ -1,6 +1,7 @@
 ---
-# Copy to vault.yml, fill in, then: ansible-vault encrypt vault.yml  (vault.yml is git-ignored)
-nios_admin_password: CHANGE_ME
+# CLI: copy to vault.yml, fill in, then `ansible-vault encrypt vault.yml` (vault.yml is git-ignored).
+# AAP: supply these four through a custom credential instead (see README).
 nios_api_password: CHANGE_ME
-# mkpasswd --method=sha-512   (or: python3 -c 'import crypt; print(crypt.crypt("pw", crypt.mksalt()))')
-baseline_admin_password_hash: CHANGE_ME
+npm_identity: CHANGE_ME            # NPM login email
+npm_secret: CHANGE_ME              # NPM password
+baseline_admin_password_hash: CHANGE_ME   # openssl passwd -6
