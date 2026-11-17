@@ -1,0 +1,26 @@
+# {{ ansible_managed }}
+# Grafana Alloy: system journal shipper (rootful, reads the whole journal)
+[Unit]
+Description=Grafana Alloy (journal shipper)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image={{ alloy_image }}
+ContainerName=alloy
+Network=host
+# read-only access to the host journal; skip SELinux relabelling of system paths
+SecurityLabelDisable=true
+Volume=/etc/alloy:/etc/alloy:ro
+Volume=/var/lib/alloy:/var/lib/alloy/data
+Volume=/var/log/journal:/var/log/journal:ro
+Volume=/etc/machine-id:/etc/machine-id:ro
+Environment=TZ={{ alloy_timezone }}
+Exec=run --server.http.listen-addr=127.0.0.1:{{ alloy_http_port }} --storage.path=/var/lib/alloy/data --disable-reporting /etc/alloy/config.alloy
+
+[Service]
+Restart=always
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

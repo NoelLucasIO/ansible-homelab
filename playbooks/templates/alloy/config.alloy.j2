@@ -1,0 +1,74 @@
+// {{ ansible_managed }}
+// Grafana Alloy on {{ inventory_hostname }}: system journal -> fedora relay -> Loki.
+// Same label set as the workstation (host, unit, container, level; job="journal").
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+loki.relabel "journal" {
+  forward_to = []
+
+  rule {
+    source_labels = ["__journal__hostname"]
+    target_label  = "host"
+  }
+  rule {
+    source_labels = ["__journal__systemd_unit"]
+    target_label  = "unit"
+  }
+  // Fold per-instance scopes into fixed names: every SSH login (session-N) and
+  // container start (libpod-<64 hex>) would otherwise create a new Loki stream.
+  rule {
+    source_labels = ["unit"]
+    regex         = "session-[0-9]+\\.scope"
+    target_label  = "unit"
+    replacement   = "session.scope"
+  }
+  rule {
+    source_labels = ["unit"]
+    regex         = "libpod-(conmon-)?[0-9a-f]{64}\\.scope"
+    target_label  = "unit"
+    replacement   = "libpod-${1}container.scope"
+  }
+  rule {
+    source_labels = ["__journal__systemd_user_unit"]
+    target_label  = "user_unit"
+  }
+  rule {
+    source_labels = ["__journal_container_name"]
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__journal_priority_keyword"]
+    target_label  = "level"
+  }
+}
+
+loki.source.journal "system" {
+  path          = "/var/log/journal"
+  max_age       = "{{ alloy_journal_max_age }}"
+  relabel_rules = loki.relabel.journal.rules
+  labels        = { job = "journal" }
+  forward_to    = [loki.process.journal.receiver]
+}
+
+loki.process "journal" {
+  forward_to = [loki.write.relay.receiver]
+{% for pattern in alloy_drop_patterns %}
+
+  stage.match {
+    // LogQL raw string inside an Alloy string: only backslashes need escaping
+    selector            = "{job=\"journal\"} |~ `{{ pattern | replace('\\', '\\\\') }}`"
+    action              = "drop"
+    drop_counter_reason = "noise_{{ loop.index }}"
+  }
+{% endfor %}
+}
+
+loki.write "relay" {
+  endpoint {
+    url = "{{ alloy_loki_push_url }}"
+  }
+}

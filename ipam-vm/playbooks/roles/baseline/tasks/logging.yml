@@ -1,0 +1,30 @@
+---
+# Under SELinux, rsyslog may only connect to syslog-labelled ports; 1516 isn't one.
+- name: SELinux port labels
+  ansible.builtin.command: semanage port -l
+  register: baseline_seports
+  changed_when: false
+  when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+# semanage -a on an already-labelled port "modifies instead" and exits 0, so check first.
+- name: Label rsyslog's forwarding port as syslogd_port_t, tcp/{{ baseline_log_port }}
+  ansible.builtin.command: semanage port -a -t syslogd_port_t -p tcp {{ baseline_log_port }}
+  changed_when: true
+  when:
+    - ansible_facts.selinux.status | default('disabled') == 'enabled'
+    - (baseline_log_port | string) not in (baseline_seports.stdout_lines | select('match', 'syslogd_port_t +tcp ')
+        | join(' ') | replace(',', ' ') | split)
+
+- name: Queue directory
+  ansible.builtin.file:
+    path: /var/lib/rsyslog
+    state: directory
+    mode: "0700"
+
+- name: Forwarding rules
+  ansible.builtin.template:
+    src: 50-forward.conf.j2
+    dest: /etc/rsyslog.d/50-forward.conf
+    mode: "0644"
+    validate: rsyslogd -N1 -f %s
+  notify: Restart rsyslog

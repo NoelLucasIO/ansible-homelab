@@ -1,0 +1,224 @@
+---
+# observability-agents.yml: ship a host's logs to both stacks.
+#
+#   Alloy  -> system journal -> fedora relay (192.0.2.45:3500) -> Loki -> Grafana
+#   Splunk -> Universal Forwarder as a deployment client of splunk-ds.example.com:8089;
+#             the deployment server pushes the inputs/outputs apps (same as fedora/workstation)
+#
+# Target hosts in the 'log_agents' inventory group. fedora (runs the stack) and the
+# workstation (hand-tuned Codex/LLM pipeline) are deliberately NOT in that group.
+#
+# Survey / extra vars:
+#   splunk_uf_url              download URL of the UF .tgz (Linux x86_64) - required for UF
+#   splunk_uf_admin_password   local UF admin password (survey: password)  - required for UF
+#   install_alloy / install_splunk_uf   toggles (default true)
+
+- name: Install log shipping agents
+  hosts: log_agents
+  become: true
+  gather_facts: true
+
+  # Defaults live in group_vars/all/observability-agents.yml (lower precedence than
+  # inventory host/group vars, so per-host settings in AAP override them).
+
+  handlers:
+    - name: Restart alloy
+      ansible.builtin.systemd_service:
+        name: alloy.service
+        state: restarted
+        daemon_reload: true
+
+    - name: Restart splunk forwarder
+      ansible.builtin.systemd_service:
+        name: SplunkForwarder.service
+        state: restarted
+        daemon_reload: true
+
+  tasks:
+    # ============================================================== Alloy
+    - name: Alloy
+      when: install_alloy | bool
+      block:
+        - name: Install podman (RHEL / Fedora)
+          ansible.builtin.dnf:
+            name: podman
+            state: present
+          when: ansible_facts['os_family'] == 'RedHat'
+
+        - name: Install podman (Arch)
+          community.general.pacman:
+            name: podman
+            state: present
+          when: ansible_facts['os_family'] == 'Archlinux'
+
+        # Minimal RHEL keeps the journal in /run only (lost on reboot, and nothing
+        # at /var/log/journal to mount). Persistent storage fixes both.
+        - name: Make the journal persistent
+          ansible.builtin.file:
+            path: /var/log/journal
+            state: directory
+            owner: root
+            group: systemd-journal
+            mode: "2755"
+          register: journal_dir
+
+        - name: Apply journal ACLs and flush the runtime journal to disk
+          ansible.builtin.shell:
+            cmd: systemd-tmpfiles --create --prefix /var/log/journal && journalctl --flush
+          changed_when: true
+          when: journal_dir is changed # noqa no-handler
+
+        - name: Create Alloy config and data directories
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0750"
+          loop:
+            - /etc/alloy
+            - /var/lib/alloy
+            - /etc/containers/systemd
+
+        - name: Pull the Alloy image
+          containers.podman.podman_image:
+            name: "{{ alloy_image }}"
+
+        - name: Deploy Alloy config (validated with 'alloy fmt' before install)
+          ansible.builtin.template:
+            src: alloy/config.alloy.j2
+            dest: /etc/alloy/config.alloy
+            owner: root
+            group: root
+            mode: "0640"
+            validate: podman run --rm --security-opt label=disable -v %s:/tmp/check.alloy:ro {{ alloy_image }} fmt /tmp/check.alloy
+          notify: Restart alloy
+
+        - name: Deploy Alloy quadlet
+          ansible.builtin.template:
+            src: alloy/alloy.container.j2
+            dest: /etc/containers/systemd/alloy.container
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Restart alloy
+
+        - name: Start Alloy
+          ansible.builtin.systemd_service:
+            name: alloy.service
+            state: started
+            daemon_reload: true
+
+        - name: Flush handlers so the readiness check sees the final config
+          ansible.builtin.meta: flush_handlers
+
+        - name: Wait for Alloy to report ready
+          ansible.builtin.uri:
+            url: "http://127.0.0.1:{{ alloy_http_port }}/-/ready"
+            status_code: 200
+          register: alloy_ready
+          retries: 12
+          delay: 5
+          until: alloy_ready.status == 200
+
+    # ============================================================== Splunk UF
+    - name: Detect a full Splunk Enterprise install (never put a UF beside it)
+      ansible.builtin.stat:
+        path: /opt/splunk/bin/splunk
+      register: splunk_enterprise
+      when: install_splunk_uf | bool
+
+    - name: Splunk Universal Forwarder
+      when:
+        - install_splunk_uf | bool
+        - not splunk_enterprise.stat.exists
+      block:
+        - name: Require download URL and admin password
+          ansible.builtin.assert:
+            that:
+              - splunk_uf_url is defined and splunk_uf_url | length > 0
+              - splunk_uf_admin_password is defined and splunk_uf_admin_password | length >= 8
+            fail_msg: Set splunk_uf_url and splunk_uf_admin_password (8+ chars) in the survey.
+            quiet: true
+
+        - name: Create the forwarder service account
+          ansible.builtin.user:
+            name: "{{ splunk_uf_user }}"
+            system: true
+            create_home: false
+            home: "{{ splunk_uf_home }}"
+            shell: /sbin/nologin
+            groups: systemd-journal
+            append: true
+
+        - name: Download and unpack the forwarder (first install only)
+          ansible.builtin.unarchive:
+            src: "{{ splunk_uf_url }}"
+            dest: /opt
+            remote_src: true
+            owner: "{{ splunk_uf_user }}"
+            group: "{{ splunk_uf_user }}"
+            creates: "{{ splunk_uf_home }}/bin/splunk"
+
+        - name: Point the forwarder at the deployment server
+          ansible.builtin.template:
+            src: splunk/deploymentclient.conf.j2
+            dest: "{{ splunk_uf_home }}/etc/system/local/deploymentclient.conf"
+            owner: "{{ splunk_uf_user }}"
+            group: "{{ splunk_uf_user }}"
+            mode: "0644"
+          notify: Restart splunk forwarder
+
+        # etc/passwd appears once the admin account exists, i.e. after the first start
+        - name: Check whether the forwarder has been initialised
+          ansible.builtin.stat:
+            path: "{{ splunk_uf_home }}/etc/passwd"
+          register: uf_passwd
+
+        - name: First start (runs before the unit file exists, so the splunk CLI never calls systemctl)
+          when: not uf_passwd.stat.exists
+          block:
+            - name: Seed the local admin account
+              ansible.builtin.copy:
+                dest: "{{ splunk_uf_home }}/etc/system/local/user-seed.conf"
+                content: |
+                  [user_info]
+                  USERNAME = admin
+                  PASSWORD = {{ splunk_uf_admin_password }}
+                owner: "{{ splunk_uf_user }}"
+                group: "{{ splunk_uf_user }}"
+                mode: "0600"
+              no_log: true
+
+            - name: Accept the license, consume user-seed.conf, then stop
+              ansible.builtin.shell:
+                cmd: >-
+                  {{ splunk_uf_home }}/bin/splunk start --accept-license --answer-yes --no-prompt &&
+                  {{ splunk_uf_home }}/bin/splunk stop
+              become: true
+              become_user: "{{ splunk_uf_user }}"
+              changed_when: true
+
+        - name: Install the systemd unit
+          ansible.builtin.template:
+            src: splunk/SplunkForwarder.service.j2
+            dest: /etc/systemd/system/SplunkForwarder.service
+            owner: root
+            group: root
+            mode: "0644"
+          notify: Restart splunk forwarder
+
+        - name: Enable and start the forwarder
+          ansible.builtin.systemd_service:
+            name: SplunkForwarder.service
+            enabled: true
+            state: started
+            daemon_reload: true
+
+    # ============================================================== report
+    - name: Where to look
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Grafana -> Explore -> Loki: {host="' ~ ansible_facts['nodename'] ~ '", job="journal"}']
+             + (['Splunk -> Settings -> Agent management: ' ~ inventory_hostname ~ ' should check in within a minute']
+                if (install_splunk_uf | bool and not (splunk_enterprise.stat.exists | default(false))) else []) }}

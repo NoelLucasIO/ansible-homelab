@@ -1,0 +1,27 @@
+# {{ ansible_managed }}
+# Hand-written unit (not 'splunk enable boot-start'): the splunk CLI exports its
+# bundled OpenSSL via LD_LIBRARY_PATH, which breaks systemctl on newer distros.
+[Unit]
+Description=Splunk Universal Forwarder
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User={{ splunk_uf_user }}
+Group={{ splunk_uf_user }}
+ExecStart={{ splunk_uf_home }}/bin/splunk _internal_launch_under_systemd
+KillMode=mixed
+KillSignal=SIGINT
+TimeoutStopSec=360
+LimitNOFILE=65536
+LimitNPROC=16000
+SuccessExitStatus=51 52
+RestartPreventExitStatus=51
+RestartForceExitStatus=52
+Restart=always
+Delegate=true
+Environment=SPLUNK_HOME={{ splunk_uf_home }}
+
+[Install]
+WantedBy=multi-user.target

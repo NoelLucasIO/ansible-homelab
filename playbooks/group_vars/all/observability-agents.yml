@@ -1,0 +1,18 @@
+---
+# Defaults for observability-agents.yml.
+# Kept here, not in the play's vars:, because play vars outrank inventory vars;
+# from here, host/group variables set in the AAP inventory take precedence.
+
+install_alloy: true
+install_splunk_uf: true
+
+alloy_image: docker.io/grafana/alloy:v1.21.0
+alloy_loki_push_url: http://192.0.2.45:3500/loki/api/v1/push
+alloy_http_port: 12345
+alloy_journal_max_age: 12h
+alloy_timezone: America/New_York
+alloy_drop_patterns: [] # regexes of journal lines not worth shipping
+
+splunk_deployment_server: splunk-ds.example.com:8089
+splunk_uf_home: /opt/splunkforwarder
+splunk_uf_user: splunkfwd

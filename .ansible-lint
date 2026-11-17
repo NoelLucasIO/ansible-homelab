@@ -1,0 +1,8 @@
+---
+profile: production
+# collections come from ci/requirements.yml; don't pull the full EE list
+offline: true
+exclude_paths:
+  - .github/
+  - ee/
+  - ci/

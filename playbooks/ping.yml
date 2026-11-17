@@ -1,0 +1,8 @@
+---
+- name: Connectivity and facts check
+  hosts: all
+  gather_facts: true
+  tasks:
+    - name: Report OS
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}"

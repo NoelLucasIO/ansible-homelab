@@ -1,0 +1,9 @@
+---
+# Apply the baseline to existing hosts (AAP inventory), e.g. -e baseline_target=splunk.example.com
+# firewalld is left alone unless you pass -e baseline_manage_firewalld=true.
+- name: Apply the homelab baseline
+  hosts: "{{ baseline_target | default('no_hosts_given') }}"
+  become: true
+  gather_facts: true
+  roles:
+    - baseline

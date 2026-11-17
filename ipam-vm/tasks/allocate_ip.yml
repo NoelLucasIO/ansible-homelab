@@ -1,0 +1,71 @@
+---
+# Reuse the IP if this host already exists in NIOS (makes reruns safe),
+# otherwise take the first NIOS-free address that also doesn't answer ping.
+- name: Look up in NIOS, {{ vm_fqdn }}
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/record:host?name={{ vm_fqdn }}&_return_fields=name,ipv4addrs,comment"
+  register: vm_existing
+
+- name: Reuse its address
+  ansible.builtin.set_fact:
+    vm_ip: "{{ vm_existing.json[0].ipv4addrs[0].ipv4addr }}"
+    vm_host_ref: "{{ vm_existing.json[0]._ref }}"
+  when: vm_existing.json | length > 0
+
+- name: Allocate a new address
+  when: vm_existing.json | length == 0
+  block:
+    - name: Find the network
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/network?network={{ vm_network }}"
+      register: vm_net
+
+    - name: Ask NIOS for free addresses
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/{{ vm_net.json[0]._ref }}?_function=next_available_ip"
+        method: POST
+        body: '{"num": {{ vm_candidates | int }}}'
+      register: vm_free
+
+    - name: Ping each candidate (catches devices with no DNS record)
+      ansible.builtin.command: ping -c 2 -W 1 {{ item }}
+      loop: "{{ vm_free.json.ips }}"
+      register: vm_ping
+      changed_when: false
+      failed_when: false
+
+    - name: Pick the first silent one
+      ansible.builtin.set_fact:
+        vm_ip: "{{ (vm_ping.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list | first) | default('') }}"
+
+    - name: Need a free address
+      ansible.builtin.assert:
+        that: vm_ip | length > 0
+        fail_msg: "All {{ vm_candidates }} addresses NIOS offered answer ping. Run Discovery on {{ vm_network }} or raise vm_candidates."
+
+    - name: Host record body (Owner/Role extensible attributes when given)
+      ansible.builtin.set_fact:
+        vm_host_body: >-
+          {{ {'name': vm_fqdn, 'view': 'default', 'configure_for_dns': true,
+              'comment': vm_owner_comment, 'ipv4addrs': [{'ipv4addr': vm_ip}]}
+             | combine({'extattrs': vm_extattrs} if vm_extattrs else {}) }}
+      vars:
+        vm_extattrs: >-
+          {{ ({'Owner': {'value': vm_owner}} if (vm_owner | default('')) | length > 0 else {})
+             | combine({'Role': {'value': vm_role}} if (vm_role | default('')) | length > 0 else {}) }}
+
+    - name: Create the host record (A + PTR in one object)
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:host"
+        method: POST
+        status_code: [201]
+        body: "{{ vm_host_body }}"
+      register: vm_created
+
+    - name: Remember the record
+      ansible.builtin.set_fact:
+        vm_host_ref: "{{ vm_created.json }}"
+
+- name: Address for {{ vm_fqdn }}
+  ansible.builtin.debug:
+    msg: "{{ vm_fqdn }} -> {{ vm_ip }}"

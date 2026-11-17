@@ -1,0 +1,6 @@
+---
+all:
+  hosts:
+    fedora:
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3

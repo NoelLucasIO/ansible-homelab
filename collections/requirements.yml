@@ -1,0 +1,25 @@
+---
+collections:
+  # Foundation: you'll use these constantly
+  - name: ansible.posix          # firewalld, mount, sysctl, authorized_key, selinux
+  - name: community.general      # catch-all for modules that don't have their own home
+  - name: ansible.utils          # IP/CIDR filters, data validation
+  - name: containers.podman      # containers, pods, quadlets (Network=host fits fine)
+  - name: community.libvirt      # KVM hosts
+
+  # Home lab services
+  - name: oxlorg.opnsense        # OPNsense firewall via its API
+  - name: junipernetworks.junos  # EX2200-C
+  - name: community.postgresql   # PostgreSQL
+  - name: prometheus.prometheus  # node_exporter and friends across hosts
+  - name: grafana.grafana        # datasources, dashboards, folders as code
+
+  # PKI and security
+  - name: community.crypto       # keys, CSRs, cert inspection, expiry checks
+  - name: venafi.machine_identity
+
+  # Day job: Hitachi, S3, AD
+  - name: hitachivantara.vspone_block
+  - name: hitachivantara.vspone_object
+  - name: amazon.aws             # S3 modules with endpoint_url → HCP/CloudScale/S-Series
+  - name: microsoft.ad

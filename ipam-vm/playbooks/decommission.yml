@@ -1,0 +1,75 @@
+---
+# Remove a VM built by provision.yml and free its address in NIOS.
+#   ansible-playbook playbooks/decommission.yml -e vm_name=web01 -e confirm=web01
+# Refuses VMs whose NIOS host record doesn't carry vm_owner_comment, so hand-built
+# VMs (Infoblox, aap, splunk, k3s nodes) can't be removed by mistake.
+- name: Decommission a VM and release its IP
+  hosts: "{{ nios_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200]
+      timeout: 60
+  tasks:
+    - name: Confirm by repeating the name
+      ansible.builtin.assert:
+        that:
+          - vm_name is defined
+          - confirm is defined and confirm == vm_name
+        fail_msg: "Pass -e vm_name=<name> -e confirm=<same name>."
+
+    - name: Find its host record
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:host?name={{ vm_name }}.{{ vm_domain }}&_return_fields=name,ipv4addrs,comment"
+      register: vm_rec
+
+    - name: Only VMs this project built
+      ansible.builtin.assert:
+        that:
+          - vm_rec.json | length == 1
+          - vm_rec.json[0].comment | default('') == vm_owner_comment
+        fail_msg: "{{ vm_name }}.{{ vm_domain }} has no NIOS host record owned by ipam-vm. Nothing removed."
+
+    - name: Stop the VM
+      ansible.builtin.command: virsh destroy {{ vm_name }}
+      register: vm_d
+      changed_when: vm_d.rc == 0
+      failed_when: vm_d.rc != 0 and 'not running' not in vm_d.stderr and 'failed to get domain' not in vm_d.stderr
+
+    - name: Remove its definition
+      ansible.builtin.command: virsh undefine {{ vm_name }}
+      register: vm_u
+      changed_when: vm_u.rc == 0
+      failed_when: vm_u.rc != 0 and 'failed to get domain' not in vm_u.stderr
+
+    - name: Remove its disk and seed ISO
+      ansible.builtin.file:
+        path: "{{ vm_image_dir }}/{{ vm_name }}-{{ item }}"
+        state: absent
+      loop: [root.qcow2, cloudinit.iso]
+
+    - name: Remove its Cockpit proxy and DNS name
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/npm_proxy_remove.yml"
+      vars:
+        vm_cockpit_fqdn: "{{ vm_name }}{{ vm_cockpit_suffix }}.{{ vm_domain }}"
+
+    - name: Stop scraping it
+      ansible.builtin.file:
+        path: "{{ baseline_prometheus_targets_dir | default('/etc/prometheus/targets/nodes') }}/{{ vm_name }}.yml"
+        state: absent
+
+    - name: Delete the host record (frees the IP, removes A + PTR)
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/{{ vm_rec.json[0]._ref }}"
+        method: DELETE
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "{{ vm_name }} removed; {{ vm_rec.json[0].ipv4addrs[0].ipv4addr }} is free in NIOS again."

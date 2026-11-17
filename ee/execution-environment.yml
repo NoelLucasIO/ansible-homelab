@@ -1,0 +1,41 @@
+---
+# homelab-ee — custom execution environment for the homelab project
+# Base: Red Hat supported ee-minimal with ansible-core 2.20 (AAP 2.7 channel)
+# Build (on the AAP VM, from this directory):
+#   ansible-builder build -t aap.example.com/homelab-ee:1.0 --container-runtime podman -v 3
+version: 3
+
+images:
+  base_image:
+    name: registry.redhat.io/ansible-automation-platform-27/ee-minimal-rhel9:2.20
+
+dependencies:
+  # ansible-core 2.20 runs on Python 3.12; without this, builder uses the
+  # base image's /usr/bin/python3 (3.9, no pip) and collection bindeps pull 3.9 packages
+  python_interpreter:
+    package_system: python3.12
+    python_path: /usr/bin/python3.12
+  # same collection list the AAP project syncs, so jobs and image never drift
+  galaxy: ../collections/requirements.yml
+  python: requirements.txt
+  system: bindep.txt
+  # ansible-builder also pulls in each collection's own requirements.txt / bindep.txt
+  exclude:
+    # venafi.machine_identity ships a hash-pinned requirements.txt, which forces pip into
+    # --require-hashes mode for the whole merged list; its only real need (vcert) is in requirements.txt
+    all_from_collections:
+      - venafi.machine_identity
+    python:
+      - libvirt-python        # needs libvirt-devel + compiler, not in UBI repos; add later if needed
+    system:
+      - libvirt-devel
+      # Python 3.9 packages requested by collection bindep files; useless for the 3.12 interpreter
+      - python3-devel
+      - python3-lxml
+      - python3-Cython
+      - python3-cryptography
+
+options:
+  package_manager_path: /usr/bin/microdnf
+  tags:
+    - aap.example.com/homelab-ee:latest

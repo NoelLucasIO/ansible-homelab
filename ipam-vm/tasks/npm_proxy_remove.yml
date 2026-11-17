@@ -1,0 +1,45 @@
+---
+- name: Log in to NPM
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/tokens"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    method: POST
+    body: { identity: "{{ npm_identity }}", secret: "{{ npm_secret }}" }
+  register: npm_login
+  no_log: true
+
+- name: Proxy hosts
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    body_format: raw  # no body; json default would send 'null', which NPM rejects (400)
+    headers: { Authorization: "Bearer {{ npm_login.json.token }}" }
+  register: npm_hosts
+
+- name: Remove from NPM, {{ vm_cockpit_fqdn }}
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts/{{ item.id }}"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    body_format: raw  # no body; json default would send 'null', which NPM rejects (400)
+    method: DELETE
+    headers: { Authorization: "Bearer {{ npm_login.json.token }}" }
+  loop: "{{ npm_hosts.json | selectattr('domain_names', 'contains', vm_cockpit_fqdn) | list }}"
+  loop_control: { label: "{{ vm_cockpit_fqdn }} (id {{ item.id }})" }
+
+- name: Its A record in NIOS
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/record:a?name={{ vm_cockpit_fqdn }}&_return_fields=comment"
+  register: vm_cockpit_a
+
+- name: Remove it (only ours)
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/{{ item._ref }}"
+    method: DELETE
+  loop: "{{ vm_cockpit_a.json | selectattr('comment', 'defined') | selectattr('comment', 'equalto', vm_owner_comment) | list }}"
+  loop_control: { label: "{{ vm_cockpit_fqdn }}" }

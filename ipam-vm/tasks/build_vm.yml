@@ -1,0 +1,68 @@
+---
+# Fixed MAC per VM name (52:54:00 = QEMU/KVM prefix). cloud-init matches the NIC by it,
+# the same way the k3s VMs do, so the config doesn't depend on interface naming.
+- name: MAC address for {{ vm_name }}
+  ansible.builtin.set_fact:
+    vm_mac: "{{ '52:54:00:%s:%s:%s' | format(*((vm_name | hash('md5'))[0:6] | batch(2) | map('join') | list)) }}"
+
+- name: Does the VM already exist?
+  ansible.builtin.command: virsh domstate {{ vm_name }}
+  register: vm_state
+  changed_when: false
+  failed_when: false
+
+- name: Build it
+  when: vm_state.rc != 0
+  block:
+    - name: Root disk as an overlay on the base image
+      ansible.builtin.command:
+        argv: [qemu-img, create, -f, qcow2, -b, "{{ vm_base_image }}", -F, qcow2,
+               "{{ vm_image_dir }}/{{ vm_name }}-root.qcow2", "{{ vm_disk_gb }}G"]
+        creates: "{{ vm_image_dir }}/{{ vm_name }}-root.qcow2"
+
+    - name: Staging dir for cloud-init
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -cidata
+      register: vm_ci
+
+    - name: Render cloud-init files
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/{{ item }}.j2"
+        dest: "{{ vm_ci.path }}/{{ item }}"
+        mode: "0644"
+      loop: [user-data, meta-data, network-config]
+
+    - name: Ensure xorriso is present
+      ansible.builtin.package:
+        name: xorriso
+        state: present
+
+    - name: Build the NoCloud seed ISO (volume label must be cidata)
+      ansible.builtin.command:
+        argv: [xorriso, -as, genisoimage, -output, "{{ vm_image_dir }}/{{ vm_name }}-cloudinit.iso",
+               -volid, cidata, -joliet, -rock,
+               "{{ vm_ci.path }}/user-data", "{{ vm_ci.path }}/meta-data", "{{ vm_ci.path }}/network-config"]
+        creates: "{{ vm_image_dir }}/{{ vm_name }}-cloudinit.iso"
+
+    - name: Remove staging dir
+      ansible.builtin.file:
+        path: "{{ vm_ci.path }}"
+        state: absent
+
+    - name: Create and start the VM
+      ansible.builtin.command:
+        argv:
+          - virt-install
+          - --name={{ vm_name }}
+          - --memory={{ vm_memory_mb }}
+          - --vcpus={{ vm_vcpus }}
+          - --cpu=host-passthrough
+          - --disk={{ vm_image_dir }}/{{ vm_name }}-root.qcow2,bus=virtio
+          - --disk={{ vm_image_dir }}/{{ vm_name }}-cloudinit.iso,device=cdrom
+          - --network=bridge={{ vm_bridge }},model=virtio,mac={{ vm_mac }}
+          - --os-variant={{ vm_os_variant }}
+          - --import
+          - --graphics=none
+          - --noautoconsole
+      changed_when: true   # only runs when the domain doesn't exist

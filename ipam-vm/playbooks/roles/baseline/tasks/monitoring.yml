@@ -1,0 +1,82 @@
+---
+- name: System user for node_exporter
+  ansible.builtin.user:
+    name: node_exporter
+    system: true
+    shell: /sbin/nologin
+    create_home: false
+
+- name: Installed node_exporter version
+  ansible.builtin.command: /usr/local/bin/node_exporter --version
+  register: baseline_ne_have
+  changed_when: false
+  failed_when: false
+
+- name: Install node_exporter {{ baseline_node_exporter_version }}
+  vars:
+    baseline_ne_url: https://github.com/prometheus/node_exporter/releases/download/v{{ baseline_node_exporter_version }}
+  when: baseline_node_exporter_version not in (baseline_ne_have.stdout | default('') + baseline_ne_have.stderr | default(''))
+  block:
+    - name: Download release (checksum from the release's sha256sums.txt)
+      ansible.builtin.get_url:
+        url: "{{ baseline_ne_url }}/node_exporter-{{ baseline_node_exporter_version }}.linux-amd64.tar.gz"
+        dest: /tmp/node_exporter.tar.gz
+        checksum: "sha256:{{ baseline_ne_url }}/sha256sums.txt"
+        mode: "0644"
+
+    - name: Unpack
+      ansible.builtin.unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp
+        remote_src: true
+
+    - name: Install binary
+      ansible.builtin.copy:
+        src: "/tmp/node_exporter-{{ baseline_node_exporter_version }}.linux-amd64/node_exporter"
+        dest: /usr/local/bin/node_exporter
+        remote_src: true
+        mode: "0755"
+      notify: Restart node_exporter
+
+    - name: SELinux label for the binary
+      ansible.builtin.command: restorecon -v /usr/local/bin/node_exporter
+      register: baseline_ne_restorecon
+      changed_when: baseline_ne_restorecon.stdout | length > 0
+      when: ansible_facts.selinux.status | default('disabled') == 'enabled'
+
+- name: Unit file for node_exporter
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/node_exporter.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Prometheus node_exporter
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      User=node_exporter
+      ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100 --collector.systemd
+      Restart=on-failure
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: Restart node_exporter
+
+- name: Ensure node_exporter is running
+  ansible.builtin.systemd_service:
+    name: node_exporter
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Register with Prometheus (file_sd on {{ baseline_prometheus_host }})
+  ansible.builtin.copy:
+    dest: "{{ baseline_prometheus_targets_dir }}/{{ inventory_hostname_short }}.yml"
+    owner: "{{ baseline_prometheus_owner }}"
+    mode: "0644"
+    content: |
+      - targets: ['{{ ansible_host | default(inventory_hostname) }}:9100']
+        labels:
+          instance: {{ inventory_hostname_short }}
+  delegate_to: "{{ baseline_prometheus_host }}"

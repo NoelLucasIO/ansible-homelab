@@ -1,0 +1,117 @@
+---
+# bootstrap-host.yml: prepare a new lab host for AAP management.
+#
+# First run against a NEW host uses a bootstrap credential (your normal admin
+# user + sudo password), because the 'ansible' account doesn't exist yet.
+# After that, every job uses the homelab-ssh credential (ansible + key).
+#
+# Safe to re-run: every task is idempotent, and nothing changes on hosts that
+# already match.
+#
+# Variables (set in the AAP job template / survey):
+#   rhc_org_id           Red Hat org ID        (RHEL only; survey, text)
+#   rhc_activation_key   activation key name   (RHEL only; survey, password)
+#   bootstrap_selinux    permissive|enforcing  (RHEL only; default permissive)
+#   bootstrap_sysctls    dict of sysctl: value (default none)
+#   bootstrap_update     true to apply all package updates (default false)
+
+- name: Bootstrap host for AAP management
+  hosts: all
+  become: true
+  gather_facts: true
+
+  # Defaults live in group_vars/all/bootstrap-host.yml so inventory values override them.
+  vars:
+    is_rhel: "{{ ansible_facts['distribution'] == 'RedHat' }}"
+
+  tasks:
+    - name: Require the automation public key
+      ansible.builtin.assert:
+        that: automation_pubkey | length > 0
+        fail_msg: Set automation_pubkey (the public half of your AAP machine credential) in the inventory.
+        quiet: true
+
+    # --- automation account ------------------------------------------------------
+    - name: Create the automation user
+      ansible.builtin.user:
+        name: "{{ automation_user }}"
+        comment: AAP automation
+        shell: /bin/bash
+        create_home: true
+
+    - name: Grant passwordless sudo (validated before install)
+      ansible.builtin.copy:
+        dest: "/etc/sudoers.d/{{ automation_user }}"
+        content: "{{ automation_user }} ALL=(ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Install the AAP automation public key
+      ansible.posix.authorized_key:
+        user: "{{ automation_user }}"
+        key: "{{ automation_pubkey }}"
+        exclusive: true
+
+    # --- RHEL: registration -------------------------------------------------------
+    - name: Check RHEL registration
+      ansible.builtin.command: subscription-manager identity
+      register: rhsm_identity
+      changed_when: false
+      failed_when: false
+      when: is_rhel
+
+    - name: Register with Red Hat (rhc)
+      ansible.builtin.command: >-
+        rhc connect
+        --organization {{ rhc_org_id }}
+        --activation-key {{ rhc_activation_key }}
+      no_log: true
+      changed_when: true
+      when:
+        - is_rhel
+        - rhsm_identity.rc != 0
+        - rhc_org_id is defined and rhc_activation_key is defined
+
+    # --- RHEL: SELinux mode --------------------------------------------------------
+    - name: Set SELinux mode
+      ansible.posix.selinux:
+        state: "{{ bootstrap_selinux }}"
+        policy: targeted
+      register: selinux_result
+      when: is_rhel
+
+    - name: Flag a needed reboot
+      ansible.builtin.debug:
+        msg: "SELinux change on {{ inventory_hostname }} needs a reboot to take full effect."
+      when:
+        - is_rhel
+        - selinux_result.reboot_required | default(false)
+
+    # --- optional tuning and updates --------------------------------------------------
+    - name: Apply sysctl settings
+      ansible.posix.sysctl:
+        name: "{{ item.key }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/90-ansible-bootstrap.conf
+        reload: true
+      loop: "{{ bootstrap_sysctls | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Apply all package updates (RHEL / Fedora)
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest # noqa package-latest
+      when:
+        - bootstrap_update | bool
+        - ansible_facts['os_family'] == 'RedHat'
+
+    - name: Apply all package updates (Arch)
+      community.general.pacman:
+        update_cache: true
+        upgrade: true
+      when:
+        - bootstrap_update | bool
+        - ansible_facts['os_family'] == 'Archlinux'

@@ -1,0 +1,71 @@
+---
+- name: Base packages
+  ansible.builtin.dnf:
+    name: "{{ baseline_packages }}"
+    state: present
+
+- name: Current timezone
+  ansible.builtin.command: timedatectl show -p Timezone --value
+  register: baseline_tz
+  changed_when: false
+
+- name: Set timezone
+  ansible.builtin.command: timedatectl set-timezone {{ baseline_timezone }}
+  when: baseline_tz.stdout != baseline_timezone
+  changed_when: true   # only runs when it differs
+
+- name: Chrony uses the gateway only
+  ansible.builtin.template:
+    src: chrony.conf.j2
+    dest: /etc/chrony.conf
+    mode: "0644"
+  notify: Restart chronyd
+
+- name: Journald drop-in directory (absent on the Rocky cloud image)
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Persistent journal
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/50-persistent.conf
+    content: "[Journal]\nStorage=persistent\n"
+    mode: "0644"
+  notify: Restart journald
+
+- name: Set dnf-automatic update type
+  ansible.builtin.lineinfile:
+    path: /etc/dnf/automatic.conf
+    regexp: '^upgrade_type\s*='
+    line: "upgrade_type = {{ 'security' if baseline_auto_updates == 'security' else 'default' }}"
+  when: baseline_auto_updates != 'none'
+
+- name: Make dnf-automatic apply updates
+  ansible.builtin.lineinfile:
+    path: /etc/dnf/automatic.conf
+    regexp: '^apply_updates\s*='
+    line: "apply_updates = yes"
+  when: baseline_auto_updates != 'none'
+
+- name: Services on
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - chronyd
+    - rsyslog
+    - cockpit.socket
+    - qemu-guest-agent
+    - "{{ 'dnf-automatic.timer' if baseline_auto_updates != 'none' else 'chronyd' }}"
+
+- name: Cockpit accepts its NPM hostname (websocket origin check)
+  ansible.builtin.copy:
+    dest: /etc/cockpit/cockpit.conf
+    mode: "0644"
+    content: |
+      [WebService]
+      Origins = https://{{ baseline_cockpit_fqdn }} wss://{{ baseline_cockpit_fqdn }} https://{{ ansible_host | default(inventory_hostname) }}:9090
+      ProtocolHeader = X-Forwarded-Proto
+  when: baseline_cockpit_fqdn is defined

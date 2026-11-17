@@ -1,0 +1,11 @@
+# Python libraries beyond what the collections declare themselves
+httpx               # oxlorg.opnsense
+ncclient            # junipernetworks.junos (NETCONF)
+junos-eznc          # juniper.device
+vcert               # venafi.machine_identity
+psycopg2-binary     # community.postgresql (prebuilt wheel, no compiler needed)
+boto3               # amazon.aws
+botocore            # amazon.aws
+netaddr             # ansible.utils ipaddr filters
+jmespath            # json_query filter
+pypsrp              # microsoft.ad over PSRP

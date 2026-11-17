@@ -1,0 +1,17 @@
+---
+- name: Users, keys and sudo
+  ansible.builtin.import_tasks: users.yml
+  tags: [users]
+- name: Time, packages, services
+  ansible.builtin.import_tasks: system.yml
+  tags: [system]
+- name: Host firewall
+  ansible.builtin.import_tasks: firewall.yml
+  when: baseline_manage_firewalld | bool
+  tags: [firewall]
+- name: Monitoring with node_exporter + registration
+  ansible.builtin.import_tasks: monitoring.yml
+  tags: [monitoring]
+- name: Log forwarding to Loki and Splunk
+  ansible.builtin.import_tasks: logging.yml
+  tags: [logging]

@@ -1,0 +1,7 @@
+---
+# Only what the playbooks actually call, so CI stays fast and doesn't depend on
+# downloading the full EE collection set from Galaxy.
+collections:
+  - name: ansible.posix
+  - name: community.general
+  - name: containers.podman

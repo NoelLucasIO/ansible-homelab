@@ -1,0 +1,57 @@
+---
+# --- Who can log in ---------------------------------------------------------------
+baseline_admin_user: admin        # your own login; its password hash lives in the vault
+baseline_users:
+  - name: ansible                  # AAP (homelab-ssh credential)
+    groups: [wheel]
+    sudo_nopasswd: true
+    keys: "{{ vm_ssh_pubkeys | select('search', 'aap-automation') | list }}"
+  - name: "{{ baseline_admin_user }}"
+    groups: [wheel]
+    sudo_nopasswd: false           # wheel default: sudo asks for the password
+    password_hash: "{{ baseline_admin_password_hash }}"   # vault
+    keys: "{{ vm_ssh_pubkeys | reject('search', 'aap-automation') | list }}"
+
+# --- System -------------------------------------------------------------------------
+baseline_timezone: America/New_York
+baseline_ntp_servers: [192.0.2.1]
+baseline_packages:
+  - vim-enhanced
+  - bash-completion
+  - tmux
+  - curl
+  - wget
+  - bind-utils
+  - jq
+  - rsync
+  - tar
+  - lsof
+  - chrony
+  - rsyslog
+  - cockpit
+  - dnf-automatic
+  - qemu-guest-agent
+  - policycoreutils-python-utils
+  - firewalld
+
+# Security updates applied daily by dnf-automatic.
+baseline_auto_updates: security    # security | default | none
+
+# Off by default so running baseline.yml on existing hosts (fedora, Splunk, AAP,
+# which run without firewalld) never turns a firewall on under them.
+# provision.yml sets it true for new VMs.
+baseline_manage_firewalld: false
+baseline_firewalld_services: [ssh, cockpit]
+baseline_firewalld_ports: [9100/tcp]
+
+# --- Monitoring ----------------------------------------------------------------------
+baseline_node_exporter_version: "1.9.1"
+baseline_prometheus_host: "{{ nios_kvm_host | default('fedora') }}"
+baseline_prometheus_targets_dir: /etc/prometheus/targets/nodes
+baseline_prometheus_owner: root
+
+# --- Logging (rsyslog forwards journald + syslog) -------------------------------------
+baseline_log_port: 1516
+baseline_log_alloy: 192.0.2.45     # Loki via netmon Alloy, RFC 5424, octet-counted
+baseline_log_splunk: 192.0.2.36    # Splunk tcp://1516, index linux
+baseline_log_splunk_min_severity: info

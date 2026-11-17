@@ -1,0 +1,12 @@
+# secrets: only the *.example files are committed
+**/vault.yml
+*.vault
+.vault_pass*
+# local inventories and site values
+**/inventory.yml
+site-vars.yml
+# build / tooling output
+ee/context/
+.ansible/
+__pycache__/
+*.retry

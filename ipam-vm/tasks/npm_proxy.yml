@@ -1,0 +1,105 @@
+---
+# Cockpit for this VM at https://<vm>-cockpit.example.com through NPM, using NPM's
+# wildcard certificate (the key never leaves NPM) and a LAN-only access list.
+- name: Log in to NPM
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/tokens"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    method: POST
+    body: { identity: "{{ npm_identity }}", secret: "{{ npm_secret }}" }
+    status_code: [200]
+  register: npm_login
+  no_log: true
+
+- name: NPM auth header
+  ansible.builtin.set_fact:
+    npm_headers: { Authorization: "Bearer {{ npm_login.json.token }}" }
+  no_log: true
+
+- name: Existing proxy hosts
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    body_format: raw  # no body; json default would send 'null', which NPM rejects (400)
+    headers: "{{ npm_headers }}"
+  register: npm_hosts
+
+- name: This VM's Cockpit proxy, if any
+  ansible.builtin.set_fact:
+    npm_existing: "{{ npm_hosts.json | selectattr('domain_names', 'contains', vm_cockpit_fqdn) | list }}"
+
+- name: Create it
+  when: npm_existing | length == 0
+  block:
+    - name: Find the wildcard certificate (newest if several)
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/certificates"
+        user: ""          # don't inherit the NIOS login from module_defaults
+        password: ""
+        force_basic_auth: false
+        body_format: raw  # no body; json default would send 'null', which NPM rejects (400)
+        headers: "{{ npm_headers }}"
+      register: npm_certs
+
+    - name: Find the LAN-only access list
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/access-lists"
+        user: ""          # don't inherit the NIOS login from module_defaults
+        password: ""
+        force_basic_auth: false
+        body_format: raw  # no body; json default would send 'null', which NPM rejects (400)
+        headers: "{{ npm_headers }}"
+      register: npm_acls
+
+    - name: Pick them
+      ansible.builtin.set_fact:
+        npm_cert_id: "{{ (npm_certs.json | selectattr('domain_names', 'contains', npm_cert_domain) | sort(attribute='expires_on') | last).id }}"
+        npm_acl_id: "{{ (npm_acls.json | selectattr('name', 'equalto', npm_access_list_name) | first).id }}"
+
+    - name: NPM proxy host to Cockpit on port 9090, {{ vm_cockpit_fqdn }}
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/proxy-hosts"
+        user: ""          # don't inherit the NIOS login from module_defaults
+        password: ""
+        force_basic_auth: false
+        method: POST
+        headers: "{{ npm_headers }}"
+        status_code: [200, 201]
+        body:
+          domain_names: ["{{ vm_cockpit_fqdn }}"]
+          forward_scheme: https
+          forward_host: "{{ vm_ip }}"
+          forward_port: 9090
+          certificate_id: "{{ npm_cert_id | int }}"
+          access_list_id: "{{ npm_acl_id | int }}"
+          ssl_forced: true
+          http2_support: true
+          block_exploits: true
+          allow_websocket_upgrade: true
+          caching_enabled: false
+          hsts_enabled: false
+          hsts_subdomains: false
+          advanced_config: ""
+          locations: []
+          meta: { letsencrypt_agree: false, dns_challenge: false }
+
+- name: Look up in NIOS, {{ vm_cockpit_fqdn }}
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/record:a?name={{ vm_cockpit_fqdn }}"
+  register: vm_cockpit_a
+
+- name: A record pointing at NPM, {{ vm_cockpit_fqdn }}
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/record:a"
+    method: POST
+    status_code: [201]
+    body:
+      name: "{{ vm_cockpit_fqdn }}"
+      ipv4addr: "{{ npm_ip }}"
+      view: default
+      comment: "{{ vm_owner_comment }}"
+  when: vm_cockpit_a.json | length == 0

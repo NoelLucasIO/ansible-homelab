@@ -1,0 +1,40 @@
+---
+# --- Where VMs are built ---------------------------------------------------------
+vm_image_dir: /var/lib/libvirt/images
+vm_base_image: /var/lib/libvirt/images/rocky-9-genericcloud-base.qcow2
+vm_bridge: br0
+vm_os_variant: rocky9            # `osinfo-query os | grep -i rocky` on fedora if this is rejected
+
+# --- Defaults (override per run with -e) ------------------------------------------
+vm_memory_mb: 4096
+vm_vcpus: 2
+vm_disk_gb: 40
+
+# --- Network / IPAM (documentation addresses: override in your inventory) ---------------------------------------------------------------
+vm_domain: example.com
+vm_network: 192.0.2.0/24
+vm_prefix: 24
+vm_gateway: 192.0.2.1
+vm_dns: [192.0.2.1]
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam          # limited NIOS account (password: nios_api_password in vault.yml)
+vm_candidates: 5                 # free IPs requested from NIOS; first one that doesn't answer ping wins
+
+# Marks records this project owns; decommission refuses anything without it.
+vm_owner_comment: "ipam-vm: provisioned by AAP"
+
+# --- Login on the new VM ----------------------------------------------------------
+vm_admin_user: ansible
+# vm_admin_private_key: ~/.ssh/automation_key   # CLI only; AAP uses the machine credential
+# SSH public keys installed on new VMs. Set the real list in your inventory.
+# The key whose comment contains "aap-automation" goes to the automation user;
+# the rest go to the admin user (see roles/baseline/defaults/main.yml).
+vm_ssh_pubkeys: []
+
+# --- Cockpit through NPM (wildcard cert stays in NPM) ------------------------------
+npm_api: http://192.0.2.45:81/api
+npm_ip: 192.0.2.45
+npm_cert_domain: "*.{{ vm_domain }}"
+npm_access_list_name: "LAN-only"
+vm_cockpit_suffix: "-cockpit"

@@ -1,0 +1,21 @@
+---
+- name: Ensure firewalld is running
+  ansible.builtin.systemd_service: { name: firewalld, enabled: true, state: started }
+
+- name: Allowed services
+  ansible.builtin.shell: >-
+    firewall-cmd --permanent --query-service={{ item }} ||
+    { firewall-cmd --permanent --add-service={{ item }} && echo CHANGED; }
+  loop: "{{ baseline_firewalld_services }}"
+  register: baseline_fw_svc
+  changed_when: "'CHANGED' in baseline_fw_svc.stdout"
+  notify: Reload firewalld
+
+- name: Allowed ports
+  ansible.builtin.shell: >-
+    firewall-cmd --permanent --query-port={{ item }} ||
+    { firewall-cmd --permanent --add-port={{ item }} && echo CHANGED; }
+  loop: "{{ baseline_firewalld_ports }}"
+  register: baseline_fw_port
+  changed_when: "'CHANGED' in baseline_fw_port.stdout"
+  notify: Reload firewalld

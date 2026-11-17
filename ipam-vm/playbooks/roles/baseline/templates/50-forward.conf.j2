@@ -1,0 +1,14 @@
+# Managed by Ansible (baseline role). Disk-assisted queues hold logs while a
+# destination is down and replay them when it returns.
+
+# Loki (netmon Alloy on fedora): RFC 5424, octet-counted framing, everything.
+*.* action(type="omfwd" target="{{ baseline_log_alloy }}" port="{{ baseline_log_port }}" protocol="tcp"
+           template="RSYSLOG_SyslogProtocol23Format" TCP_Framing="octet-counted"
+           queue.type="LinkedList" queue.filename="fwd_alloy" queue.maxDiskSpace="256m"
+           queue.saveOnShutdown="on" action.resumeRetryCount="-1")
+
+# Splunk (index linux): traditional format, {{ baseline_log_splunk_min_severity }} and above.
+*.{{ baseline_log_splunk_min_severity }} action(type="omfwd" target="{{ baseline_log_splunk }}" port="{{ baseline_log_port }}" protocol="tcp"
+           template="RSYSLOG_ForwardFormat"
+           queue.type="LinkedList" queue.filename="fwd_splunk" queue.maxDiskSpace="256m"
+           queue.saveOnShutdown="on" action.resumeRetryCount="-1")

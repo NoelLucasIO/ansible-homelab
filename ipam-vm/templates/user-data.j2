@@ -1,0 +1,19 @@
+#cloud-config
+hostname: {{ vm_name }}
+fqdn: {{ vm_fqdn }}
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: true
+users:
+  - name: {{ vm_admin_user }}
+    groups: [wheel]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: true
+    ssh_authorized_keys:
+{% for k in vm_ssh_pubkeys %}
+      - {{ k }}
+{% endfor %}
+ssh_pwauth: false
+disable_root: true
+timezone: America/New_York
+package_update: false

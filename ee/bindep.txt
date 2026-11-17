@@ -1,0 +1,3 @@
+# Build tools for Python wheels that compile against 3.12 (e.g. gssapi/krb5 for microsoft.ad)
+python3.12-devel [platform:rpm]
+gcc [platform:rpm]

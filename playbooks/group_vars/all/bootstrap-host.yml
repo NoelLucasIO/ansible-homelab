@@ -1,0 +1,7 @@
+---
+# Defaults for bootstrap-host.yml (inventory host/group vars override these).
+automation_user: ansible
+automation_pubkey: ""          # set in inventory: public key of the AAP machine credential
+bootstrap_selinux: permissive
+bootstrap_sysctls: {}
+bootstrap_update: false
