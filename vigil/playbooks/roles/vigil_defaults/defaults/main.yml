@@ -1,0 +1,110 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so anything set in the
+# inventory (AAP inventory variables included) or with -e overrides them.
+# A playbook-adjacent group_vars/all would NOT: it outranks inventory-level vars.
+# Addresses use the RFC 5737 documentation ranges and example.com: set real values
+# in your inventory (see inventory.example.yml).
+# --- Host -------------------------------------------------------------------------
+vigil_name: vigil                         # pod name; every container is vigil-*
+vigil_domain: "{{ vm_domain | default('example.com') }}"   # shares ipam-vm's domain when set
+vigil_tz: America/New_York
+vigil_quadlet_dir: /etc/containers/systemd   # rootful: OpenVAS needs raw sockets on the LAN
+vigil_etc: /etc/vigil
+vigil_libexec: /usr/local/libexec/vigil
+vigil_data_mount: /srv                    # must be a mount point; the pod won't start without it
+vigil_data: "{{ vigil_data_mount }}/vigil"   # scan reports + archive (Podman named volumes hold app state)
+vigil_report_keep_days: 90                # archived reports older than this are deleted
+vigil_min_podman: "5.3"                   # Quadlet StartWithPod=
+
+# --- Images -----------------------------------------------------------------------
+vigil_gb_registry: registry.community.greenbone.net/community
+vigil_gb_feed_release: "24.10"
+# DefectDojo publishes these on docker.io; pinned so upgrades are deliberate
+vigil_dojo_version: "3.5.200"
+vigil_dojo_image: "docker.io/defectdojo/defectdojo-django:{{ vigil_dojo_version }}"
+vigil_dojo_nginx_image: "docker.io/defectdojo/defectdojo-nginx:{{ vigil_dojo_version }}"
+vigil_valkey_image: docker.io/valkey/valkey:9.1.2-alpine
+vigil_nuclei_image: docker.io/projectdiscovery/nuclei:v3.11.1
+vigil_zap_image: docker.io/zaproxy/zap-stable:2.17.0
+
+# --- Ports (the pod shares the host network: keep clear of 80/443/5432/6379) --
+vigil_gsad_port: 9392                     # 127.0.0.1 only; gsad also serves the GSA web UI
+vigil_openvasd_port: 3080                 # 127.0.0.1 only
+vigil_dojo_port: 8080                     # DefectDojo nginx; fixed in its image, all interfaces
+vigil_dojo_uwsgi_http_port: 8081          # fixed in the uwsgi entrypoint, all interfaces
+vigil_dojo_uwsgi_port: 3031               # 127.0.0.1 only
+vigil_dojo_valkey_port: 6380              # 127.0.0.1 only; 6379 is often taken
+
+# --- DefectDojo -------------------------------------------------------------------
+vigil_dojo_fqdn: "dojo.{{ vigil_domain }}"
+vigil_dojo_admin_user: admin
+vigil_dojo_admin_mail: "admin@{{ vigil_domain }}"
+vigil_dojo_product_type: Home Lab
+vigil_dojo_engagement: vigil continuous scanning
+
+# Existing rootless PostgreSQL (16+) Quadlet on the same host, Network=host on 5432
+vigil_pg_container: postgres
+vigil_pg_owner: CHANGE_ME                 # user that owns the rootless postgres/prometheus/grafana Quadlets
+vigil_pg_host: 127.0.0.1
+vigil_pg_port: 5432
+vigil_dojo_db: defectdojo
+vigil_dojo_db_user: defectdojo
+vigil_grafana_db_user: vigil_ro           # read-only, for the Grafana dashboard
+
+# --- Greenbone --------------------------------------------------------------------
+vigil_gvm_fqdn: "gvm.{{ vigil_domain }}"
+vigil_gvm_admin_user: admin
+
+# --- What gets scanned --------------------------------------------------------------
+# Each scope becomes a Greenbone target + weekly task, a Nuclei target list, and a
+# DefectDojo product. gvm_schedule is the Greenbone scan time (host local time).
+vigil_scopes:
+  - name: lan
+    product: Home LAN
+    hosts: [192.0.2.0/24]
+    gvm_schedule: { byday: SU, hour: 1 }
+  - name: public
+    product: Public /29 (scanned from inside)
+    hosts: [203.0.113.0/29]
+    gvm_schedule: { byday: SU, hour: 5 }
+vigil_scan_exclude: []                    # hosts/CIDRs no scanner touches
+
+# Web apps: every enabled NPM proxy host, plus extras, minus excludes (ZAP + Nuclei)
+vigil_web_product: Web apps
+vigil_web_from_npm: true
+vigil_web_extra: []                       # e.g. ["https://www.example.com"]
+vigil_web_exclude: []                     # NPM domain names to skip
+
+vigil_nuclei_severity: low,medium,high,critical   # "info" is mostly tech fingerprints
+vigil_nuclei_rate_limit: 100              # requests/second
+vigil_nuclei_concurrency: 25
+vigil_zap_spider_minutes: 2               # passive baseline per site
+
+# --- Schedules (systemd OnCalendar, host local time) ----------------------------------
+vigil_oncalendar:
+  nuclei: "Sat *-*-* 01:00"
+  zap: "Sat *-*-* 04:00"
+  gvm_export: "*-*-* 07:00"               # imports each scope's newest finished Greenbone report
+  feed_sync: "*-*-* 05:30"                # pulls new Greenbone feed images
+
+# --- Reverse proxy and DNS (same variables as ipam-vm, so one set of inventory vars serves both)
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam                   # password: nios_api_password (secret)
+npm_api: http://192.0.2.45:81/api
+npm_ip: 192.0.2.45
+npm_cert_domain: "*.{{ vigil_domain }}"
+npm_access_list_name: "LAN-only"
+vigil_dns_resolver: 192.0.2.1             # the resolver clients use; checks the names reach them
+vigil_record_comment: "vigil: managed by Ansible"
+vigil_ui:
+  - { fqdn: "{{ vigil_dojo_fqdn }}", port: "{{ vigil_dojo_port }}" }
+  - { fqdn: "{{ vigil_gvm_fqdn }}", port: "{{ vigil_gsad_port }}" }
+
+# --- Observability (existing rootless Prometheus, Grafana, Loki/Alloy on the same host) ---
+vigil_prom_config: /srv/prometheus/config  # mounted at /etc/prometheus in the prometheus container
+vigil_prom_url: http://127.0.0.1:9091
+vigil_grafana_provisioning: /srv/grafana-provisioning   # mounted at /etc/grafana/provisioning
+vigil_grafana_unit: grafana.service       # rootless user unit
+vigil_loki_uid: loki                      # uid of the Loki datasource in Grafana
+vigil_podman_exporter_scope: rootful      # label on the rootful podman exporter (9882)

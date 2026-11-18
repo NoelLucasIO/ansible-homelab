@@ -1,0 +1,27 @@
+---
+# Pull everything up front: first pulls are large, and systemd start timeouts
+# shouldn't be what decides whether a pull finishes.
+- name: Pull images (rootful)
+  ansible.builtin.shell: |
+    if podman image exists "{{ item }}" && [ "{{ vigil_pull_latest | default(false) | bool | lower }}" != "true" ]; then
+      echo present
+    else
+      podman pull -q "{{ item }}" >/dev/null && echo pulled
+    fi
+  loop: "{{ vigil_containers | map(attribute='image') | unique | list }}"
+  register: vigil_pulled
+  changed_when: "'pulled' in vigil_pulled.stdout"
+  retries: 3
+  delay: 10
+  until: vigil_pulled is succeeded
+
+- name: Which uid writes reports from the gvm-tools and ZAP containers
+  ansible.builtin.command: podman run --rm --network none {{ item.value }} id -u
+  loop: "{{ {'gvm': vigil_gb_registry ~ '/gvm-tools', 'zap': vigil_zap_image} | dict2items }}"
+  register: vigil_writer_uid
+  changed_when: false
+
+- name: Remember them
+  ansible.builtin.set_fact:
+    vigil_uid: "{{ dict(vigil_writer_uid.results | map(attribute='item.key')
+                        | zip(vigil_writer_uid.results | map(attribute='stdout') | map('trim'))) }}"

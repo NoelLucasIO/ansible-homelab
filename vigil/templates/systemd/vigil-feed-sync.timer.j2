@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=vigil: daily Greenbone feed sync
+
+[Timer]
+OnCalendar={{ vigil_oncalendar.feed_sync }}
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

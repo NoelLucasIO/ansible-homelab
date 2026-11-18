@@ -1,0 +1,53 @@
+---
+# Deploy (or update) the vigil security scanning pod on one Podman host. Safe to rerun.
+#   ansible-playbook playbooks/deploy.yml -e @site-vars.yml --ask-vault-pass -K
+#   Only part of it:  --tags config,quadlets   |   --tags observability   |   --tags dns
+#   Newer :stable Greenbone images:  -e vigil_pull_latest=true
+- name: Deploy vigil
+  hosts: "{{ vigil_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/containers.yml
+  roles:
+    - vigil_defaults
+  pre_tasks:
+    - name: 0. Preflight
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+      tags: always
+  tasks:
+    - name: 1. Images, and the uids that write reports
+      ansible.builtin.import_tasks: ../tasks/images.yml
+      tags: [images, config, quadlets, start]
+
+    - name: 2. DefectDojo database on the existing Postgres 18
+      ansible.builtin.import_tasks: ../tasks/database.yml
+      tags: [db]
+
+    - name: 3. Settings, secrets, scripts, scan targets
+      ansible.builtin.import_tasks: ../tasks/config.yml
+      tags: [config, quadlets, start]
+
+    - name: 4. Quadlets and timers
+      ansible.builtin.import_tasks: ../tasks/quadlets.yml
+      tags: [quadlets, start]
+
+    - name: 5. Start and wait
+      ansible.builtin.import_tasks: ../tasks/start.yml
+      tags: [start]
+
+    - name: 6. Greenbone admin, targets, schedules, tasks
+      ansible.builtin.import_tasks: ../tasks/greenbone.yml
+      tags: [greenbone]
+
+    - name: 7. Prometheus, alerts, Grafana (logs already flow via Alloy)
+      ansible.builtin.import_tasks: ../tasks/observability.yml
+      tags: [observability]
+
+    - name: 8. NPM proxy hosts and NIOS DNS
+      ansible.builtin.import_tasks: ../tasks/proxy_dns.yml
+      tags: [dns]
+
+    - name: 9. Verify
+      ansible.builtin.import_tasks: ../tasks/verify.yml
+      tags: [verify]

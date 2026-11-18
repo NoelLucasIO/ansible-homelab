@@ -1,0 +1,83 @@
+---
+# Logs need nothing: rootful containers log to the system journal, and Alloy's
+# loki.source.journal (see playbooks/observability-agents.yml) already labels them container="vigil-...".
+- name: Prometheus fragment directories
+  ansible.builtin.file:
+    path: "{{ vigil_prom_config }}/{{ item }}"
+    state: directory
+    owner: "{{ vigil_pg_owner }}"
+    group: "{{ vigil_pg_owner }}"
+    mode: "0755"
+  loop: [scrape.d, rules.d]
+
+- name: Prometheus loads scrape.d and rules.d (existing entries are left alone)
+  ansible.builtin.lineinfile:
+    path: "{{ vigil_prom_config }}/prometheus.yml"
+    insertafter: "^{{ item.section }}:"
+    line: "  - /etc/prometheus/{{ item.dir }}/*.yml"
+    backup: true
+  loop:
+    - { section: scrape_config_files, dir: scrape.d }
+    - { section: rule_files, dir: rules.d }
+  register: vigil_prom_main
+
+- name: Scrape config and alert rules for vigil
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+    dest: "{{ vigil_prom_config }}/{{ item.dest }}"
+    owner: "{{ vigil_pg_owner }}"
+    group: "{{ vigil_pg_owner }}"
+    mode: "0644"
+  loop:
+    - { src: prometheus-scrape.yml.j2, dest: scrape.d/vigil.yml }
+    - { src: prometheus-rules.yml.j2, dest: rules.d/vigil.yml }
+  register: vigil_prom_files
+
+- name: Prometheus config is valid
+  ansible.builtin.command: "{{ vigil_runas }} podman exec prometheus promtool check config /etc/prometheus/prometheus.yml"
+  changed_when: false
+  when: vigil_prom_main is changed or vigil_prom_files is changed
+
+- name: Reload Prometheus
+  ansible.builtin.uri:
+    url: "{{ vigil_prom_url }}/-/reload"
+    method: POST
+    status_code: [200]
+  when: vigil_prom_main is changed or vigil_prom_files is changed
+
+- name: Grafana dashboard directory
+  ansible.builtin.file:
+    path: "{{ vigil_grafana_provisioning }}/dashboards/vigil"
+    state: directory
+    owner: "{{ vigil_pg_owner }}"
+    group: "{{ vigil_pg_owner }}"
+    mode: "0755"
+
+- name: Grafana datasource password (read-only role; Grafana runs in a user namespace)
+  ansible.builtin.copy:
+    dest: "{{ vigil_grafana_provisioning }}/datasources/vigil-dojo.pw"
+    content: "{{ vigil_grafana_db_password }}"
+    owner: "{{ vigil_pg_owner }}"
+    group: "{{ vigil_pg_owner }}"
+    mode: "0644"
+  register: vigil_grafana_pw
+  no_log: true
+
+- name: Grafana datasource, dashboard provider and dashboard
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+    dest: "{{ vigil_grafana_provisioning }}/{{ item.dest }}"
+    owner: "{{ vigil_pg_owner }}"
+    group: "{{ vigil_pg_owner }}"
+    mode: "0644"
+  loop:
+    - { src: grafana-datasource.yaml.j2, dest: datasources/vigil.yaml }
+    - { src: grafana-dashboards.yaml.j2, dest: dashboards/vigil.yaml }
+    - { src: vigil-findings.json.j2, dest: dashboards/vigil/vigil-findings.json }
+  register: vigil_grafana_files
+
+- name: Restart Grafana to load the new datasource/provider
+  ansible.builtin.command: "{{ vigil_runas }} systemctl --user restart {{ vigil_grafana_unit }}"
+  changed_when: true
+  when: vigil_grafana_pw is changed or
+        (vigil_grafana_files.results[:2] | selectattr('changed') | list | length > 0)

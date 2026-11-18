@@ -1,0 +1,67 @@
+# {{ ansible_managed }}
+# vigil: {{ c.desc }}
+[Unit]
+Description=vigil: {{ c.desc }}
+{% for dep in c.after | default([]) %}
+Requires={{ dep }}.service
+After={{ dep }}.service
+{% endfor %}
+{% if c.on_success is defined %}
+OnSuccess={{ c.on_success }}
+{% endif %}
+{% if c.retry_until_ok | default(false) %}
+StartLimitIntervalSec=6h
+StartLimitBurst=60
+{% endif %}
+
+[Container]
+ContainerName={{ c.name }}
+Image={{ c.image }}
+Pod={{ vigil_name }}.pod
+{% if c.kind == 'job' %}
+StartWithPod=false
+{% endif %}
+LogDriver=journald
+Environment=TZ={{ vigil_tz }}
+{% for key, value in (c.env | default({})).items() %}
+Environment="{{ key }}={{ value }}"
+{% endfor %}
+{% if c.env_file is defined %}
+EnvironmentFile={{ c.env_file }}
+{% endif %}
+{% for vol in c.volumes | default([]) %}
+Volume={{ vol }}
+{% endfor %}
+{% for cap in c.caps | default([]) %}
+AddCapability={{ cap }}
+{% endfor %}
+{% if c.seccomp_unconfined | default(false) %}
+SeccompProfile=unconfined
+{% endif %}
+{% if c.entrypoint is defined %}
+Entrypoint={{ c.entrypoint | to_json }}
+{% endif %}
+{% if c.exec is defined %}
+Exec={{ c.exec }}
+{% endif %}
+
+[Service]
+{% if c.kind == 'service' %}
+Restart=always
+RestartSec=10
+TimeoutStartSec=900
+{% else %}
+Type=oneshot
+{% if c.kind == 'setup' %}
+RemainAfterExit=yes
+{% endif %}
+TimeoutStartSec=0
+{% if c.restart_on_failure | default(false) %}
+Restart=on-failure
+RestartSec=30
+{% endif %}
+{% if c.retry_until_ok | default(false) %}
+Restart=on-failure
+RestartSec=5min
+{% endif %}
+{% endif %}

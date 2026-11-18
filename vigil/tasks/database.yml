@@ -1,0 +1,11 @@
+---
+# DefectDojo's database lives on the existing rootless Postgres (same pattern as
+# other apps on it). psql runs inside that container (runuser as its owner), so no superuser
+# password is needed; the SQL (with passwords) goes in on stdin, never on a command line.
+- name: Role, database and read-only Grafana role on {{ vigil_pg_container }}
+  ansible.builtin.command:
+    cmd: "{{ vigil_runas }} podman exec -i {{ vigil_pg_container }} psql -U postgres -v ON_ERROR_STOP=1 -X"
+    stdin: "{{ lookup('ansible.builtin.template', (playbook_dir | dirname) ~ '/templates/config/dojo-db.sql.j2') }}"
+  register: vigil_db
+  changed_when: "'CREATE ROLE' in vigil_db.stdout or 'CREATE DATABASE' in vigil_db.stdout"
+  no_log: true

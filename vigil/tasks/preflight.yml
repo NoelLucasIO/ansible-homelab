@@ -1,0 +1,80 @@
+---
+- name: Secrets are filled in (group_vars/all/vigil-vault.yml)
+  ansible.builtin.assert:
+    that:
+      - lookup('vars', item, default='CHANGE_ME') != 'CHANGE_ME'
+    fail_msg: "{{ item }} is missing or CHANGE_ME. See playbooks/group_vars/all/vault.yml.example."
+    quiet: true
+  loop:
+    - vigil_dojo_db_password
+    - vigil_dojo_admin_password
+    - vigil_dojo_secret_key
+    - vigil_dojo_aes_key
+    - vigil_gvm_admin_password
+    - vigil_grafana_db_password
+    - vigil_pg_owner
+    - nios_api_password
+    - npm_identity
+    - npm_secret
+  no_log: true
+
+- name: DD_CREDENTIAL_AES_256_KEY must be exactly 32 characters
+  ansible.builtin.assert:
+    that: vigil_dojo_aes_key | length == 32
+    fail_msg: "vigil_dojo_aes_key is {{ vigil_dojo_aes_key | length }} chars; use python3 -c 'import secrets; print(secrets.token_urlsafe(24))'"
+    quiet: true
+  no_log: true
+
+- name: Data mount point is mounted ({{ vigil_data_mount }})
+  ansible.builtin.command: mountpoint -q {{ vigil_data_mount }}
+  changed_when: false
+
+- name: Podman version
+  ansible.builtin.command: podman version --format '{{ "{{" }}.Client.Version{{ "}}" }}'
+  register: vigil_podman_version
+  changed_when: false
+
+- name: Podman is new enough for Quadlet StartWithPod=
+  ansible.builtin.assert:
+    that: vigil_podman_version.stdout is version(vigil_min_podman, '>=')
+    fail_msg: "Podman {{ vigil_podman_version.stdout }} < {{ vigil_min_podman }}"
+    quiet: true
+
+- name: Owner of the rootless Postgres/Grafana/Prometheus quadlets
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ vigil_pg_owner }}"
+
+- name: Remember their uid
+  ansible.builtin.set_fact:
+    vigil_owner_uid: "{{ getent_passwd[vigil_pg_owner][1] }}"
+    # Root runs these as the owner with runuser, so the SSH user needs no sudo rule for that user
+    vigil_runas: >-
+      runuser -u {{ vigil_pg_owner }} -- env
+      XDG_RUNTIME_DIR=/run/user/{{ getent_passwd[vigil_pg_owner][1] }}
+      DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ getent_passwd[vigil_pg_owner][1] }}/bus
+
+- name: Is the pod already running?
+  ansible.builtin.command: systemctl is-active {{ vigil_name }}-pod.service  # noqa: command-instead-of-module
+  register: vigil_pod_state
+  changed_when: false
+  failed_when: false
+
+- name: Listening TCP ports
+  ansible.builtin.command: ss -Hltn
+  register: vigil_ss
+  changed_when: false
+  when: vigil_pod_state.stdout != 'active'
+
+- name: Ports vigil needs are free (first deploy only)
+  ansible.builtin.assert:
+    that: vigil_busy | length == 0
+    fail_msg: "Already in use on {{ inventory_hostname }}: {{ vigil_busy | join(', ') }}. Change the vigil_*_port vars."
+    quiet: true
+  vars:
+    vigil_ports: "{{ [vigil_gsad_port, vigil_openvasd_port, vigil_dojo_port, vigil_dojo_uwsgi_http_port,
+                      vigil_dojo_uwsgi_port, vigil_dojo_valkey_port] | map('string') | list }}"
+    vigil_listening: "{{ vigil_ss.stdout_lines | map('split') | map(attribute=3)
+                         | map('regex_replace', '^.*:', '') | list }}"
+    vigil_busy: "{{ vigil_ports | intersect(vigil_listening) }}"
+  when: vigil_pod_state.stdout != 'active'

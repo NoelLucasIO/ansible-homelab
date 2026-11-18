@@ -1,0 +1,34 @@
+# {{ ansible_managed }}
+# Loaded via rule_files: /etc/prometheus/rules.d/*.yml
+{% set long = vigil_containers | selectattr('kind', 'equalto', 'service') | map(attribute='name') | list %}
+groups:
+  - name: vigil
+    rules:
+      - alert: VigilDefectDojoDown
+        expr: up{job="vigil-defectdojo"} == 0
+        for: 10m
+        labels: { severity: warning, pod: {{ vigil_name }} }
+        annotations:
+          summary: DefectDojo in the vigil pod is not answering /django_metrics
+
+      # podman_container_state: 2 = running (prometheus-podman-exporter)
+      - alert: VigilContainerNotRunning
+        expr: |
+          (podman_container_state{scope="{{ vigil_podman_exporter_scope }}"}
+            * on(id) group_left(name)
+           podman_container_info{scope="{{ vigil_podman_exporter_scope }}", name=~"{{ long | join('|') }}"}) != 2
+        for: 10m
+        labels: { severity: warning, pod: {{ vigil_name }} }
+        annotations:
+          summary: "vigil container {{ '{{' }} $labels.name {{ '}}' }} is not running"
+
+      # Quadlet runs containers with --rm, so a dead one disappears instead of showing "exited"
+      - alert: VigilContainersMissing
+        expr: |
+          count(podman_container_info{scope="{{ vigil_podman_exporter_scope }}", name=~"{{ long | join('|') }}"})
+            < {{ long | length }}
+          or absent(podman_container_info{scope="{{ vigil_podman_exporter_scope }}", name=~"{{ long | join('|') }}"})
+        for: 15m
+        labels: { severity: warning, pod: {{ vigil_name }} }
+        annotations:
+          summary: "vigil pod is missing long-running containers (expected {{ long | length }})"

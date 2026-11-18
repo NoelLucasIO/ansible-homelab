@@ -1,0 +1,33 @@
+---
+- name: Start the pod (pulls in every non-job container)
+  ansible.builtin.systemd:
+    name: "{{ vigil_name }}-pod.service"
+    state: started
+
+- name: Restart services whose definition changed
+  ansible.builtin.command: >-
+    systemctl try-restart
+    {{ vigil_changed_services | map('regex_replace', '$', '.service') | join(' ') }}
+  when:
+    - vigil_pod_state.stdout == 'active'
+    - vigil_changed_services | length > 0
+  changed_when: true
+  tags: [skip_ansible_lint]   # try-restart: only units already running
+
+- name: Wait for DefectDojo (first start runs all migrations, ~5-15 min)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ vigil_dojo_port }}/login"
+    status_code: [200]
+  register: vigil_dojo_up
+  until: vigil_dojo_up is succeeded
+  retries: 90
+  delay: 20
+
+- name: Wait for the Greenbone web UI (gsad)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ vigil_gsad_port }}/"
+    status_code: [200]
+  register: vigil_gsad_up
+  until: vigil_gsad_up is succeeded
+  retries: 60
+  delay: 10

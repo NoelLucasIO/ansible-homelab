@@ -1,0 +1,126 @@
+---
+# Stop and remove vigil.  -e confirm=vigil is required.
+#   Keeps by default: Podman volumes (Greenbone DB + feeds, DefectDojo media), the
+#   DefectDojo database, reports under {{ vigil_data }}, DNS records, NPM proxy hosts.
+#   -e purge=true also deletes the volumes, the database and roles, the reports,
+#   the vigil Prometheus/Grafana files, and the NPM hosts + NIOS records vigil created.
+- name: Remove vigil
+  hosts: "{{ vigil_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  vars_files:
+    - vars/containers.yml
+  roles:
+    - vigil_defaults
+  vars:
+    purge: false
+  tasks:
+    - name: Confirm
+      ansible.builtin.assert:
+        that: confirm | default('') == vigil_name
+        fail_msg: "Pass -e confirm={{ vigil_name }} to remove the pod."
+
+    - name: Owner of the rootless Postgres quadlet
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ vigil_pg_owner }}"
+
+    - name: Stop timers and the pod
+      ansible.builtin.shell: |
+        systemctl disable --now vigil-feed-sync.timer {{ vigil_containers | selectattr('timer', 'defined')
+          | map(attribute='name') | map('regex_replace', '$', '.timer') | join(' ') }} || true
+        systemctl stop {{ vigil_name }}-pod.service || true
+      changed_when: true
+      tags: [skip_ansible_lint]   # units may already be gone
+
+    - name: Remove quadlets and units
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: >-
+        {{ [vigil_quadlet_dir ~ '/' ~ vigil_name ~ '.pod',
+            '/etc/systemd/system/vigil-import@.service',
+            '/etc/systemd/system/vigil-feed-sync.service',
+            '/etc/systemd/system/vigil-feed-sync.timer']
+           + (vigil_containers | map(attribute='name') | map('regex_replace', '^(.*)$', vigil_quadlet_dir ~ '/\1.container') | list)
+           + (vigil_containers | selectattr('timer', 'defined') | map(attribute='name')
+              | map('regex_replace', '^(.*)$', '/etc/systemd/system/\1.timer') | list) }}
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Purge
+      when: purge | bool
+      block:
+        - name: Podman volumes
+          ansible.builtin.shell: |
+            set -o pipefail
+            podman volume ls -q --filter name='^vigil-' | xargs -r podman volume rm
+          changed_when: true
+
+        - name: Files
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop:
+            - "{{ vigil_etc }}"
+            - "{{ vigil_libexec }}"
+            - "{{ vigil_data }}"
+            - "{{ vigil_prom_config }}/scrape.d/vigil.yml"
+            - "{{ vigil_prom_config }}/rules.d/vigil.yml"
+            - "{{ vigil_grafana_provisioning }}/datasources/vigil.yaml"
+            - "{{ vigil_grafana_provisioning }}/datasources/vigil-dojo.pw"
+            - "{{ vigil_grafana_provisioning }}/dashboards/vigil.yaml"
+            - "{{ vigil_grafana_provisioning }}/dashboards/vigil"
+
+        - name: Database and roles
+          ansible.builtin.command:
+            cmd: >-
+              runuser -u {{ vigil_pg_owner }} -- env XDG_RUNTIME_DIR=/run/user/{{ getent_passwd[vigil_pg_owner][1] }}
+              podman exec -i {{ vigil_pg_container }} psql -U postgres -v ON_ERROR_STOP=1 -X
+            stdin: |
+              DROP DATABASE IF EXISTS "{{ vigil_dojo_db }}" WITH (FORCE);
+              DROP ROLE IF EXISTS "{{ vigil_dojo_db_user }}";
+              DROP ROLE IF EXISTS "{{ vigil_grafana_db_user }}";
+          changed_when: true
+
+        - name: Reload Prometheus
+          ansible.builtin.uri:
+            url: "{{ vigil_prom_url }}/-/reload"
+            method: POST
+
+        - name: NPM proxy hosts
+          ansible.builtin.include_tasks: ../tasks/npm_login.yml
+
+        - name: Delete vigil's NPM proxy hosts
+          ansible.builtin.uri:
+            url: "{{ npm_api }}/nginx/proxy-hosts/{{ item.id }}"
+            method: DELETE
+            headers: "{{ npm_headers }}"
+          loop: "{{ npm_hosts.json | selectattr('domain_names', 'contains', vigil_dojo_fqdn) | list
+                    + npm_hosts.json | selectattr('domain_names', 'contains', vigil_gvm_fqdn) | list }}"
+          loop_control: { label: "{{ item.domain_names | join(',') }}" }
+
+        - name: NIOS records vigil created (comment must match)
+          module_defaults:
+            ansible.builtin.uri:
+              user: "{{ nios_api_user }}"
+              password: "{{ nios_api_password }}"
+              force_basic_auth: true
+              validate_certs: false
+              return_content: true
+          block:
+            - name: Find them
+              ansible.builtin.uri:
+                url: "{{ nios_wapi }}/record:a?name={{ item.fqdn }}&_return_fields=name,comment"
+              loop: "{{ vigil_ui }}"
+              register: vigil_a
+
+            - name: Delete them
+              ansible.builtin.uri:
+                url: "{{ nios_wapi }}/{{ item._ref }}"
+                method: DELETE
+              loop: "{{ vigil_a.results | map(attribute='json') | flatten
+                        | selectattr('comment', 'defined') | selectattr('comment', 'equalto', vigil_record_comment) | list }}"
+              loop_control: { label: "{{ item.name }}" }

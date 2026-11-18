@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Started by OnSuccess= of vigil-gb-export / vigil-scan-nuclei / vigil-scan-zap.
+[Unit]
+Description=vigil: import %i reports into DefectDojo
+Requires=vigil-dojo-nginx.service
+After=vigil-dojo-nginx.service
+
+[Service]
+Type=oneshot
+ExecStart={{ vigil_libexec }}/vigil-import %i

@@ -1,0 +1,54 @@
+---
+- name: Long-running services are active
+  ansible.builtin.command: systemctl is-active {{ item }}.service  # noqa: command-instead-of-module
+  loop: "{{ vigil_containers | selectattr('kind', 'equalto', 'service') | map(attribute='name') | list }}"
+  changed_when: false
+
+- name: Greenbone Postgres log
+  ansible.builtin.command: journalctl -q --no-pager -o cat CONTAINER_NAME=vigil-gb-pg --since -2h
+  register: vigil_pg_log
+  changed_when: false
+
+- name: Greenbone Postgres stayed off TCP (host 5432 belongs to the existing Postgres)
+  ansible.builtin.assert:
+    that: vigil_pg_log.stdout is not search('listening on IPv[46] address')
+    fail_msg: "pg-gvm opened a TCP listener; POSTGRES_LISTEN_ADDRESSES=' ' did not take. Log: {{ vigil_pg_log.stdout_lines[-10:] }}"
+    quiet: true
+
+- name: Web UIs through NPM
+  ansible.builtin.uri:
+    url: "https://{{ item.fqdn }}/{{ item.path }}"
+    validate_certs: true
+    status_code: [200]
+  loop:
+    - { fqdn: "{{ vigil_dojo_fqdn }}", path: login }
+    - { fqdn: "{{ vigil_gvm_fqdn }}", path: "" }
+  register: vigil_https
+  until: vigil_https is succeeded
+  retries: 6
+  delay: 10
+
+- name: Prometheus scrapes DefectDojo
+  ansible.builtin.uri:
+    url: "{{ vigil_prom_url }}/api/v1/targets?scrapePool=vigil-defectdojo"
+    return_content: true
+  register: vigil_target
+  until: (vigil_target.json.data.activeTargets | map(attribute='health') | list) == ['up']
+  retries: 10
+  delay: 15
+
+- name: Greenbone setup state (background; retries until the feed is loaded)
+  ansible.builtin.command: systemctl show -p ActiveState,Result,NRestarts --value vigil-gb-setup.service  # noqa: command-instead-of-module
+  register: vigil_setup_state
+  changed_when: false
+
+- name: Done
+  ansible.builtin.debug:
+    msg:
+      - "DefectDojo:  https://{{ vigil_dojo_fqdn }}  (user {{ vigil_dojo_admin_user }})"
+      - "Greenbone:   https://{{ vigil_gvm_fqdn }}  (user {{ vigil_gvm_admin_user }})"
+      - "Grafana:     Security / vigil: vulnerability findings"
+      - "Greenbone setup unit: {{ vigil_setup_state.stdout_lines | join(' / ') }}
+         (watch: journalctl -fu vigil-gb-setup)"
+      - "Web targets: {{ vigil_web_urls | length }} URLs from NPM + extras"
+      - "Next scans: systemctl list-timers 'vigil-*'"

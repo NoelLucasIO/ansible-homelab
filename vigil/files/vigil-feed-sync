@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# vigil-feed-sync: pull each Greenbone feed image; if it changed, re-run its copy unit.
+# Restarting a copy unit also restarts the services that Require= it (gvmd, ospd, ...),
+# which is how the community compose stack picks up a new feed.
+set -euo pipefail
+changed=()
+while read -r unit image; do
+  [[ -z $unit || $unit == \#* ]] && continue
+  before=$(podman image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)
+  podman pull -q "$image" >/dev/null
+  after=$(podman image inspect --format '{{.Id}}' "$image")
+  [[ $before != "$after" ]] && changed+=("$unit.service")
+done < /etc/vigil/feed-images.txt
+
+if ((${#changed[@]})); then
+  echo "vigil-feed-sync: new feed data for ${changed[*]}"
+  systemctl restart "${changed[@]}"
+  podman image prune -f >/dev/null
+else
+  echo "vigil-feed-sync: feeds unchanged"
+fi

@@ -1,0 +1,19 @@
+-- {{ ansible_managed }}
+SELECT format('CREATE ROLE %I LOGIN', '{{ vigil_dojo_db_user }}')
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ vigil_dojo_db_user }}')\gexec
+ALTER ROLE "{{ vigil_dojo_db_user }}" WITH LOGIN PASSWORD '{{ vigil_dojo_db_password | replace("'", "''") }}';
+
+SELECT format('CREATE DATABASE %I OWNER %I', '{{ vigil_dojo_db }}', '{{ vigil_dojo_db_user }}')
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ vigil_dojo_db }}')\gexec
+
+SELECT format('CREATE ROLE %I LOGIN', '{{ vigil_grafana_db_user }}')
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ vigil_grafana_db_user }}')\gexec
+ALTER ROLE "{{ vigil_grafana_db_user }}" WITH LOGIN PASSWORD '{{ vigil_grafana_db_password | replace("'", "''") }}';
+GRANT CONNECT ON DATABASE "{{ vigil_dojo_db }}" TO "{{ vigil_grafana_db_user }}";
+
+\connect {{ vigil_dojo_db }}
+GRANT USAGE ON SCHEMA public TO "{{ vigil_grafana_db_user }}";
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO "{{ vigil_grafana_db_user }}";
+-- tables DefectDojo's migrations create later
+ALTER DEFAULT PRIVILEGES FOR ROLE "{{ vigil_dojo_db_user }}" IN SCHEMA public
+  GRANT SELECT ON TABLES TO "{{ vigil_grafana_db_user }}";

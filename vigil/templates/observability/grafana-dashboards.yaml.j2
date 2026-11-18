@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+apiVersion: 1
+providers:
+  - name: vigil
+    folder: Security
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/provisioning/dashboards/vigil
+      foldersFromFilesStructure: false

@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+# vigil-import <gvm|nuclei|zap>: (re)import the newest reports of one tool into DefectDojo.
+#   Reports:  $REPORTS/<tool>/<scope>[--<label>].<ext>   (scope picks the DefectDojo product)
+#   Then:     moved to $REPORTS/archive/<date>/<tool>/, archives older than $KEEP_DAYS deleted.
+# reimport-scan with auto_create_context creates the product/engagement/test on first
+# use, then updates that test: fixed findings are closed, new ones added, repeats deduplicated.
+set -euo pipefail
+
+tool=${1:?usage: vigil-import <gvm|nuclei|zap>}
+set -a
+# shellcheck source=/dev/null
+. /etc/vigil/import.env
+set +a
+
+case $tool in
+  gvm)    scan_type="OpenVAS Parser"; pattern='*.xml' ;;
+  nuclei) scan_type="Nuclei Scan";    pattern='*.jsonl' ;;
+  zap)    scan_type="ZAP Scan";       pattern='*.xml' ;;
+  *) echo "vigil-import: unknown tool '$tool'" >&2; exit 64 ;;
+esac
+
+shopt -s nullglob
+files=("$REPORTS/$tool"/$pattern)
+if ((${#files[@]} == 0)); then
+  echo "vigil-import: no $tool reports to import"
+  exit 0
+fi
+
+token=$(python3 - <<'PY'
+import json, os, urllib.request
+req = urllib.request.Request(
+    os.environ["DOJO_URL"] + "/api/v2/api-token-auth/",
+    data=json.dumps({"username": os.environ["DOJO_USER"],
+                     "password": os.environ["DOJO_PASSWORD"]}).encode(),
+    headers={"Content-Type": "application/json"})
+print(json.load(urllib.request.urlopen(req, timeout=30))["token"])
+PY
+)
+
+archive="$REPORTS/archive/$(date +%F)/$tool"
+mkdir -p "$archive"
+failed=0
+
+for f in "${files[@]}"; do
+  base=$(basename "$f"); base=${base%.*}
+  scope=${base%%--*}
+  label=${base#*--}; [[ $label == "$base" ]] && label=""
+  product=${PRODUCT[$scope]:-}
+  if [[ -z $product ]]; then
+    echo "vigil-import: $f: scope '$scope' has no product in import.env, skipping" >&2
+    failed=1; continue
+  fi
+  if [[ ! -s $f ]]; then
+    echo "vigil-import: $f is empty (no findings), archiving"
+    mv "$f" "$archive/"; continue
+  fi
+  case $tool in
+    gvm)    title="Greenbone" ;;
+    nuclei) title="Nuclei" ;;
+    zap)    title="ZAP ${label:-$scope}" ;;
+  esac
+
+  if out=$(curl -fsS --max-time 600 -X POST "$DOJO_URL/api/v2/reimport-scan/" \
+        -H "Authorization: Token $token" \
+        -F "scan_type=$scan_type" -F "file=@$f" \
+        -F "product_type_name=$PRODUCT_TYPE" -F "product_name=$product" \
+        -F "engagement_name=$ENGAGEMENT" -F "test_title=$title" \
+        -F "auto_create_context=true" -F "close_old_findings=true" \
+        -F "deduplication_on_engagement=true" -F "minimum_severity=Info" \
+        -F "active=true" -F "verified=false" -F "scan_date=$(date +%F)" 2>&1); then
+    test_id=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("test_id") or d.get("test") or "?")' "$out" 2>/dev/null || echo "?")
+    echo "vigil-import: $product / $title <- $(basename "$f") (test $test_id)"
+    mv "$f" "$archive/"
+  else
+    echo "vigil-import: $product / $title <- $(basename "$f") FAILED: $out" >&2
+    failed=1
+  fi
+done
+
+find "$REPORTS/archive" -mindepth 1 -maxdepth 1 -type d -mtime +"$KEEP_DAYS" -exec rm -rf {} +
+exit $failed

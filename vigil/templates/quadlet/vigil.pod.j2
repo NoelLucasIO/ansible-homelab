@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# vigil: Greenbone + DefectDojo + Nuclei + ZAP in one pod (Cockpit groups them).
+# Host network: the scanner needs raw sockets/ARP on the LAN, and it matches the
+# Network=host convention. Internal services use Unix sockets or 127.0.0.1.
+[Unit]
+Description=vigil security scanning pod
+AssertPathIsMountPoint={{ vigil_data_mount }}
+
+[Pod]
+PodName={{ vigil_name }}
+Network=host
+
+[Service]
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

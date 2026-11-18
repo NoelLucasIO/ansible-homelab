@@ -1,0 +1,9 @@
+# {{ ansible_managed }}
+[Unit]
+Description=vigil: pull new Greenbone feed images and refresh the feed volumes
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ vigil_libexec }}/vigil-feed-sync

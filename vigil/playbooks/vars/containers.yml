@@ -1,0 +1,283 @@
+---
+# Every container in the vigil pod. tasks/quadlets.yml renders each entry through
+# templates/quadlet/container.j2 into {{ vigil_quadlet_dir }}/<name>.container.
+#
+#   kind:  service  long-running, Restart=always
+#          setup    one-shot that must finish before its dependents (feed copies,
+#                   migrations); stays "active (exited)" so Requires= works
+#          job      one-shot started by a timer or by hand, never with the pod
+#   after: other vigil units this one Requires= and starts After=
+#
+# Greenbone layout follows its community compose file, with three changes so it
+# can share the host network: pg-gvm and redis use Unix sockets only, gsad listens
+# on 127.0.0.1 and serves the web UI itself (no nginx on 443), and openvasd
+# listens on 127.0.0.1.
+
+_gb: "{{ vigil_gb_registry }}"
+
+vigil_containers:
+  # --- Greenbone feed data (copied into named volumes, then the container exits) ---
+  - name: vigil-gb-vt-data
+    desc: Greenbone feed - vulnerability tests
+    kind: setup
+    image: "{{ _gb }}/vulnerability-tests"
+    env: { FEED_RELEASE: "{{ vigil_gb_feed_release }}" }
+    volumes: ["vigil-gb-vt:/mnt"]
+    feed: true
+  - name: vigil-gb-notus-data
+    desc: Greenbone feed - notus advisories
+    kind: setup
+    image: "{{ _gb }}/notus-data"
+    volumes: ["vigil-gb-notus:/mnt"]
+    feed: true
+  - name: vigil-gb-scap-data
+    desc: Greenbone feed - SCAP
+    kind: setup
+    image: "{{ _gb }}/scap-data"
+    volumes: ["vigil-gb-scap:/mnt"]
+    feed: true
+  - name: vigil-gb-certbund-data
+    desc: Greenbone feed - CERT-Bund
+    kind: setup
+    image: "{{ _gb }}/cert-bund-data"
+    volumes: ["vigil-gb-cert:/mnt"]
+    feed: true
+  - name: vigil-gb-dfncert-data
+    desc: Greenbone feed - DFN-CERT
+    kind: setup
+    image: "{{ _gb }}/dfn-cert-data"
+    volumes: ["vigil-gb-cert:/mnt"]
+    after: [vigil-gb-certbund-data]
+    feed: true
+  - name: vigil-gb-data-objects
+    desc: Greenbone feed - scan configs, port lists
+    kind: setup
+    image: "{{ _gb }}/data-objects"
+    env: { FEED_RELEASE: "{{ vigil_gb_feed_release }}" }
+    volumes: ["vigil-gb-objects:/mnt"]
+    feed: true
+  - name: vigil-gb-report-formats
+    desc: Greenbone feed - report formats
+    kind: setup
+    image: "{{ _gb }}/report-formats"
+    env: { FEED_RELEASE: "{{ vigil_gb_feed_release }}" }
+    volumes: ["vigil-gb-objects:/mnt"]
+    after: [vigil-gb-data-objects]
+    feed: true
+  - name: vigil-gb-gpg-data
+    desc: Greenbone feed - signing keys
+    kind: setup
+    image: "{{ _gb }}/gpg-data"
+    volumes: ["vigil-gb-gpg:/mnt"]
+    feed: true
+  - name: vigil-gb-gsa-web
+    desc: Greenbone web UI files (served by gsad)
+    kind: setup
+    image: "{{ _gb }}/gsa:stable-slim"
+    env: { MOUNT_PATH: /mnt/web }
+    volumes: ["vigil-gb-gsa-web:/mnt/web"]
+    feed: true
+
+  # --- Greenbone services ---
+  - name: vigil-gb-redis
+    desc: Greenbone redis (Unix socket only)
+    kind: service
+    image: "{{ _gb }}/redis-server"
+    volumes: ["vigil-gb-redis-sock:/run/redis"]
+  - name: vigil-gb-pg-migrator
+    desc: Greenbone PostgreSQL major-version migrator
+    kind: setup
+    image: "{{ _gb }}/pg-gvm-migrator:stable"
+    volumes: ["vigil-gb-psql:/var/lib/postgresql", "vigil-gb-psql-sock:/var/run/postgresql"]
+  - name: vigil-gb-pg
+    desc: Greenbone PostgreSQL (Unix socket only; host 5432 stays with the existing Postgres)
+    kind: service
+    image: "{{ _gb }}/pg-gvm:stable"
+    # One space, not empty: the start script turns "" into "*". Postgres reads a
+    # blank listen_addresses as "no TCP", which keeps it off the host's 5432.
+    env: { POSTGRES_LISTEN_ADDRESSES: " " }
+    volumes: ["vigil-gb-psql:/var/lib/postgresql", "vigil-gb-psql-sock:/var/run/postgresql"]
+    after: [vigil-gb-pg-migrator]
+  - name: vigil-gb-gvmd
+    desc: Greenbone manager (gvmd)
+    kind: service
+    image: "{{ _gb }}/gvmd:stable"
+    volumes:
+      - vigil-gb-gvmd:/var/lib/gvm
+      - vigil-gb-scap:/var/lib/gvm/scap-data/
+      - vigil-gb-cert:/var/lib/gvm/cert-data
+      - vigil-gb-objects:/var/lib/gvm/data-objects/gvmd
+      - vigil-gb-vt:/var/lib/openvas/plugins
+      - vigil-gb-psql:/var/lib/postgresql
+      - vigil-gb-gvmd-sock:/run/gvmd
+      - vigil-gb-ospd-sock:/run/ospd
+      - vigil-gb-psql-sock:/var/run/postgresql
+    after: [vigil-gb-pg, vigil-gb-scap-data, vigil-gb-certbund-data, vigil-gb-dfncert-data,
+            vigil-gb-data-objects, vigil-gb-report-formats]
+  - name: vigil-gb-gsad
+    desc: Greenbone web UI + API (gsad on 127.0.0.1)
+    kind: service
+    image: "{{ _gb }}/gsad:stable"
+    env:
+      GSAD_ARGS: >-
+        -f --http-only --listen=127.0.0.1 --port={{ vigil_gsad_port }}
+        --static-content=/usr/local/share/gvm/gsad/web
+    volumes: ["vigil-gb-gvmd-sock:/run/gvmd", "vigil-gb-gsa-web:/usr/local/share/gvm/gsad/web:ro"]
+    after: [vigil-gb-gvmd, vigil-gb-gsa-web]
+  - name: vigil-gb-openvas-config
+    desc: Greenbone openvas.conf + log config
+    kind: setup
+    image: "{{ _gb }}/openvas-scanner:stable"
+    entrypoint: ["/bin/sh", "/vigil/openvas-config.sh"]
+    env: { OPENVASD_URL: "http://127.0.0.1:{{ vigil_openvasd_port }}" }
+    volumes:
+      - vigil-gb-openvas-etc:/mnt
+      - vigil-gb-openvas-log:/var/log/openvas
+      - "{{ vigil_libexec }}/openvas-config.sh:/vigil/openvas-config.sh:ro"
+  - name: vigil-gb-openvas-log
+    desc: Greenbone openvas scanner log -> journald
+    kind: service
+    image: "{{ _gb }}/openvas-scanner:stable"
+    entrypoint: ["tail", "-n", "0", "-F", "/var/log/openvas/openvas.log"]
+    volumes: ["vigil-gb-openvas-etc:/etc/openvas", "vigil-gb-openvas-log:/var/log/openvas"]
+    after: [vigil-gb-openvas-config]
+  - name: vigil-gb-openvasd
+    desc: Greenbone openvasd (notus, 127.0.0.1)
+    kind: service
+    image: "{{ _gb }}/openvas-scanner:stable"
+    env:
+      OPENVASD_MODE: service_notus
+      GNUPGHOME: /etc/openvas/gnupg
+      LISTENING: "127.0.0.1:{{ vigil_openvasd_port }}"
+    volumes:
+      - vigil-gb-openvas-etc:/etc/openvas
+      - vigil-gb-openvas-log:/var/log/openvas
+      - vigil-gb-gpg:/etc/openvas/gnupg
+      - vigil-gb-notus:/var/lib/notus
+    after: [vigil-gb-vt-data, vigil-gb-notus-data, vigil-gb-openvas-config, vigil-gb-gpg-data]
+  - name: vigil-gb-ospd
+    desc: Greenbone scanner (ospd-openvas, raw sockets)
+    kind: service
+    image: "{{ _gb }}/ospd-openvas:stable"
+    caps: [NET_ADMIN, NET_RAW]
+    seccomp_unconfined: true
+    exec: >-
+      ospd-openvas -f --config /etc/gvm/ospd-openvas.conf
+      --notus-feed-dir /var/lib/notus/advisories -m 666
+    volumes:
+      - vigil-gb-gpg:/etc/openvas/gnupg
+      - vigil-gb-vt:/var/lib/openvas/plugins
+      - vigil-gb-notus:/var/lib/notus
+      - vigil-gb-ospd-sock:/run/ospd
+      - vigil-gb-redis-sock:/run/redis/
+      - vigil-gb-openvas-etc:/etc/openvas/
+      - vigil-gb-openvas-log:/var/log/openvas
+    after: [vigil-gb-redis, vigil-gb-gpg-data, vigil-gb-openvas-config, vigil-gb-vt-data, vigil-gb-notus-data]
+
+  # --- DefectDojo (database on the existing Postgres 18) ---
+  - name: vigil-dojo-valkey
+    desc: DefectDojo broker/cache (valkey on 127.0.0.1)
+    kind: service
+    image: "{{ vigil_valkey_image }}"
+    exec: >-
+      valkey-server --bind 127.0.0.1 --port {{ vigil_dojo_valkey_port }}
+      --save 60 1 --loglevel warning
+    volumes: ["vigil-dojo-valkey:/data"]
+  - name: vigil-dojo-init
+    desc: DefectDojo migrations + admin user
+    kind: setup
+    restart_on_failure: true        # rootless Postgres may come up after the pod at boot
+    image: "{{ vigil_dojo_image }}"
+    entrypoint: ["/wait-for-it.sh", "{{ vigil_pg_host }}:{{ vigil_pg_port }}", "-t", "60", "--",
+                 "/entrypoint-initializer.sh"]
+    env_file: "{{ vigil_etc }}/dojo.env"
+    after: [vigil-dojo-valkey]
+  - name: vigil-dojo-uwsgi
+    desc: DefectDojo app (uwsgi)
+    kind: service
+    image: "{{ vigil_dojo_image }}"
+    entrypoint: ["/wait-for-it.sh", "{{ vigil_pg_host }}:{{ vigil_pg_port }}", "-t", "60", "--",
+                 "/entrypoint-uwsgi.sh"]
+    env_file: "{{ vigil_etc }}/dojo.env"
+    volumes: ["vigil-dojo-media:/app/media"]
+    after: [vigil-dojo-init, vigil-dojo-valkey]
+  - name: vigil-dojo-celerybeat
+    desc: DefectDojo scheduler (celery beat)
+    kind: service
+    image: "{{ vigil_dojo_image }}"
+    entrypoint: ["/wait-for-it.sh", "{{ vigil_pg_host }}:{{ vigil_pg_port }}", "-t", "60", "--",
+                 "/entrypoint-celery-beat.sh"]
+    env_file: "{{ vigil_etc }}/dojo.env"
+    after: [vigil-dojo-init, vigil-dojo-valkey]
+  - name: vigil-dojo-celeryworker
+    desc: DefectDojo worker (celery)
+    kind: service
+    image: "{{ vigil_dojo_image }}"
+    entrypoint: ["/wait-for-it.sh", "{{ vigil_pg_host }}:{{ vigil_pg_port }}", "-t", "60", "--",
+                 "/entrypoint-celery-worker.sh"]
+    env_file: "{{ vigil_etc }}/dojo.env"
+    volumes: ["vigil-dojo-media:/app/media"]
+    after: [vigil-dojo-init, vigil-dojo-valkey]
+  - name: vigil-dojo-nginx
+    desc: DefectDojo web (nginx on :{{ vigil_dojo_port }})
+    kind: service
+    image: "{{ vigil_dojo_nginx_image }}"
+    env:
+      DD_UWSGI_HOST: 127.0.0.1
+      DD_UWSGI_PORT: "{{ vigil_dojo_uwsgi_port }}"
+      NGINX_METRICS_ENABLED: "false"
+    volumes: ["vigil-dojo-media:/usr/share/nginx/html/media"]
+    after: [vigil-dojo-uwsgi]
+
+  # --- Jobs (timers; never started with the pod) ---
+  - name: vigil-gb-setup
+    desc: Greenbone targets, schedules and tasks from vigil_scopes
+    kind: job
+    retry_until_ok: true            # exits 2 until gvmd has loaded the feed (first start: ~30-60 min)
+    image: "{{ _gb }}/gvm-tools"
+    exec: >-
+      gvm-script -c /vigil-conf/gvm-tools.conf socket --socketpath /run/gvmd/gvmd.sock
+      /vigil/vigil-gvm.py setup
+    volumes:
+      - vigil-gb-gvmd-sock:/run/gvmd
+      - "{{ vigil_etc }}/gvm:/vigil-conf:ro"
+      - "{{ vigil_libexec }}/vigil-gvm.py:/vigil/vigil-gvm.py:ro"
+    after: [vigil-gb-gvmd]
+  - name: vigil-gb-export
+    desc: Export newest Greenbone reports for DefectDojo
+    kind: job
+    image: "{{ _gb }}/gvm-tools"
+    exec: >-
+      gvm-script -c /vigil-conf/gvm-tools.conf socket --socketpath /run/gvmd/gvmd.sock
+      /vigil/vigil-gvm.py export
+    volumes:
+      - vigil-gb-gvmd-sock:/run/gvmd
+      - "{{ vigil_etc }}/gvm:/vigil-conf:ro"
+      - "{{ vigil_libexec }}/vigil-gvm.py:/vigil/vigil-gvm.py:ro"
+      - "{{ vigil_data }}/reports/gvm:/reports"
+    after: [vigil-gb-gvmd]
+    on_success: vigil-import@gvm.service
+    timer: gvm_export
+  - name: vigil-scan-nuclei
+    desc: Nuclei scan of every scope
+    kind: job
+    image: "{{ vigil_nuclei_image }}"
+    entrypoint: ["/bin/sh", "/vigil/nuclei-run.sh"]
+    volumes:
+      - vigil-nuclei-home:/root
+      - "{{ vigil_etc }}/targets:/vigil-conf:ro"
+      - "{{ vigil_libexec }}/nuclei-run.sh:/vigil/nuclei-run.sh:ro"
+      - "{{ vigil_data }}/reports/nuclei:/reports"
+    on_success: vigil-import@nuclei.service
+    timer: nuclei
+  - name: vigil-scan-zap
+    desc: ZAP passive baseline of every web app
+    kind: job
+    image: "{{ vigil_zap_image }}"
+    entrypoint: ["/bin/bash", "/vigil/zap-run.sh"]
+    volumes:
+      - "{{ vigil_etc }}/targets:/vigil-conf:ro"
+      - "{{ vigil_libexec }}/zap-run.sh:/vigil/zap-run.sh:ro"
+      - "{{ vigil_data }}/reports/zap:/zap/wrk"
+    on_success: vigil-import@zap.service
+    timer: zap

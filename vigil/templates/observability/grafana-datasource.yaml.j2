@@ -1,0 +1,16 @@
+# {{ ansible_managed }}
+apiVersion: 1
+datasources:
+  - name: DefectDojo (vigil)
+    uid: vigil-dojo
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: {{ vigil_pg_host }}:{{ vigil_pg_port }}
+    user: {{ vigil_grafana_db_user }}
+    jsonData:
+      database: {{ vigil_dojo_db }}
+      sslmode: disable
+      postgresVersion: 1800
+      timescaledb: false
+    secureJsonData:
+      password: $__file{/etc/grafana/provisioning/datasources/vigil-dojo.pw}

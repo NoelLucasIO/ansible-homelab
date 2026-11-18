@@ -1,0 +1,83 @@
+---
+- name: Pod
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/quadlet/vigil.pod.j2"
+    dest: "{{ vigil_quadlet_dir }}/{{ vigil_name }}.pod"
+    mode: "0644"
+  register: vigil_pod_unit
+
+- name: Containers
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/quadlet/container.j2"
+    dest: "{{ vigil_quadlet_dir }}/{{ c.name }}.container"
+    mode: "0644"
+  loop: "{{ vigil_containers }}"
+  loop_control: { loop_var: c, label: "{{ c.name }}" }
+  register: vigil_units
+
+- name: Quadlets that are no longer in vars/containers.yml
+  ansible.builtin.find:
+    paths: "{{ vigil_quadlet_dir }}"
+    patterns: "vigil-*.container"
+  register: vigil_existing_units
+
+- name: Stop and remove them
+  ansible.builtin.shell: |
+    systemctl stop {{ item | basename | splitext | first }}.service || true
+    rm -f {{ item }}
+  loop: "{{ vigil_existing_units.files | map(attribute='path') | list }}"
+  when: (item | basename | splitext | first) not in (vigil_containers | map(attribute='name') | list)
+  register: vigil_removed_units
+  changed_when: true
+  tags: [skip_ansible_lint]   # plain systemctl stop; unit may already be gone
+
+- name: Import and feed-sync units
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/systemd/{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop: [vigil-import@.service, vigil-feed-sync.service, vigil-feed-sync.timer]
+  register: vigil_sysunits
+
+- name: Job timers
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/systemd/vigil-job.timer.j2"
+    dest: "/etc/systemd/system/{{ c.name }}.timer"
+    mode: "0644"
+  loop: "{{ vigil_containers | selectattr('timer', 'defined') | list }}"
+  loop_control: { loop_var: c, label: "{{ c.name }}.timer" }
+  register: vigil_timers
+
+- name: Quadlet generator accepts every unit
+  ansible.builtin.command: /usr/libexec/podman/quadlet -dryrun
+  register: vigil_dryrun
+  changed_when: false
+  failed_when: vigil_dryrun.rc != 0 or 'rror' in vigil_dryrun.stderr
+
+- name: Reload systemd (runs the Quadlet generator)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: vigil_pod_unit is changed or vigil_units is changed or vigil_timers is changed or vigil_sysunits is changed or vigil_removed_units is changed
+
+- name: Timers on
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: >-
+    {{ ['vigil-feed-sync.timer'] + (vigil_containers | selectattr('timer', 'defined')
+       | map(attribute='name') | map('regex_replace', '^(.*)$', '\1.timer') | list) }}
+
+- name: Did the DefectDojo settings change?
+  ansible.builtin.set_fact:
+    vigil_dojo_env_changed: >-
+      {{ vigil_secrets.results | default([]) | selectattr('changed')
+         | selectattr('item.dest', 'equalto', vigil_etc ~ '/dojo.env') | list | length > 0 }}
+
+- name: Services to restart if the pod is already running
+  ansible.builtin.set_fact:
+    vigil_changed_services: >-
+      {{ (vigil_units.results | selectattr('changed') | map(attribute='c')
+          | rejectattr('kind', 'equalto', 'job') | map(attribute='name') | list)
+         + (vigil_containers | selectattr('env_file', 'defined') | map(attribute='name') | list
+            if vigil_dojo_env_changed | bool else []) }}

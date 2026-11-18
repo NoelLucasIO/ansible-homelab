@@ -1,0 +1,91 @@
+---
+# https://dojo.<domain> and https://gvm.<domain> through NPM with the wildcard
+# certificate and the LAN-only access list, plus A records on the NIOS grid.
+# Same pattern as ipam-vm's Cockpit proxies.
+- name: NPM proxy hosts
+  ansible.builtin.include_tasks: npm_login.yml
+
+- name: Certificates and access lists
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/{{ item }}"
+    headers: "{{ npm_headers }}"
+    return_content: true
+  loop: [certificates, access-lists]
+  register: npm_lookup
+
+- name: Pick the wildcard certificate (newest) and the LAN-only list
+  ansible.builtin.set_fact:
+    npm_cert_id: "{{ (npm_lookup.results[0].json | selectattr('domain_names', 'contains', npm_cert_domain)
+                      | sort(attribute='expires_on') | last).id }}"
+    npm_acl_id: "{{ (npm_lookup.results[1].json | selectattr('name', 'equalto', npm_access_list_name) | first).id }}"
+
+- name: Proxy host -> http://127.0.0.1:<port>
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    method: POST
+    headers: "{{ npm_headers }}"
+    body_format: json
+    status_code: [200, 201]
+    body:
+      domain_names: ["{{ item.fqdn }}"]
+      forward_scheme: http
+      forward_host: 127.0.0.1                # NPM runs with Network=host
+      forward_port: "{{ item.port | int }}"
+      certificate_id: "{{ npm_cert_id | int }}"
+      access_list_id: "{{ npm_acl_id | int }}"
+      ssl_forced: true
+      http2_support: true
+      block_exploits: true
+      allow_websocket_upgrade: true
+      caching_enabled: false
+      hsts_enabled: false
+      hsts_subdomains: false
+      advanced_config: "client_max_body_size 1000m;\nproxy_read_timeout 600s;"
+      locations: []
+      meta: { letsencrypt_agree: false, dns_challenge: false }
+  loop: "{{ vigil_ui }}"
+  loop_control: { label: "{{ item.fqdn }} -> 127.0.0.1:{{ item.port }}" }
+  when: npm_hosts.json | selectattr('domain_names', 'contains', item.fqdn) | list | length == 0
+
+- name: NIOS A records
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200, 201]
+      timeout: 60
+  block:
+    - name: Existing records
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a?name={{ item.fqdn }}"
+      loop: "{{ vigil_ui }}"
+      loop_control: { label: "{{ item.fqdn }}" }
+      register: vigil_a
+
+    - name: A record -> NPM
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a"
+        method: POST
+        status_code: [201]
+        body:
+          name: "{{ item.item.fqdn }}"
+          ipv4addr: "{{ npm_ip }}"
+          view: default
+          comment: "{{ vigil_record_comment }}"
+      loop: "{{ vigil_a.results }}"
+      loop_control: { label: "{{ item.item.fqdn }}" }
+      when: item.json | length == 0
+
+- name: Names resolve through the client resolver
+  ansible.builtin.command: dig @{{ vigil_dns_resolver }} +short {{ item.fqdn }}
+  loop: "{{ vigil_ui }}"
+  loop_control: { label: "{{ item.fqdn }}" }
+  register: vigil_dig
+  changed_when: false
+  until: npm_ip in vigil_dig.stdout
+  retries: 10
+  delay: 6

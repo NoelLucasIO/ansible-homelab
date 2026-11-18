@@ -1,0 +1,110 @@
+---
+- name: Directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default('root') }}"
+    group: "{{ item.owner | default('root') }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: "{{ vigil_etc }}", mode: "0750" }
+    - { path: "{{ vigil_etc }}/targets" }
+    - { path: "{{ vigil_etc }}/targets/nuclei" }
+    - { path: "{{ vigil_etc }}/gvm", owner: "{{ vigil_uid.gvm }}", mode: "0750" }
+    - { path: "{{ vigil_libexec }}" }
+    - { path: "{{ vigil_data }}" }
+    - { path: "{{ vigil_data }}/reports" }
+    - { path: "{{ vigil_data }}/reports/archive" }
+    - { path: "{{ vigil_data }}/reports/nuclei" }
+    - { path: "{{ vigil_data }}/reports/gvm", owner: "{{ vigil_uid.gvm }}" }
+    - { path: "{{ vigil_data }}/reports/zap", owner: "{{ vigil_uid.zap }}" }
+
+- name: Scripts
+  ansible.builtin.copy:
+    src: "{{ playbook_dir | dirname }}/files/{{ item.name }}"
+    dest: "{{ vigil_libexec }}/{{ item.name }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { name: vigil-import, mode: "0755" }        # host
+    - { name: vigil-feed-sync, mode: "0755" }     # host
+    - { name: vigil-gvm.py, mode: "0644" }        # gvm-tools container
+    - { name: nuclei-run.sh, mode: "0644" }       # nuclei container
+    - { name: zap-run.sh, mode: "0644" }          # ZAP container
+    - { name: openvas-config.sh, mode: "0644" }   # openvas-scanner container
+
+- name: Secrets and settings
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/config/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ item.owner | default('root') }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { src: dojo.env.j2, dest: "{{ vigil_etc }}/dojo.env", mode: "0600" }
+    - { src: import.env.j2, dest: "{{ vigil_etc }}/import.env", mode: "0600" }
+    - { src: gvm-tools.conf.j2, dest: "{{ vigil_etc }}/gvm/gvm-tools.conf", owner: "{{ vigil_uid.gvm }}", mode: "0600" }
+    - { src: scan.env.j2, dest: "{{ vigil_etc }}/targets/scan.env", mode: "0644" }
+  register: vigil_secrets
+  no_log: true
+
+- name: Greenbone scopes (read by vigil-gvm.py setup)
+  ansible.builtin.copy:
+    dest: "{{ vigil_etc }}/gvm/gvm-scopes.json"
+    owner: "{{ vigil_uid.gvm }}"
+    mode: "0644"
+    content: "{{ {'timezone': vigil_tz, 'exclude': vigil_scan_exclude, 'scopes': vigil_scopes} | to_nice_json }}\n"
+
+# --- Web targets: NPM proxy hosts + extras - excludes -----------------------------
+- name: Read NPM proxy hosts
+  ansible.builtin.include_tasks: npm_login.yml
+  when: vigil_web_from_npm | bool
+
+- name: Web app URLs
+  ansible.builtin.set_fact:
+    vigil_web_urls: >-
+      {{ (((npm_hosts.json | default([]) | selectattr('enabled', 'truthy')
+           | map(attribute='domain_names') | flatten
+           | reject('in', vigil_web_exclude) | reject('search', '\*')
+           | map('regex_replace', '^', 'https://') | list) if vigil_web_from_npm | bool else [])
+         + vigil_web_extra) | unique | sort }}
+
+- name: Nuclei target list per scope
+  ansible.builtin.copy:
+    dest: "{{ vigil_etc }}/targets/nuclei/{{ item.name }}.txt"
+    mode: "0644"
+    content: "{{ item.hosts | join('\n') }}\n"
+  loop: "{{ vigil_scopes }}"
+  loop_control: { label: "{{ item.name }}" }
+
+- name: Web, ZAP and exclusion lists
+  ansible.builtin.copy:
+    dest: "{{ vigil_etc }}/targets/{{ item.file }}"
+    mode: "0644"
+    content: "{{ (item.lines | join('\n') ~ '\n') if item.lines else '' }}"
+  loop:
+    - { file: nuclei/web.txt, lines: "{{ vigil_web_urls }}" }
+    - { file: zap.txt, lines: "{{ vigil_web_urls }}" }
+    - { file: exclude.txt, lines: "{{ vigil_scan_exclude }}" }
+  loop_control: { label: "{{ item.file }} ({{ item.lines | length }})" }
+
+- name: Remove target lists of scopes that no longer exist
+  ansible.builtin.find:
+    paths: "{{ vigil_etc }}/targets/nuclei"
+    patterns: "*.txt"
+  register: vigil_old_lists
+
+- name: (remove)
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ vigil_old_lists.files | map(attribute='path') | list }}"
+  when: (item | basename | splitext | first) not in (vigil_scopes | map(attribute='name') | list + ['web'])
+
+- name: Greenbone feed images (read by vigil-feed-sync)
+  ansible.builtin.copy:
+    dest: "{{ vigil_etc }}/feed-images.txt"
+    mode: "0644"
+    content: |
+      # unit image  (managed by Ansible)
+      {% for c in vigil_containers | selectattr('feed', 'defined') | selectattr('feed') %}
+      {{ c.name }} {{ c.image }}
+      {% endfor %}

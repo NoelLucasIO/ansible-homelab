@@ -1,0 +1,494 @@
+{
+  "uid": "vigil-findings",
+  "title": "vigil: vulnerability findings",
+  "tags": [
+    "vigil",
+    "security"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "product",
+        "label": "Product",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "vigil-dojo"
+        },
+        "query": "SELECT name FROM dojo_product ORDER BY name",
+        "definition": "SELECT name FROM dojo_product ORDER BY name",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "refresh": 1
+      },
+      {
+        "name": "search",
+        "label": "Log filter",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Open findings",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vigil-dojo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vigil-dojo"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n  count(*) FILTER (WHERE f.severity = 'Critical') AS \"Critical\",\n  count(*) FILTER (WHERE f.severity = 'High')     AS \"High\",\n  count(*) FILTER (WHERE f.severity = 'Medium')   AS \"Medium\",\n  count(*) FILTER (WHERE f.severity = 'Low')      AS \"Low\",\n  count(*) FILTER (WHERE f.severity = 'Info')     AS \"Info\"\nFROM dojo_finding f\nJOIN dojo_test t ON t.id = f.test_id\nJOIN dojo_engagement e ON e.id = t.engagement_id\nJOIN dojo_product p ON p.id = e.product_id\nWHERE f.active AND NOT f.duplicate AND NOT f.false_p AND NOT f.is_mitigated AND NOT f.out_of_scope AND NOT f.risk_accepted AND p.name IN (${product:sqlstring})"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Critical"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "dark-red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "High"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Medium"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Low"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Info"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "New findings per day",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vigil-dojo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vigil-dojo"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT date_trunc('day', f.created) AS time, f.severity AS metric, count(*) AS value\nFROM dojo_finding f\nJOIN dojo_test t ON t.id = f.test_id\nJOIN dojo_engagement e ON e.id = t.engagement_id\nJOIN dojo_product p ON p.id = e.product_id\nWHERE $__timeFilter(f.created) AND NOT f.duplicate AND p.name IN (${product:sqlstring})\nGROUP BY 1, 2 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "bars",
+            "stacking": {
+              "mode": "normal"
+            },
+            "fillOpacity": 80
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Critical"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "dark-red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "High"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Medium"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Low"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "yellow"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Info"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 14,
+        "h": 9
+      },
+      "id": 2
+    },
+    {
+      "type": "table",
+      "title": "Open findings by product",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vigil-dojo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vigil-dojo"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT p.name AS \"Product\",\n  count(*) FILTER (WHERE f.severity = 'Critical') AS \"Critical\",\n  count(*) FILTER (WHERE f.severity = 'High') AS \"High\",\n  count(*) FILTER (WHERE f.severity = 'Medium') AS \"Medium\",\n  count(*) FILTER (WHERE f.severity = 'Low') AS \"Low\",\n  count(*) AS \"Total\"\nFROM dojo_finding f\nJOIN dojo_test t ON t.id = f.test_id\nJOIN dojo_engagement e ON e.id = t.engagement_id\nJOIN dojo_product p ON p.id = e.product_id\nWHERE f.active AND NOT f.duplicate AND NOT f.false_p AND NOT f.is_mitigated AND NOT f.out_of_scope AND NOT f.risk_accepted AND p.name IN (${product:sqlstring})\nGROUP BY p.name ORDER BY 2 DESC, 3 DESC"
+        }
+      ],
+      "gridPos": {
+        "x": 14,
+        "y": 4,
+        "w": 10,
+        "h": 9
+      },
+      "id": 3
+    },
+    {
+      "type": "table",
+      "title": "Open findings (newest first)",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vigil-dojo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vigil-dojo"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT f.created AS \"Found\", f.severity AS \"Severity\", f.title AS \"Finding\",\n  p.name AS \"Product\", tt.name AS \"Scanner\", f.id AS \"ID\"\nFROM dojo_finding f\nJOIN dojo_test t ON t.id = f.test_id\nJOIN dojo_engagement e ON e.id = t.engagement_id\nJOIN dojo_product p ON p.id = e.product_id\nJOIN dojo_test_type tt ON tt.id = t.test_type_id\nWHERE f.active AND NOT f.duplicate AND NOT f.false_p AND NOT f.is_mitigated AND NOT f.out_of_scope AND NOT f.risk_accepted AND p.name IN (${product:sqlstring})\nORDER BY CASE f.severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1 WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END,\n         f.created DESC\nLIMIT 200"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "ID"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open in DefectDojo",
+                    "url": "https://{{ vigil_dojo_fqdn }}/finding/${__value.raw}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "Critical": {
+                        "color": "dark-red",
+                        "index": 0
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "High": {
+                        "color": "red",
+                        "index": 1
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "Medium": {
+                        "color": "orange",
+                        "index": 2
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "Low": {
+                        "color": "yellow",
+                        "index": 3
+                      }
+                    }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "Info": {
+                        "color": "blue",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 16,
+        "h": 10
+      },
+      "id": 4
+    },
+    {
+      "type": "table",
+      "title": "Last import per scanner",
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "vigil-dojo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "vigil-dojo"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT p.name AS \"Product\", t.title AS \"Test\", tt.name AS \"Scanner\",\n  t.updated AS \"Last import\"\nFROM dojo_test t\nJOIN dojo_test_type tt ON tt.id = t.test_type_id\nJOIN dojo_engagement e ON e.id = t.engagement_id\nJOIN dojo_product p ON p.id = e.product_id\nWHERE p.name IN (${product:sqlstring})\nORDER BY t.updated DESC"
+        }
+      ],
+      "gridPos": {
+        "x": 16,
+        "y": 13,
+        "w": 8,
+        "h": 10
+      },
+      "id": 5
+    },
+    {
+      "type": "logs",
+      "title": "vigil container logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "{{ vigil_loki_uid }}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "{{ vigil_loki_uid }}"
+          },
+          "expr": "{container=~\"vigil-.+\"} |~ \"(?i)$search\""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "wrapLogMessage": true,
+        "sortOrder": "Descending",
+        "enableLogDetails": true
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 24,
+        "h": 10
+      },
+      "id": 6
+    }
+  ]
+}
