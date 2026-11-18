@@ -50,5 +50,5 @@
       - "Grafana:     Security / vigil: vulnerability findings"
       - "Greenbone setup unit: {{ vigil_setup_state.stdout_lines | join(' / ') }}
          (watch: journalctl -fu vigil-gb-setup)"
-      - "Web targets: {{ vigil_web_urls | length }} URLs from NPM + extras"
+      - "Web targets: {{ (vigil_web_urls | length) if vigil_web_urls is defined else '(run with the config tag to list)' }} URLs from NPM + extras"
       - "Next scans: systemctl list-timers 'vigil-*'"
