@@ -8,4 +8,13 @@
     stdin: "{{ lookup('ansible.builtin.template', (playbook_dir | dirname) ~ '/templates/config/dojo-db.sql.j2') }}"
   register: vigil_db
   changed_when: "'CREATE ROLE' in vigil_db.stdout or 'CREATE DATABASE' in vigil_db.stdout"
+  failed_when: false              # reported below with the passwords masked
   no_log: true
+
+- name: Database step failed (passwords masked)
+  ansible.builtin.fail:
+    msg: >-
+      rc={{ vigil_db.rc }}: {{ (vigil_db.stderr | default('') ~ ' ' ~ vigil_db.stdout | default(''))
+        | replace(vigil_dojo_db_password, '***') | replace(vigil_grafana_db_password, '***')
+        | regex_replace("PASSWORD '(?:[^']|'')*'", "PASSWORD '***'") }}
+  when: vigil_db.rc | default(1) != 0
