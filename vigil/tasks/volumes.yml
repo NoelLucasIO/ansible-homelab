@@ -14,7 +14,7 @@
     dest: /etc/tmpfiles.d/vigil.conf
     mode: "0644"
     content: |
-      # {{ ansible_managed }}
+      # vigil: managed by Ansible
       d {{ vigil_gvmd_run_dir }} 0755 {{ vigil_gvmd_uid.stdout_lines | last }} {{ vigil_gvmd_uid.stdout_lines | last }} -
   register: vigil_tmpfiles
 
