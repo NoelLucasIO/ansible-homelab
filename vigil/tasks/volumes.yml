@@ -1,9 +1,28 @@
 ---
-# Socket volumes are shared by a server and its clients (gvmd + gsad + gvm-tools,
-# redis + ospd). Podman takes a new volume's owner from whichever container mounts
-# it first, so a client with a root-owned mount point can win the race and lock the
-# server out (gvmd: "Could not write PID file at /run/gvmd/gvmd.pid"). Create them up
-# front, owned by the image user that serves the socket.
+# Sockets shared by a server and its clients (gvmd + gsad + gvm-tools, redis + ospd).
+# gvmd's lives in a host directory: as a named volume shared with gsad it kept
+# reverting to root:root, and gvmd failed with "Could not write PID file at
+# /run/gvmd/gvmd.pid". Bind mounts are never chowned or copied up by Podman.
+- name: Uid of gvmd in its image
+  ansible.builtin.command: >-
+    podman run --rm --network none --entrypoint id {{ vigil_gb_registry }}/gvmd:stable -u gvmd
+  register: vigil_gvmd_uid
+  changed_when: false
+
+- name: Recreate gvmd's run directory at boot
+  ansible.builtin.copy:
+    dest: /etc/tmpfiles.d/vigil.conf
+    mode: "0644"
+    content: |
+      # {{ ansible_managed }}
+      d {{ vigil_gvmd_run_dir }} 0755 {{ vigil_gvmd_uid.stdout_lines | last }} {{ vigil_gvmd_uid.stdout_lines | last }} -
+  register: vigil_tmpfiles
+
+- name: Create it now
+  ansible.builtin.command: systemd-tmpfiles --create /etc/tmpfiles.d/vigil.conf
+  changed_when: vigil_tmpfiles is changed
+
+# The redis socket stays a named volume (it works); make sure the server owns it.
 - name: Uid that serves each socket volume
   ansible.builtin.command: >-
     podman run --rm --network none --entrypoint id {{ item.image }} -u {{ item.user }}

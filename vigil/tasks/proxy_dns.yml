@@ -43,6 +43,7 @@
       advanced_config: "client_max_body_size 1000m;\nproxy_read_timeout 600s;"
       locations: []
       meta: { letsencrypt_agree: false, dns_challenge: false }
+  changed_when: true
   loop: "{{ vigil_ui }}"
   loop_control: { label: "{{ item.fqdn }} -> 127.0.0.1:{{ item.port }}" }
   when: npm_hosts.json | selectattr('domain_names', 'contains', item.fqdn) | list | length == 0
@@ -76,16 +77,36 @@
           ipv4addr: "{{ npm_ip }}"
           view: default
           comment: "{{ vigil_record_comment }}"
+      changed_when: true
       loop: "{{ vigil_a.results }}"
       loop_control: { label: "{{ item.item.fqdn }}" }
       when: item.json | length == 0
 
+- name: Names resolve on NIOS (authoritative)
+  ansible.builtin.command: dig @{{ nios_ip }} +short {{ item.fqdn }}
+  loop: "{{ vigil_ui }}"
+  loop_control: { label: "{{ item.fqdn }}" }
+  register: vigil_dig_nios
+  changed_when: false
+  until: npm_ip in vigil_dig_nios.stdout
+  retries: 10
+  delay: 6
+
+# Clients go through a caching resolver. If a name was looked up before its record
+# existed, the resolver keeps the NXDOMAIN until its negative TTL runs out: warn, don't fail.
 - name: Names resolve through the client resolver
   ansible.builtin.command: dig @{{ vigil_dns_resolver }} +short {{ item.fqdn }}
   loop: "{{ vigil_ui }}"
   loop_control: { label: "{{ item.fqdn }}" }
   register: vigil_dig
   changed_when: false
-  until: npm_ip in vigil_dig.stdout
-  retries: 10
-  delay: 6
+
+- name: Resolver still has a cached negative answer
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.item.fqdn }} resolves on NIOS but not yet through {{ vigil_dns_resolver }} (cached NXDOMAIN).
+      It clears when the negative TTL expires, or flush it on the resolver
+      (Unbound: unbound-control flush {{ item.item.fqdn }}; unbound-control flush_negative).
+  loop: "{{ vigil_dig.results }}"
+  loop_control: { label: "{{ item.item.fqdn }}" }
+  when: npm_ip not in item.stdout

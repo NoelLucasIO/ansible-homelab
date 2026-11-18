@@ -17,6 +17,7 @@ Everything is a Quadlet in `/etc/containers/systemd/vigil*.{pod,container}`, ren
 - **No port collisions with what the host already runs.** The upstream Greenbone stack binds 80, 443 and 5432; here:
   - pg-gvm listens on its Unix socket only (`POSTGRES_LISTEN_ADDRESSES=" "`), and redis already does.
   - gsad serves the web UI itself on `127.0.0.1:9392`, so Greenbone's nginx (443) isn't used.
+  - gvmd's socket and PID file live in a host directory (`vigil_gvmd_run_dir`, recreated at boot by tmpfiles.d), bind-mounted into gvmd, gsad and gvm-tools. As a named volume shared with gsad it kept reverting to root and gvmd couldn't write its PID file.
   - openvasd is on `127.0.0.1:3080`; DefectDojo's valkey is on `127.0.0.1:6380` (6379 is often taken).
   - DefectDojo's nginx is `:8080` and uwsgi's HTTP side is `:8081` (both fixed by the images, all interfaces); uwsgi's socket is `127.0.0.1:3031`.
 - **DefectDojo's database is on the host's existing rootless Postgres** (`defectdojo` DB and role, plus a read-only `vigil_ro` role for Grafana). Greenbone keeps its own pg-gvm because it needs Greenbone's extension.

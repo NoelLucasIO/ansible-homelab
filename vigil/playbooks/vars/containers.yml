@@ -16,9 +16,10 @@
 _gb: "{{ vigil_gb_registry }}"
 
 # Shared socket volumes and the image user that serves them (see tasks/volumes.yml).
-# An empty user means the image's own USER.
+# An empty user means the image's own USER. gvmd's socket is not here: a named volume
+# shared with gsad kept getting reset to root, so it is a host directory instead
+# (vigil_gvmd_run_dir).
 vigil_socket_volumes:
-  - { volume: vigil-gb-gvmd-sock, unit: vigil-gb-gvmd, image: "{{ _gb }}/gvmd:stable", user: gvmd }
   - { volume: vigil-gb-redis-sock, unit: vigil-gb-redis, image: "{{ _gb }}/redis-server", user: "" }
 
 vigil_containers:
@@ -115,7 +116,7 @@ vigil_containers:
       - vigil-gb-objects:/var/lib/gvm/data-objects/gvmd
       - vigil-gb-vt:/var/lib/openvas/plugins
       - vigil-gb-psql:/var/lib/postgresql
-      - vigil-gb-gvmd-sock:/run/gvmd
+      - "{{ vigil_gvmd_run_dir }}:/run/gvmd"
       - vigil-gb-ospd-sock:/run/ospd
       - vigil-gb-psql-sock:/var/run/postgresql
     after: [vigil-gb-pg, vigil-gb-scap-data, vigil-gb-certbund-data, vigil-gb-dfncert-data,
@@ -128,7 +129,7 @@ vigil_containers:
       GSAD_ARGS: >-
         -f --http-only --listen=127.0.0.1 --port={{ vigil_gsad_port }}
         --static-content=/usr/local/share/gvm/gsad/web
-    volumes: ["vigil-gb-gvmd-sock:/run/gvmd", "vigil-gb-gsa-web:/usr/local/share/gvm/gsad/web:ro"]
+    volumes: ["{{ vigil_gvmd_run_dir }}:/run/gvmd", "vigil-gb-gsa-web:/usr/local/share/gvm/gsad/web:ro"]
     after: [vigil-gb-gvmd, vigil-gb-gsa-web]
   - name: vigil-gb-openvas-config
     desc: Greenbone openvas.conf + log config
@@ -245,7 +246,7 @@ vigil_containers:
       gvm-script -c /vigil-conf/gvm-tools.conf socket --socketpath /run/gvmd/gvmd.sock
       /vigil/vigil-gvm.py setup
     volumes:
-      - vigil-gb-gvmd-sock:/run/gvmd
+      - "{{ vigil_gvmd_run_dir }}:/run/gvmd"
       - "{{ vigil_etc }}/gvm:/vigil-conf:ro"
       - "{{ vigil_libexec }}/vigil-gvm.py:/vigil/vigil-gvm.py:ro"
     after: [vigil-gb-gvmd]
@@ -257,7 +258,7 @@ vigil_containers:
       gvm-script -c /vigil-conf/gvm-tools.conf socket --socketpath /run/gvmd/gvmd.sock
       /vigil/vigil-gvm.py export
     volumes:
-      - vigil-gb-gvmd-sock:/run/gvmd
+      - "{{ vigil_gvmd_run_dir }}:/run/gvmd"
       - "{{ vigil_etc }}/gvm:/vigil-conf:ro"
       - "{{ vigil_libexec }}/vigil-gvm.py:/vigil/vigil-gvm.py:ro"
       - "{{ vigil_data }}/reports/gvm:/reports"

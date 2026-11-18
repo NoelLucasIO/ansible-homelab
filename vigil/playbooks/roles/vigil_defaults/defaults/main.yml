@@ -14,6 +14,7 @@ vigil_libexec: /usr/local/libexec/vigil
 vigil_data_mount: /srv                    # must be a mount point; the pod won't start without it
 vigil_data: "{{ vigil_data_mount }}/vigil"   # scan reports + archive (Podman named volumes hold app state)
 vigil_report_keep_days: 90                # archived reports older than this are deleted
+vigil_gvmd_run_dir: /run/vigil/gvmd       # gvmd's PID file + socket; host dir, recreated at boot by tmpfiles.d
 vigil_min_podman: "5.3"                   # Quadlet StartWithPod=
 
 # --- Images -----------------------------------------------------------------------

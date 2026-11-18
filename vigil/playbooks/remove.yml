@@ -67,6 +67,8 @@
             - "{{ vigil_etc }}"
             - "{{ vigil_libexec }}"
             - "{{ vigil_data }}"
+            - "{{ vigil_gvmd_run_dir }}"
+            - /etc/tmpfiles.d/vigil.conf
             - "{{ vigil_prom_config }}/scrape.d/vigil.yml"
             - "{{ vigil_prom_config }}/rules.d/vigil.yml"
             - "{{ vigil_grafana_provisioning }}/datasources/vigil.yaml"
