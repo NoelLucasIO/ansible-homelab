@@ -77,7 +77,8 @@
         - name: Database and roles
           ansible.builtin.command:
             cmd: >-
-              runuser -u {{ vigil_pg_owner }} -- env XDG_RUNTIME_DIR=/run/user/{{ getent_passwd[vigil_pg_owner][1] }}
+              runuser -u {{ vigil_pg_owner }} -- env HOME={{ ansible_facts.getent_passwd[vigil_pg_owner][4] }}
+              XDG_RUNTIME_DIR=/run/user/{{ ansible_facts.getent_passwd[vigil_pg_owner][1] }}
               podman exec -i {{ vigil_pg_container }} psql -U postgres -v ON_ERROR_STOP=1 -X
             stdin: |
               DROP DATABASE IF EXISTS "{{ vigil_dojo_db }}" WITH (FORCE);

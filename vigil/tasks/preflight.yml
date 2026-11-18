@@ -47,12 +47,15 @@
 
 - name: Remember their uid
   ansible.builtin.set_fact:
-    vigil_owner_uid: "{{ getent_passwd[vigil_pg_owner][1] }}"
-    # Root runs these as the owner with runuser, so the SSH user needs no sudo rule for that user
+    vigil_owner_uid: "{{ ansible_facts.getent_passwd[vigil_pg_owner][1] }}"
+    # Root runs these as the owner with runuser, so the SSH user needs no sudo rule for that user.
+    # runuser -u keeps root's environment: HOME must be the owner's, or rootless podman
+    # looks for its storage and config under /root.
     vigil_runas: >-
       runuser -u {{ vigil_pg_owner }} -- env
-      XDG_RUNTIME_DIR=/run/user/{{ getent_passwd[vigil_pg_owner][1] }}
-      DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ getent_passwd[vigil_pg_owner][1] }}/bus
+      HOME={{ ansible_facts.getent_passwd[vigil_pg_owner][4] }}
+      XDG_RUNTIME_DIR=/run/user/{{ ansible_facts.getent_passwd[vigil_pg_owner][1] }}
+      DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{{ ansible_facts.getent_passwd[vigil_pg_owner][1] }}/bus
 
 - name: Is the pod already running?
   ansible.builtin.command: systemctl is-active {{ vigil_name }}-pod.service  # noqa: command-instead-of-module
