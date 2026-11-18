@@ -6,6 +6,7 @@
   ansible.builtin.command:
     cmd: "{{ vigil_runas }} podman exec -i {{ vigil_pg_container }} psql -U postgres -v ON_ERROR_STOP=1 -X"
     stdin: "{{ lookup('ansible.builtin.template', (playbook_dir | dirname) ~ '/templates/config/dojo-db.sql.j2') }}"
+    chdir: /                      # the SSH user's home is unreadable to the owner, and podman re-execs into it
   register: vigil_db
   changed_when: "'CREATE ROLE' in vigil_db.stdout or 'CREATE DATABASE' in vigil_db.stdout"
   failed_when: false              # reported below with the passwords masked
