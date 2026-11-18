@@ -9,7 +9,7 @@ groups:
         for: 10m
         labels: { severity: warning, pod: {{ vigil_name }} }
         annotations:
-          summary: DefectDojo in the vigil pod is not answering /django_metrics
+          summary: DefectDojo in the vigil pod is not answering /django_metrics/metrics
 
       # podman_container_state: 2 = running (prometheus-podman-exporter)
       - alert: VigilContainerNotRunning

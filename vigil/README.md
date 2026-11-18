@@ -39,7 +39,7 @@ ZAP timer (Sat 04:00) ──────────┘        (export timer dai
 ## Observability
 
 - **Logs:** nothing to add. Rootful containers log to the system journal, and Alloy's `loki.source.journal` (`playbooks/observability-agents.yml`) already labels them `container="vigil-…"`.
-- **Metrics:** `scrape.d/vigil.yml` scrapes DefectDojo's `/django_metrics`. Container state comes from the existing rootful podman exporter (`:9882`).
+- **Metrics:** `scrape.d/vigil.yml` scrapes DefectDojo's `/django_metrics/metrics`. Container state comes from the existing rootful podman exporter (`:9882`).
 - **Alerts** (`rules.d/vigil.yml`): `VigilDefectDojoDown`, `VigilContainerNotRunning`, `VigilContainersMissing` (Quadlet uses `--rm`, so a dead container disappears rather than showing "exited").
 - **Grafana:** datasource `DefectDojo (vigil)` and dashboard **Security / vigil: vulnerability findings**: open findings by severity and product, new findings per day, the newest open findings (linked to DefectDojo), last import per scanner, and the pod's logs.
 - The playbook adds `/etc/prometheus/scrape.d/*.yml` and `/etc/prometheus/rules.d/*.yml` to `prometheus.yml`, keeping a backup. Existing entries aren't touched.
@@ -115,7 +115,7 @@ Change scope, schedules or exclusions in your inventory variables and rerun with
   - The gsa and feed-data images exit after copying when `KEEP_ALIVE` isn't set (the units are oneshots).
   - gvmd's container has a `gvmd` user and creates `admin` on first start; `greenbone.yml` waits for it, then sets the vault password.
   - `vigil-gvm.py` uses python-gvm calls whose enum module has moved between releases. It tries the known locations and falls back to the scan config's default alive test.
-  - In DefectDojo 3.5, `/django_metrics` answers without auth and `api-token-auth` still issues tokens for the import script.
+  - `api-token-auth` still issues tokens for the import script in DefectDojo 3.5. (`/django_metrics/metrics` answering without auth is confirmed.)
 - **Things to know:**
   - **An IDS will see the scans.** Greenbone/Nuclei trip ET SCAN rules on the LAN. Either suppress by source IP or treat the alerts as the canary that IDS works.
   - **A public range scanned from inside** shows what the LAN sees: the firewall answers for its WAN addresses. That isn't what the internet sees; an outside view needs a scanner outside.
