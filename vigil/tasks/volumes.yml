@@ -1,0 +1,41 @@
+---
+# Socket volumes are shared by a server and its clients (gvmd + gsad + gvm-tools,
+# redis + ospd). Podman takes a new volume's owner from whichever container mounts
+# it first, so a client with a root-owned mount point can win the race and lock the
+# server out (gvmd: "Could not write PID file at /run/gvmd/gvmd.pid"). Create them up
+# front, owned by the image user that serves the socket.
+- name: Uid that serves each socket volume
+  ansible.builtin.command: >-
+    podman run --rm --network none --entrypoint id {{ item.image }} -u {{ item.user }}
+  loop: "{{ vigil_socket_volumes }}"
+  loop_control: { label: "{{ item.volume }}" }
+  register: vigil_sock_uid
+  changed_when: false
+
+- name: Socket volumes exist
+  ansible.builtin.shell: |
+    podman volume exists {{ item.volume }} || podman volume create {{ item.volume }} >/dev/null
+    podman volume inspect --format '{{ "{{" }}.Mountpoint{{ "}}" }}' {{ item.volume }}
+  loop: "{{ vigil_socket_volumes }}"
+  loop_control: { label: "{{ item.volume }}" }
+  register: vigil_sock_path
+  changed_when: false
+
+- name: Socket volumes owned by their server
+  ansible.builtin.file:
+    path: "{{ item.0.stdout_lines | last }}"
+    state: directory
+    owner: "{{ item.1.stdout_lines | last }}"
+    group: "{{ item.1.stdout_lines | last }}"
+    mode: "0755"
+  loop: "{{ vigil_sock_path.results | zip(vigil_sock_uid.results) | list }}"
+  loop_control: { label: "{{ item.0.item.volume }} -> uid {{ item.1.stdout_lines | last }}" }
+  register: vigil_sock_owner
+
+- name: Restart servers whose socket volume had the wrong owner
+  ansible.builtin.command: systemctl try-restart {{ item.item.0.item.unit }}.service
+  loop: "{{ vigil_sock_owner.results | selectattr('changed') | list }}"
+  loop_control: { label: "{{ item.item.0.item.unit }}" }
+  when: vigil_pod_state.stdout == 'active'
+  changed_when: true
+  tags: [skip_ansible_lint]   # try-restart: only if already running

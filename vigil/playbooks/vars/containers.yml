@@ -15,6 +15,12 @@
 
 _gb: "{{ vigil_gb_registry }}"
 
+# Shared socket volumes and the image user that serves them (see tasks/volumes.yml).
+# An empty user means the image's own USER.
+vigil_socket_volumes:
+  - { volume: vigil-gb-gvmd-sock, unit: vigil-gb-gvmd, image: "{{ _gb }}/gvmd:stable", user: gvmd }
+  - { volume: vigil-gb-redis-sock, unit: vigil-gb-redis, image: "{{ _gb }}/redis-server", user: "" }
+
 vigil_containers:
   # --- Greenbone feed data (copied into named volumes, then the container exits) ---
   - name: vigil-gb-vt-data

@@ -32,22 +32,26 @@
       ansible.builtin.import_tasks: ../tasks/quadlets.yml
       tags: [quadlets, start]
 
-    - name: 5. Start and wait
+    - name: 5. Shared socket volumes, owned by the container that serves them
+      ansible.builtin.import_tasks: ../tasks/volumes.yml
+      tags: [start, volumes]
+
+    - name: 6. Start and wait
       ansible.builtin.import_tasks: ../tasks/start.yml
       tags: [start]
 
-    - name: 6. Greenbone admin, targets, schedules, tasks
+    - name: 7. Greenbone admin, targets, schedules, tasks
       ansible.builtin.import_tasks: ../tasks/greenbone.yml
       tags: [greenbone]
 
-    - name: 7. Prometheus, alerts, Grafana (logs already flow via Alloy)
+    - name: 8. Prometheus, alerts, Grafana (logs already flow via Alloy)
       ansible.builtin.import_tasks: ../tasks/observability.yml
       tags: [observability]
 
-    - name: 8. NPM proxy hosts and NIOS DNS
+    - name: 9. NPM proxy hosts and NIOS DNS
       ansible.builtin.import_tasks: ../tasks/proxy_dns.yml
       tags: [dns]
 
-    - name: 9. Verify
+    - name: 10. Verify
       ansible.builtin.import_tasks: ../tasks/verify.yml
       tags: [verify]

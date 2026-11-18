@@ -11,8 +11,17 @@
   ansible.builtin.command:
     argv: [podman, exec, -u, gvmd, vigil-gb-gvmd, gvmd,
            "--user={{ vigil_gvm_admin_user }}", "--new-password={{ vigil_gvm_admin_password }}"]
+  register: vigil_gvm_pw
   changed_when: false
+  failed_when: false              # reported below with the password masked
   no_log: true
+
+- name: Greenbone password step failed (password masked)
+  ansible.builtin.fail:
+    msg: >-
+      rc={{ vigil_gvm_pw.rc }}: {{ (vigil_gvm_pw.stderr | default('') ~ ' ' ~ vigil_gvm_pw.stdout | default(''))
+        | replace(vigil_gvm_admin_password, '***') }}
+  when: vigil_gvm_pw.rc | default(1) != 0
 
 # Non-blocking: on a fresh install gvmd needs 30-60 min to load the feed. The unit
 # exits 2 until "Full and fast" exists and systemd retries every 5 minutes.
