@@ -21,7 +21,10 @@ Pod={{ vigil_name }}.pod
 {% if c.kind == 'job' %}
 StartWithPod=false
 {% endif %}
-LogDriver=journald
+{# Services run detached and log once via journald (keeps CONTAINER_NAME for Loki).
+   One-shots run attached, so journald would log every line twice; passthrough
+   leaves just the unit's copy. #}
+LogDriver={{ 'journald' if c.kind == 'service' else 'passthrough' }}
 Environment=TZ={{ vigil_tz }}
 {% for key, value in (c.env | default({})).items() %}
 Environment="{{ key }}={{ value }}"

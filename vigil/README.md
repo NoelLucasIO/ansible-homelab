@@ -38,7 +38,7 @@ ZAP timer (Sat 04:00) ──────────┘        (export timer dai
 
 ## Observability
 
-- **Logs:** nothing to add. Rootful containers log to the system journal, and Alloy's `loki.source.journal` (`playbooks/observability-agents.yml`) already labels them `container="vigil-…"`.
+- **Logs:** nothing to add. Rootful containers log to the system journal, and Alloy's `loki.source.journal` (`playbooks/observability-agents.yml`) already labels them `unit="vigil-…"` (services also get `container="vigil-…"`). Long-running containers log through Podman's journald driver; one-shots use `passthrough` so each line is logged once, not twice.
 - **Metrics:** `scrape.d/vigil.yml` scrapes DefectDojo's `/django_metrics/metrics`. Container state comes from the existing rootful podman exporter (`:9882`).
 - **Alerts** (`rules.d/vigil.yml`): `VigilDefectDojoDown`, `VigilContainerNotRunning`, `VigilContainersMissing` (Quadlet uses `--rm`, so a dead container disappears rather than showing "exited").
 - **Grafana:** datasource `DefectDojo (vigil)` and dashboard **Security / vigil: vulnerability findings**: open findings by severity and product, new findings per day, the newest open findings (linked to DefectDojo), last import per scanner, and the pod's logs.

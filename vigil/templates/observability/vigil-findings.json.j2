@@ -473,7 +473,7 @@
             "type": "loki",
             "uid": "{{ vigil_loki_uid }}"
           },
-          "expr": "{container=~\"vigil-.+\"} |~ \"(?i)$search\""
+          "expr": "{unit=~\"vigil-.+\"} |~ \"(?i)$search\""
         }
       ],
       "options": {
