@@ -2,12 +2,19 @@
 # vigil-feed-sync: pull each Greenbone feed image; if it changed, re-run its copy unit.
 # Restarting a copy unit also restarts the services that Require= it (gvmd, ospd, ...),
 # which is how the community compose stack picks up a new feed.
-set -euo pipefail
+# A failed pull (registry outage) skips that image and keeps the current data; the run
+# still exits 1 so systemd retries it (vigil-feed-sync.service: Restart=on-failure).
+set -uo pipefail
 changed=()
+failed=()
 while read -r unit image; do
   [[ -z $unit || $unit == \#* ]] && continue
   before=$(podman image inspect --format '{{.Id}}' "$image" 2>/dev/null || true)
-  podman pull -q "$image" >/dev/null
+  if ! podman pull -q "$image" >/dev/null; then
+    echo "vigil-feed-sync: pull failed for $image, keeping current data"
+    failed+=("$image")
+    continue
+  fi
   after=$(podman image inspect --format '{{.Id}}' "$image")
   [[ $before != "$after" ]] && changed+=("$unit.service")
 done < /etc/vigil/feed-images.txt
@@ -17,5 +24,10 @@ if ((${#changed[@]})); then
   systemctl restart "${changed[@]}"
   podman image prune -f >/dev/null
 else
-  echo "vigil-feed-sync: feeds unchanged"
+  echo "vigil-feed-sync: no feed changes"
+fi
+
+if ((${#failed[@]})); then
+  echo "vigil-feed-sync: ${#failed[@]} pull(s) failed; systemd will retry"
+  exit 1
 fi

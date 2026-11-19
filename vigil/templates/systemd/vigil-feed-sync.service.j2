@@ -3,7 +3,12 @@
 Description=vigil: pull new Greenbone feed images and refresh the feed volumes
 Wants=network-online.target
 After=network-online.target
+# Registry outages: retry hourly, at most 6 times per 12 h, then wait for tomorrow's timer
+StartLimitIntervalSec=12h
+StartLimitBurst=6
 
 [Service]
 Type=oneshot
 ExecStart={{ vigil_libexec }}/vigil-feed-sync
+Restart=on-failure
+RestartSec=1h
