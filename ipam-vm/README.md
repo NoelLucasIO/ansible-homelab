@@ -46,15 +46,16 @@ Destroys and undefines the VM, removes its disk and ISO, and deletes the host re
    - **VM provision**, playbook `ipam-vm/playbooks/provision.yml`. Survey: `vm_name` (text, required), `vm_vcpus`, `vm_memory_mb`, `vm_disk_gb` (integers, with defaults 2 / 4096 / 40).
    - **VM decommission**, playbook `ipam-vm/playbooks/decommission.yml`. Survey: `vm_name`, `confirm`.
 
-## Tested here vs. on first run
+## Status
 
-- **Tested:** syntax check of both playbooks; cloud-init user-data and network-config pass cloud-init 26.2's schema validator; the seed ISO builds with label `cidata` and the three files.
-- **First run will show:**
-  - that `rocky9` is a known `--os-variant` on fedora. If not, use `rhel9.0`.
-  - that the NIC name matches `e*` in the Rocky cloud image.
-  - that the WAPI `record:host` create returns 201 with the record's reference.
-- **Ping caveat:** a device that drops ICMP looks free. Run NIOS Discovery on the subnet occasionally to catch those.
-- **Credentials:** this uses the NIOS `admin` account. Next step: a dedicated NIOS API user limited to IPAM/DNS on 192.0.2.0/24 and example.com.
+- **Tested end to end** from AAP 2.7 and from the CLI: provision a VM, then run it again;
+  the second run reports `changed=0` on both the KVM host and the new VM.
+- **OS variant:** `vm_os_variant` defaults to `rocky9`. If virt-install rejects it, check
+  `osinfo-query os | grep -i rocky` on the KVM host.
+- **Ping caveat:** a device that drops ICMP looks free. Run NIOS Discovery on the subnet
+  occasionally to catch those.
+- **Credentials:** WAPI calls use `nios_api_user` (default `aap-ipam`), a NIOS account
+  limited to IPAM and DNS, not `admin`.
 
 ## Baseline (roles/baseline)
 
