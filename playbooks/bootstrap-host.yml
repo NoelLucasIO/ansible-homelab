@@ -14,6 +14,7 @@
 #   bootstrap_selinux    permissive|enforcing  (RHEL only; default permissive)
 #   bootstrap_sysctls    dict of sysctl: value (default none)
 #   bootstrap_update     true to apply all package updates (default false)
+#   bootstrap_libvirt_guests  true on KVM hosts: clean guest shutdown on host reboot
 
 - name: Bootstrap host for AAP management
   hosts: all
@@ -90,6 +91,32 @@
       when:
         - is_rhel
         - selinux_result.reboot_required | default(false)
+
+    # --- KVM hosts: clean guest shutdown ---------------------------------------------
+    # Without libvirt-guests, a host shutdown kills each QEMU process; appliances with a
+    # database (e.g. Infoblox NIOS) may then not boot cleanly again.
+    - name: Clean guest shutdown on host reboot (libvirt-guests)
+      when: bootstrap_libvirt_guests | bool
+      block:
+        - name: Configure libvirt-guests
+          ansible.builtin.copy:
+            dest: "{{ '/etc/conf.d/libvirt-guests' if ansible_facts['os_family'] == 'Archlinux' else '/etc/sysconfig/libvirt-guests' }}"
+            content: |
+              # Managed by bootstrap-host.yml
+              ON_BOOT=ignore
+              ON_SHUTDOWN=shutdown
+              SHUTDOWN_TIMEOUT={{ bootstrap_libvirt_guests_timeout | int }}
+            owner: root
+            group: root
+            mode: "0644"
+
+        # enabled + started only, never restarted: the service's stop action is what shuts
+        # every running guest down, so a restart here would take all VMs offline.
+        - name: Enable libvirt-guests (start is a no-op with ON_BOOT=ignore)
+          ansible.builtin.systemd_service:
+            name: libvirt-guests.service
+            enabled: true
+            state: started
 
     # --- optional tuning and updates --------------------------------------------------
     - name: Apply sysctl settings

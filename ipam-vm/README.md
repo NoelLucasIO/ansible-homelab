@@ -19,6 +19,22 @@ Destroys and undefines the VM, removes its disk and ISO, and deletes the host re
 
 ## Setup
 
+0. **NIOS access.** ipam-vm needs the network in IPAM, an API-only admin group with
+   Read/Write on that network and its forward and reverse zones, and the API user in that
+   group. `scripts/nios-ipam-access.py` checks all of it, and with `--apply` creates what is
+   missing, then tests the user (a free address must come back; a Grid backup must be refused):
+
+   ```bash
+   python3 scripts/nios-ipam-access.py --wapi https://192.0.2.25/wapi/v2.12 \
+     --network 192.0.2.0/24 --zone example.com --zone 192.0.2.0/24 \
+     --reserved 192.0.2.51-192.0.2.200          # report only; add --apply to create
+   ```
+
+   `--reserved` marks a range NIOS must not hand out, such as a DHCP pool served elsewhere.
+   NIOS can't see that server's leases, so any address in the range that has a DNS record
+   shows as **Conflict** on the IP Map. It's cosmetic: next_available_ip still skips the range.
+   Rerun it after restoring a Grid backup: anything created after that backup was taken,
+   this account included, is gone.
 1. **SSH keys:** set `vm_ssh_pubkeys` (inventory variable). The key whose comment contains `aap-automation` goes to the automation user; the rest go to `baseline_admin_user`.
 2. **Secrets.** The playbooks need four: `nios_api_password`, `npm_identity`, `npm_secret`, `baseline_admin_password_hash` (`openssl passwd -6`).
    - **CLI:** copy `playbooks/group_vars/all/vault.yml.example` to `vault.yml`, fill it in, then `ansible-vault encrypt` it (it is git-ignored).

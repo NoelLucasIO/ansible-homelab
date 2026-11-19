@@ -8,3 +8,7 @@ automation_pubkey: ""          # set in inventory: public key of the AAP machine
 bootstrap_selinux: permissive
 bootstrap_sysctls: {}
 bootstrap_update: false
+# KVM hosts: shut guests down cleanly (ACPI) when the host shuts down or reboots, instead
+# of the stop killing QEMU. Leaves guest start-up to each VM's own autostart flag.
+bootstrap_libvirt_guests: false
+bootstrap_libvirt_guests_timeout: 300   # seconds to wait for each guest before powering off
