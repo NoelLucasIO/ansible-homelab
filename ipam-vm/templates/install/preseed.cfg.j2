@@ -49,7 +49,8 @@ d-i apt-setup/services-select multiselect security, updates
 tasksel tasksel/first multiselect standard, ssh-server
 # Only what the image needs to boot as a cloud-init clone; the baseline role installs the
 # rest with apt, which (unlike pkgsel) may swap packages, e.g. chrony for systemd-timesyncd.
-d-i pkgsel/include string python3 sudo cloud-init cloud-guest-utils qemu-guest-agent
+# net-tools: cloud-init's ifupdown renderer adds routes (incl. the default) with `route`.
+d-i pkgsel/include string python3 sudo cloud-init cloud-guest-utils qemu-guest-agent net-tools
 d-i pkgsel/upgrade select full-upgrade
 popularity-contest popularity-contest/participate boolean false
 cloud-init cloud-init/datasources multiselect NoCloud, None

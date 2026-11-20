@@ -35,7 +35,8 @@
     - name: Resolve vm_os
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/resolve_os.yml"
   tasks:
-    - name: 0. Golden image for {{ vm_os }} (built from its ISO on first use)
+    # Built from the OS's ISO on first use, reused after that.
+    - name: 0. Golden image for {{ vm_os }}
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/build_base_image.yml"
 
     - name: 1. Address and host record from NIOS

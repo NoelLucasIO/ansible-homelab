@@ -57,7 +57,7 @@
     mode: "0644"
   notify: Restart journald
 
-- name: dnf-automatic config present? (dnf5 ships none in /etc)
+- name: Is there a dnf-automatic config? (dnf5 ships none in /etc)
   ansible.builtin.stat:
     path: /etc/dnf/automatic.conf
   register: baseline_dnfauto
@@ -87,7 +87,7 @@
     line: "apply_updates = yes"
   when: not baseline_debian and baseline_auto_updates != 'none' and baseline_dnfauto.stat.exists
 
-- name: unattended-upgrades on (Debian/Ubuntu)
+- name: Turn on unattended-upgrades (Debian/Ubuntu)
   ansible.builtin.copy:
     dest: /etc/apt/apt.conf.d/20auto-upgrades
     mode: "0644"

@@ -24,19 +24,23 @@
   notify: Reload firewalld
   when: not baseline_debian
 
-- name: ufw allows ({{ baseline_ufw_ports | join(', ') }})
-  ansible.builtin.shell: >-
-    ufw status verbose | grep -qE '^{{ item }} +ALLOW IN' ||
-    { ufw allow {{ item }} >/dev/null && echo CHANGED; }
-  loop: "{{ baseline_ufw_ports }}"
-  register: baseline_ufw_rule
-  changed_when: "'CHANGED' in baseline_ufw_rule.stdout"
+- name: Current ufw state
+  ansible.builtin.command: ufw status verbose
+  register: baseline_ufw_status
+  changed_when: false
   when: baseline_debian
 
-- name: ufw on, deny other inbound
-  ansible.builtin.shell: >-
-    ufw status | grep -q '^Status: active' ||
-    { ufw default deny incoming >/dev/null && ufw --force enable >/dev/null && echo CHANGED; }
-  register: baseline_ufw_on
-  changed_when: "'CHANGED' in baseline_ufw_on.stdout"
-  when: baseline_debian
+- name: Open ufw ports {{ baseline_ufw_ports | join(', ') }}
+  ansible.builtin.command: ufw allow {{ item }}
+  loop: "{{ baseline_ufw_ports }}"
+  changed_when: true   # only runs when the rule is missing
+  when:
+    - baseline_debian
+    - baseline_ufw_status.stdout is not regex('(?m)^' ~ (item | regex_escape) ~ ' +ALLOW IN')
+
+- name: Default-deny inbound and turn ufw on
+  ansible.builtin.shell: ufw default deny incoming && ufw --force enable
+  changed_when: true   # only runs when ufw is inactive
+  when:
+    - baseline_debian
+    - "baseline_ufw_status.stdout is not search('Status: active')"

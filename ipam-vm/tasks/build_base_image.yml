@@ -15,7 +15,7 @@
     fail_msg: "{{ vm_base_image }} not found, and {{ vm_os }} has no ISO to build it from."
     quiet: true
 
-- name: Build {{ vm_base_image | basename }} from {{ vm_iso_path | default('') | basename }}
+- name: Build the golden image from {{ vm_iso_path | default('') | basename }}
   when: not vm_base_stat.stat.exists
   vars:
     vm_builder: "ipam-base-{{ vm_os }}"
@@ -40,7 +40,9 @@
       when: vm_os_entry.installer == 'kickstart'
 
     - name: Random password hash for the throwaway installer account (deleted by seal.sh)
-      ansible.builtin.shell: openssl rand -base64 33 | openssl passwd -6 -stdin
+      ansible.builtin.shell: set -o pipefail; openssl rand -base64 33 | openssl passwd -6 -stdin
+      args:
+        executable: /bin/bash
       register: vm_inst_user_hash
       changed_when: false
       no_log: true
@@ -85,7 +87,8 @@
         true
       changed_when: false
 
-    - name: Unattended install of {{ vm_os }} (10-30 minutes; it powers off when done)
+    # 10-30 minutes; the installer powers the VM off when done.
+    - name: Unattended install of {{ vm_os }}
       vars:
         vm_inst_location: >-
           {{ vm_iso_path }}{{ (',kernel=' ~ vm_os_entry.kernel ~ ',initrd=' ~ vm_os_entry.initrd)
