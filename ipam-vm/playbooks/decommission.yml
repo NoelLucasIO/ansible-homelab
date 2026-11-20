@@ -46,7 +46,7 @@
       failed_when: vm_d.rc != 0 and 'not running' not in vm_d.stderr and 'failed to get domain' not in vm_d.stderr
 
     - name: Remove its definition
-      ansible.builtin.command: virsh undefine {{ vm_name }}
+      ansible.builtin.command: virsh undefine --nvram {{ vm_name }}   # --nvram: UEFI VMs (ISO-built OSes)
       register: vm_u
       changed_when: vm_u.rc == 0
       failed_when: vm_u.rc != 0 and 'failed to get domain' not in vm_u.stderr

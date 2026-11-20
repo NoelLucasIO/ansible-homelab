@@ -1,0 +1,20 @@
+---
+# Pre-build the golden image for an OS so the first provision of it is fast.
+#   ansible-playbook playbooks/build_base_image.yml -e vm_os=debian13 [-e vm_iso=debian-13.1.0-amd64-DVD-1.iso]
+# provision.yml builds it on first use anyway; this just lets you do it ahead of time.
+- name: Build a golden image from an ISO
+  hosts: "{{ nios_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - ipam_vm_defaults
+  tasks:
+    - name: Resolve vm_os
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/resolve_os.yml"
+
+    - name: Golden image
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/build_base_image.yml"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "{{ vm_os }}: {{ vm_base_image }} (os-variant {{ vm_os_variant }}, firmware {{ vm_firmware | default('default', true) }})"

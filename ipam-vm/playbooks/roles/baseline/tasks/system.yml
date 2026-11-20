@@ -1,8 +1,31 @@
 ---
-- name: Base packages
+- name: RHEL registered?
+  ansible.builtin.command: subscription-manager identity
+  register: baseline_rhsm
+  changed_when: false
+  failed_when: false
+  when: ansible_facts.distribution == 'RedHat' and rhsm_org is defined and rhsm_activation_key is defined
+
+- name: Register RHEL with an activation key
+  ansible.builtin.command: >-
+    subscription-manager register --org={{ rhsm_org }} --activationkey={{ rhsm_activation_key }}
+  no_log: true
+  changed_when: true
+  when: baseline_rhsm.rc | default(0) != 0
+
+- name: Base packages (dnf)
   ansible.builtin.dnf:
     name: "{{ baseline_packages }}"
     state: present
+  when: not baseline_debian
+
+- name: Base packages (apt)
+  ansible.builtin.apt:
+    name: "{{ baseline_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  when: baseline_debian
 
 - name: Current timezone
   ansible.builtin.command: timedatectl show -p Timezone --value
@@ -17,7 +40,7 @@
 - name: Chrony uses the gateway only
   ansible.builtin.template:
     src: chrony.conf.j2
-    dest: /etc/chrony.conf
+    dest: "{{ baseline_chrony_conf }}"
     mode: "0644"
   notify: Restart chronyd
 
@@ -34,19 +57,44 @@
     mode: "0644"
   notify: Restart journald
 
+- name: dnf-automatic config present? (dnf5 ships none in /etc)
+  ansible.builtin.stat:
+    path: /etc/dnf/automatic.conf
+  register: baseline_dnfauto
+  when: not baseline_debian and baseline_auto_updates != 'none'
+
+- name: Write dnf-automatic config (dnf5)
+  ansible.builtin.copy:
+    dest: /etc/dnf/automatic.conf
+    mode: "0644"
+    content: |
+      [commands]
+      upgrade_type = {{ 'security' if baseline_auto_updates == 'security' else 'default' }}
+      apply_updates = yes
+  when: not baseline_debian and baseline_auto_updates != 'none' and not baseline_dnfauto.stat.exists
+
 - name: Set dnf-automatic update type
   ansible.builtin.lineinfile:
     path: /etc/dnf/automatic.conf
     regexp: '^upgrade_type\s*='
     line: "upgrade_type = {{ 'security' if baseline_auto_updates == 'security' else 'default' }}"
-  when: baseline_auto_updates != 'none'
+  when: not baseline_debian and baseline_auto_updates != 'none' and baseline_dnfauto.stat.exists
 
 - name: Make dnf-automatic apply updates
   ansible.builtin.lineinfile:
     path: /etc/dnf/automatic.conf
     regexp: '^apply_updates\s*='
     line: "apply_updates = yes"
-  when: baseline_auto_updates != 'none'
+  when: not baseline_debian and baseline_auto_updates != 'none' and baseline_dnfauto.stat.exists
+
+- name: unattended-upgrades on (Debian/Ubuntu)
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  when: baseline_debian and baseline_auto_updates != 'none'
 
 - name: Services on
   ansible.builtin.systemd_service:
@@ -54,11 +102,11 @@
     enabled: true
     state: started
   loop:
-    - chronyd
+    - "{{ baseline_chrony_service }}"
     - rsyslog
     - cockpit.socket
     - qemu-guest-agent
-    - "{{ 'dnf-automatic.timer' if baseline_auto_updates != 'none' else 'chronyd' }}"
+    - "{{ baseline_update_timer if baseline_auto_updates != 'none' else baseline_chrony_service }}"
 
 - name: Cockpit accepts its NPM hostname (websocket origin check)
   ansible.builtin.copy:

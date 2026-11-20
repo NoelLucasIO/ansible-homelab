@@ -1,0 +1,54 @@
+---
+# vm_os -> vm_os_entry, vm_iso_path (newest match; its date is stamped into the image name,
+# so a re-downloaded "latest" ISO gets its own golden image), vm_base_image, vm_os_variant, vm_firmware, vm_admin_group
+- name: Known OS
+  ansible.builtin.assert:
+    that: vm_os in vm_os_catalog
+    fail_msg: "vm_os={{ vm_os }} isn't in vm_os_catalog. Choose one of: {{ vm_os_catalog.keys() | join(', ') }}"
+    quiet: true
+
+- name: Catalog entry for {{ vm_os }}
+  ansible.builtin.set_fact:
+    vm_os_entry: "{{ vm_os_catalog[vm_os] }}"
+
+- name: Install ISO for {{ vm_os }}
+  when: vm_os_entry.iso is defined
+  block:
+    - name: Find the ISO in {{ vm_iso_dir }}
+      ansible.builtin.find:
+        paths: "{{ vm_iso_dir }}"
+        patterns: "{{ vm_iso | default(vm_os_entry.iso) }}"
+        file_type: file
+      register: vm_iso_found
+
+    - name: ISO present
+      ansible.builtin.assert:
+        that: vm_iso_found.files | length > 0
+        fail_msg: "No ISO matching {{ vm_iso | default(vm_os_entry.iso) }} in {{ vm_iso_dir }}."
+        quiet: true
+
+    - name: Newest matching ISO
+      ansible.builtin.set_fact:
+        vm_iso_path: "{{ (vm_iso_found.files | sort(attribute='mtime') | last).path }}"
+        vm_iso_date: "{{ '%Y%m%d' | strftime((vm_iso_found.files | sort(attribute='mtime') | last).mtime) }}"
+
+- name: Base image, firmware, admin group
+  ansible.builtin.set_fact:
+    vm_base_image: >-
+      {{ vm_image_dir }}/{{ vm_os_entry.image if vm_os_entry.image is defined
+         else 'base-' ~ (vm_iso_path | basename | regex_replace('(?i)\.iso$', '')) ~ '-' ~ vm_iso_date ~ '.qcow2' }}
+    vm_firmware: "{{ vm_os_entry.firmware | default('' if vm_os_entry.image is defined else 'uefi') }}"
+    vm_admin_group: "{{ 'sudo' if vm_os_entry.family == 'debian' else 'wheel' }}"
+
+- name: OS variants this host's osinfo-db knows
+  ansible.builtin.command: osinfo-query os -f short-id
+  register: vm_osinfo
+  changed_when: false
+  when: vm_os_variant is not defined
+
+- name: Pick the most specific variant available
+  ansible.builtin.set_fact:
+    vm_os_variant: >-
+      {{ (vm_os_entry.variants + vm_os_variant_fallbacks)
+         | select('in', vm_osinfo.stdout_lines | map('trim') | list) | first | default('linux2022') }}
+  when: vm_os_variant is not defined

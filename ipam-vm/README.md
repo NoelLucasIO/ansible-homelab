@@ -6,12 +6,40 @@ Builds KVM VMs on fedora whose address and DNS come from NIOS IPAM, and tears th
 
 1. **Address:** reuses the NIOS host record if `web01.example.com` already exists (reruns are safe). Otherwise it asks NIOS for 5 free addresses in 192.0.2.0/24 and pings each. It takes the first that doesn't answer, which avoids devices that have no DNS record.
 2. **Host record:** creates a NIOS host record (A + PTR in one object), tagged with `vm_owner_comment`. NIOS notifies Technitium; Unbound serves it to clients.
-3. **Disk:** a qcow2 overlay on `rocky-9-genericcloud-base.qcow2`, sized `vm_disk_gb`. cloud-init grows the root filesystem on first boot.
+3. **Disk:** a qcow2 overlay on the `vm_os` base image (default `rocky-9-genericcloud-base.qcow2`), sized `vm_disk_gb`. cloud-init grows the root filesystem on first boot.
 4. **Seed ISO:** a NoCloud ISO (`cidata`) with hostname, static IP, gateway, DNS, and user `ansible` holding the homelab-ssh key with passwordless sudo.
 5. **VM:** `virt-install --import` on br0.
 6. **Checks:** waits for SSH on the new address, then checks the name resolves through Unbound.
 
 Optional: `-e vm_memory_mb=8192 -e vm_vcpus=4 -e vm_disk_gb=80`
+
+### Choosing the OS (`-e vm_os=...`)
+
+| `vm_os` | Source (in `vm_iso_dir`, default `/data/ISO`) | Installer |
+| --- | --- | --- |
+| `rocky9` (default) | `rocky-9-genericcloud-base.qcow2` (prebuilt cloud image) | none |
+| `rhel9` | `rhel-9.*-x86_64-dvd.iso` | kickstart |
+| `rhel10` | `rhel-10.*-x86_64-dvd.iso` | kickstart |
+| `centos-stream9` | `CentOS-Stream-9-*-x86_64-dvd1.iso` | kickstart |
+| `centos-stream10` | `CentOS-Stream-10-*-x86_64-dvd1.iso` | kickstart |
+| `fedora44` | `Fedora-Server-dvd-x86_64-44-*.iso` (packages from the Fedora mirrors) | kickstart |
+| `debian13` | `debian-13.*-amd64-DVD-1.iso` (packages from deb.debian.org) | preseed |
+| `ubuntu2604` | `ubuntu-26.04*-live-server-amd64.iso` (LTS) | autoinstall |
+
+- **First use of an ISO OS** runs one unattended install (10–30 min) into a golden image,
+  `base-<iso name>-<iso date>.qcow2`, with cloud-init and the baseline packages baked in, then seals it
+  (no machine-id, SSH host keys or installer network config). Every VM after that is an
+  overlay, built in seconds. To build ahead of time: `playbooks/build_base_image.yml -e vm_os=debian13`.
+- **Newest matching ISO wins.** Pin one with `-e vm_iso=<file name>`. A new ISO makes a new
+  golden image; existing VMs keep the one they were built on. Golden images are never rebuilt
+  in place (overlays depend on them), so delete an old one by hand only when no VM uses it.
+- **Firmware:** ISO-built OSes boot UEFI; decommission uses `virsh undefine --nvram`.
+- **os-variant** is the most specific one the host's osinfo-db knows (falls back to `linux2024`).
+  Override with `-e vm_os_variant=<short-id>`.
+- **RHEL:** installs from the DVD without a subscription. To get dnf repos afterwards, set
+  `rhsm_org` and `rhsm_activation_key` (vault or credential) and the baseline registers it.
+- **AAP:** add `vm_os` to the VM provision survey as a multiple choice of the keys above, and raise
+  the job timeout for a first-use build.
 
 ## decommission.yml (`-e vm_name=web01 -e confirm=web01`)
 
@@ -66,8 +94,7 @@ Destroys and undefines the VM, removes its disk and ISO, and deletes the host re
 
 - **Tested end to end** from AAP 2.7 and from the CLI: provision a VM, then run it again;
   the second run reports `changed=0` on both the KVM host and the new VM.
-- **OS variant:** `vm_os_variant` defaults to `rocky9`. If virt-install rejects it, check
-  `osinfo-query os | grep -i rocky` on the KVM host.
+- **OS choice:** rocky9 is tested end to end. The ISO-built OSes are new and not yet tested on fedora.
 - **Ping caveat:** a device that drops ICMP looks free. Run NIOS Discovery on the subnet
   occasionally to catch those.
 - **Credentials:** WAPI calls use `nios_api_user` (default `aap-ipam`), a NIOS account
@@ -81,9 +108,9 @@ Destroys and undefines the VM, removes its disk and ISO, and deletes the host re
 | --- | --- |
 | Users | `ansible`: AAP key, passwordless sudo. `baseline_admin_user`: your workstation key, wheel, sudo asks for the password (hash in the vault: `baseline_admin_password_hash`). |
 | Time | America/New_York; chrony uses gw (192.0.2.1) only. |
-| Packages | Admin basics, cockpit, qemu-guest-agent, dnf-automatic (daily security updates, applied). |
+| Packages | Admin basics, cockpit, qemu-guest-agent; dnf-automatic (EL/Fedora) or unattended-upgrades (Debian/Ubuntu), daily security updates applied. Users go in `wheel` (EL) or `sudo` (Debian/Ubuntu). |
 | Journal | Persistent across reboots. |
-| Firewall | firewalld on with ssh, cockpit, 9100/tcp. Only for new VMs. `baseline.yml` leaves firewalld alone unless `-e baseline_manage_firewalld=true`. |
+| Firewall | firewalld (EL/Fedora) or ufw (Debian/Ubuntu; Debian's cloud-init conflicts with firewalld) on with ssh, cockpit, 9100/tcp. Only for new VMs. `baseline.yml` leaves firewalld alone unless `-e baseline_manage_firewalld=true`. |
 | Monitoring | node_exporter 1.9.1 on :9100, checksum-verified. Registers itself in Prometheus via file_sd on fedora; decommission removes it. |
 | Logs | rsyslog sends everything to Loki (Alloy TCP 1516, RFC 5424) and `info`+ to Splunk (TCP 1516, index `linux`), with disk queues. Under SELinux, 1516/tcp is labelled as a syslog port first. |
 | NIOS | Optional `vm_owner` / `vm_role` set the Owner and Role extensible attributes on the host record. |

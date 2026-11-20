@@ -1,0 +1,138 @@
+---
+# Golden image for an ISO-based vm_os: one unattended install (kickstart / preseed /
+# autoinstall) with cloud-init and the baseline packages baked in, then sealed (no
+# machine-id, SSH host keys or installer network config) so each overlay boots as a
+# new machine. Built under a .partial name and renamed only on success. Never rebuilt in
+# place: existing VMs' overlays point at it. Delete it by hand only once no VM uses it.
+- name: Golden image present?
+  ansible.builtin.stat:
+    path: "{{ vm_base_image }}"
+  register: vm_base_stat
+
+- name: Prebuilt image missing
+  ansible.builtin.assert:
+    that: vm_base_stat.stat.exists or vm_os_entry.iso is defined
+    fail_msg: "{{ vm_base_image }} not found, and {{ vm_os }} has no ISO to build it from."
+    quiet: true
+
+- name: Build {{ vm_base_image | basename }} from {{ vm_iso_path | default('') | basename }}
+  when: not vm_base_stat.stat.exists
+  vars:
+    vm_builder: "ipam-base-{{ vm_os }}"
+    vm_partial: "{{ vm_base_image }}.partial"
+  block:
+    - name: Install media label
+      ansible.builtin.command: blkid -o value -s LABEL {{ vm_iso_path }}
+      register: vm_iso_label
+      changed_when: false
+
+    - name: Staging dir for installer files
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -osinstall
+      register: vm_inst
+
+    - name: Kickstart
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/install/ks.cfg.j2"
+        dest: "{{ vm_inst.path }}/ks.cfg"
+        mode: "0644"
+      when: vm_os_entry.installer == 'kickstart'
+
+    - name: Random password hash for the throwaway installer account (deleted by seal.sh)
+      ansible.builtin.shell: openssl rand -base64 33 | openssl passwd -6 -stdin
+      register: vm_inst_user_hash
+      changed_when: false
+      no_log: true
+      when: vm_os_entry.installer == 'preseed'
+
+    - name: Preseed and seal script
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/install/{{ item }}.j2"
+        dest: "{{ vm_inst.path }}/{{ item }}"
+        mode: "0644"
+      loop: [preseed.cfg, seal.sh]
+      when: vm_os_entry.installer == 'preseed'
+
+    - name: Autoinstall seed (user-data + meta-data)
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/install/{{ item.src }}"
+        dest: "{{ vm_inst.path }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - {src: autoinstall-user-data.j2, dest: user-data}
+        - {src: autoinstall-meta-data.j2, dest: meta-data}
+      when: vm_os_entry.installer == 'autoinstall'
+
+    - name: Ensure xorriso is present
+      ansible.builtin.package:
+        name: xorriso
+        state: present
+      when: vm_os_entry.installer == 'autoinstall'
+
+    - name: Autoinstall seed ISO (label cidata)
+      ansible.builtin.command:
+        argv: [xorriso, -as, genisoimage, -output, "{{ vm_inst.path }}/autoinstall.iso",
+               -volid, cidata, -joliet, -rock, "{{ vm_inst.path }}/user-data", "{{ vm_inst.path }}/meta-data"]
+      changed_when: true
+      when: vm_os_entry.installer == 'autoinstall'
+
+    - name: Clear a builder left by a failed run
+      ansible.builtin.shell: |
+        virsh destroy {{ vm_builder }} 2>/dev/null
+        virsh undefine --nvram {{ vm_builder }} 2>/dev/null
+        rm -f {{ vm_partial }}
+        true
+      changed_when: false
+
+    - name: Unattended install of {{ vm_os }} (10-30 minutes; it powers off when done)
+      vars:
+        vm_inst_location: >-
+          {{ vm_iso_path }}{{ (',kernel=' ~ vm_os_entry.kernel ~ ',initrd=' ~ vm_os_entry.initrd)
+             if vm_os_entry.kernel is defined else '' }}
+        vm_inst_args:
+          kickstart: "inst.ks=file:/ks.cfg inst.stage2=hd:LABEL={{ vm_iso_label.stdout | replace(' ', '\\x20') }} inst.text console=ttyS0,115200n8"
+          preseed: "auto=true priority=critical preseed/file=/preseed.cfg locale=en_US.UTF-8 keymap=us console=ttyS0,115200n8"
+          autoinstall: "autoinstall console=ttyS0,115200n8"
+        vm_inst_inject:
+          kickstart: ["--initrd-inject={{ vm_inst.path }}/ks.cfg"]
+          preseed: ["--initrd-inject={{ vm_inst.path }}/preseed.cfg", "--initrd-inject={{ vm_inst.path }}/seal.sh"]
+          autoinstall: ["--disk={{ vm_inst.path }}/autoinstall.iso,device=cdrom"]
+      ansible.builtin.command:
+        argv: "{{ ['virt-install',
+                   '--name=' ~ vm_builder,
+                   '--memory=' ~ vm_base_build_memory_mb,
+                   '--vcpus=' ~ vm_base_build_vcpus,
+                   '--cpu=host-passthrough',
+                   '--disk=path=' ~ vm_partial ~ ',size=' ~ vm_base_disk_gb ~ ',format=qcow2,bus=virtio',
+                   '--location=' ~ vm_inst_location,
+                   '--extra-args=' ~ vm_inst_args[vm_os_entry.installer],
+                   '--network=bridge=' ~ vm_bridge ~ ',model=virtio',
+                   '--os-variant=' ~ vm_os_variant,
+                   '--boot=' ~ vm_firmware,
+                   '--graphics=none', '--noautoconsole', '--noreboot', '--wait=-1']
+                  + vm_inst_inject[vm_os_entry.installer] }}"
+      async: "{{ vm_base_build_timeout }}"
+      poll: 30
+      changed_when: true
+
+    - name: Remove the builder domain (disk stays)
+      ansible.builtin.command: virsh undefine --nvram {{ vm_builder }}
+      changed_when: true
+
+    - name: Publish the golden image
+      ansible.builtin.command: mv {{ vm_partial }} {{ vm_base_image }}
+      changed_when: true
+
+    - name: Golden image is read-only
+      ansible.builtin.file:
+        path: "{{ vm_base_image }}"
+        owner: root
+        group: root
+        mode: "0444"
+  always:
+    - name: Remove installer staging dir
+      ansible.builtin.file:
+        path: "{{ vm_inst.path }}"
+        state: absent
+      when: vm_inst.path is defined

@@ -1,0 +1,65 @@
+# Rendered by ipam-vm tasks/build_base_image.yml: golden image for {{ vm_os }}
+d-i debian-installer/locale string en_US.UTF-8
+d-i keyboard-configuration/xkb-keymap select us
+d-i netcfg/choose_interface select auto
+d-i netcfg/get_hostname string localhost
+d-i netcfg/get_domain string localdomain
+d-i netcfg/hostname string localhost
+d-i hw-detect/load_firmware boolean false
+
+d-i mirror/country string manual
+d-i mirror/http/hostname string deb.debian.org
+d-i mirror/http/directory string /debian
+d-i mirror/http/proxy string
+
+# Root stays locked (no root password). d-i insists on some admin account, so it gets a
+# throwaway one with a random password; seal.sh deletes it. cloud-init creates the real users.
+d-i passwd/root-login boolean false
+d-i passwd/make-user boolean true
+d-i passwd/user-fullname string
+d-i passwd/username string d-i-build
+d-i passwd/user-password-crypted password {{ vm_inst_user_hash.stdout }}
+d-i user-setup/encrypt-home boolean false
+
+d-i clock-setup/utc boolean true
+d-i time/zone string America/New_York
+d-i clock-setup/ntp boolean false
+
+# ESP + ext4 root (last, no swap) so growpart can extend it.
+d-i partman-auto/disk string /dev/vda
+d-i partman-auto/method string regular
+d-i partman-auto/expert_recipe string \
+  root :: \
+    538 538 1075 free $iflabel{ gpt } $reusemethod{ } method{ efi } format{ } . \
+    4096 4096 -1 ext4 $primary{ } method{ format } format{ } use_filesystem{ } filesystem{ ext4 } mountpoint{ / } .
+d-i partman-auto/choose_recipe select root
+d-i partman-basicfilesystems/no_swap boolean false
+d-i partman-partitioning/confirm_write_new_label boolean true
+d-i partman/choose_partition select finish
+d-i partman/confirm boolean true
+d-i partman/confirm_nooverwrite boolean true
+d-i partman-efi/non_efi_system boolean true
+
+d-i apt-setup/cdrom/set-first boolean false
+d-i apt-setup/cdrom/set-next boolean false
+d-i apt-setup/cdrom/set-failed boolean false
+d-i apt-setup/use_mirror boolean true
+d-i apt-setup/non-free-firmware boolean true
+d-i apt-setup/services-select multiselect security, updates
+tasksel tasksel/first multiselect standard, ssh-server
+# Only what the image needs to boot as a cloud-init clone; the baseline role installs the
+# rest with apt, which (unlike pkgsel) may swap packages, e.g. chrony for systemd-timesyncd.
+d-i pkgsel/include string python3 sudo cloud-init cloud-guest-utils qemu-guest-agent
+d-i pkgsel/upgrade select full-upgrade
+popularity-contest popularity-contest/participate boolean false
+cloud-init cloud-init/datasources multiselect NoCloud, None
+
+d-i grub-installer/only_debian boolean true
+d-i grub-installer/bootdev string default
+# Clones start with empty NVRAM: firmware must find the removable-path loader.
+d-i grub-installer/force-efi-extra-removable boolean true
+d-i debian-installer/add-kernel-opts string console=ttyS0,115200n8
+
+d-i preseed/late_command string cp /seal.sh /target/tmp/seal.sh; in-target sh /tmp/seal.sh; rm -f /target/tmp/seal.sh
+d-i finish-install/reboot_in_progress note
+d-i debian-installer/exit/poweroff boolean true

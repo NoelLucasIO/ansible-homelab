@@ -1,0 +1,39 @@
+# Rendered by ipam-vm tasks/build_base_image.yml: golden image for {{ vm_os }}
+text
+{{ vm_os_entry.ks_source | default('cdrom') }}
+eula --agreed
+lang en_US.UTF-8
+keyboard us
+timezone America/New_York --utc
+network --bootproto=dhcp --activate --onboot=yes --hostname=localhost.localdomain
+rootpw --lock
+selinux --enforcing
+firewall --enabled --service=ssh
+firstboot --disable
+skipx
+zerombr
+clearpart --all --initlabel --disklabel=gpt
+reqpart
+# Root last and no swap/LVM, so cloud-init's growpart can extend it on bigger overlays.
+part / --fstype=xfs --size=4096 --grow
+bootloader --timeout=1 --append="console=ttyS0,115200n8"
+services --enabled=sshd,cloud-init,qemu-guest-agent,chronyd
+poweroff
+
+%packages --ignoremissing
+@core
+python3
+cloud-init
+cloud-utils-growpart
+{% for p in vm_base_packages_redhat %}
+{{ p }}
+{% endfor %}
+%end
+
+%post --log=/root/ks-post.log
+# Seal for cloning: every overlay must boot as a new machine.
+rm -f /etc/NetworkManager/system-connections/*
+rm -f /etc/ssh/ssh_host_*
+cloud-init clean --logs --machine-id || { truncate -s0 /etc/machine-id; rm -f /var/lib/dbus/machine-id; }
+dnf clean all
+%end

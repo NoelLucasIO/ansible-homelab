@@ -5,3 +5,6 @@ nios_api_password: CHANGE_ME
 npm_identity: CHANGE_ME            # NPM login email
 npm_secret: CHANGE_ME              # NPM password
 baseline_admin_password_hash: CHANGE_ME   # openssl passwd -6
+# Optional: register RHEL VMs (vm_os=rhel9/rhel10) so dnf has repos. Leave unset to skip.
+# rhsm_org: CHANGE_ME
+# rhsm_activation_key: CHANGE_ME

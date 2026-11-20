@@ -3,39 +3,36 @@
 baseline_admin_user: admin        # your own login; its password hash lives in the vault
 baseline_users:
   - name: ansible                  # AAP (homelab-ssh credential)
-    groups: [wheel]
+    groups: ["{{ baseline_admin_group }}"]
     sudo_nopasswd: true
     keys: "{{ vm_ssh_pubkeys | select('search', 'aap-automation') | list }}"
   - name: "{{ baseline_admin_user }}"
-    groups: [wheel]
-    sudo_nopasswd: false           # wheel default: sudo asks for the password
+    groups: ["{{ baseline_admin_group }}"]
+    sudo_nopasswd: false           # wheel/sudo default: sudo asks for the password
     password_hash: "{{ baseline_admin_password_hash }}"   # vault
     keys: "{{ vm_ssh_pubkeys | reject('search', 'aap-automation') | list }}"
 
 # --- System -------------------------------------------------------------------------
 baseline_timezone: America/New_York
 baseline_ntp_servers: [192.0.2.1]
-baseline_packages:
-  - vim-enhanced
-  - bash-completion
-  - tmux
-  - curl
-  - wget
-  - bind-utils
-  - jq
-  - rsync
-  - tar
-  - lsof
-  - chrony
-  - rsyslog
-  - cockpit
-  - dnf-automatic
-  - qemu-guest-agent
-  - policycoreutils-python-utils
-  - firewalld
+# Same lists the golden images are built with (roles/ipam_vm_defaults).
+baseline_debian: "{{ ansible_facts.os_family | default('') == 'Debian' }}"
+baseline_packages: "{{ vm_base_packages_debian if baseline_debian else vm_base_packages_redhat }}"
+baseline_admin_group: "{{ 'sudo' if baseline_debian else 'wheel' }}"
+baseline_chrony_service: "{{ 'chrony' if baseline_debian else 'chronyd' }}"
+baseline_chrony_conf: "{{ '/etc/chrony/chrony.conf' if baseline_debian else '/etc/chrony.conf' }}"
 
-# Security updates applied daily by dnf-automatic.
+# Updates applied daily: dnf-automatic (EL/Fedora) or unattended-upgrades (Debian/Ubuntu).
+# On Debian/Ubuntu, unattended-upgrades' own origin list decides (security by default),
+# so 'default' behaves like 'security' there.
 baseline_auto_updates: security    # security | default | none
+baseline_update_timer: >-
+  {{ 'apt-daily-upgrade.timer' if baseline_debian
+     else ('dnf5-automatic.timer' if ansible_facts.pkg_mgr | default('') == 'dnf5' else 'dnf-automatic.timer') }}
+
+# Optional RHEL registration (Developer subscription works): set both, e.g. in the vault.
+# rhsm_org: "1234567"
+# rhsm_activation_key: homelab
 
 # Off by default so running baseline.yml on existing hosts (fedora, Splunk, AAP,
 # which run without firewalld) never turns a firewall on under them.
@@ -43,6 +40,8 @@ baseline_auto_updates: security    # security | default | none
 baseline_manage_firewalld: false
 baseline_firewalld_services: [ssh, cockpit]
 baseline_firewalld_ports: [9100/tcp]
+# Debian/Ubuntu use ufw (Debian's cloud-init Conflicts with firewalld): same openings as ports.
+baseline_ufw_ports: [22/tcp, 9090/tcp, 9100/tcp]
 
 # --- Monitoring ----------------------------------------------------------------------
 baseline_node_exporter_version: "1.9.1"

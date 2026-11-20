@@ -1,0 +1,11 @@
+#!/bin/sh
+# Rendered by ipam-vm: seal the Debian golden image for cloning (runs in the target).
+printf 'auto lo\niface lo inet loopback\n\nsource /etc/network/interfaces.d/*\n' > /etc/network/interfaces
+sed -i '/^deb cdrom:/d' /etc/apt/sources.list 2>/dev/null
+rm -f /etc/ssh/ssh_host_*
+userdel -r d-i-build 2>/dev/null
+rm -f /etc/sudoers.d/d-i-build
+passwd -l root >/dev/null 2>&1
+apt-get clean
+cloud-init clean --logs --machine-id || truncate -s0 /etc/machine-id
+true

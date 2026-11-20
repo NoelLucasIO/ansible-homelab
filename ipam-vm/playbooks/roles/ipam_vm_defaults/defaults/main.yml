@@ -4,9 +4,110 @@
 # A playbook-adjacent group_vars/all would NOT: it outranks inventory-level vars.
 # --- Where VMs are built ---------------------------------------------------------
 vm_image_dir: /var/lib/libvirt/images
-vm_base_image: /var/lib/libvirt/images/rocky-9-genericcloud-base.qcow2
 vm_bridge: br0
-vm_os_variant: rocky9            # `osinfo-query os | grep -i rocky` on fedora if this is rejected
+# vm_base_image, vm_os_variant and vm_firmware are worked out from vm_os (tasks/resolve_os.yml).
+# -e vm_os_variant=<short-id> still wins if virt-install rejects the detected one.
+
+# --- Operating system (-e vm_os=<key>) ------------------------------------------------
+# rocky9 uses the prebuilt cloud image, as before. Every other key installs from its ISO
+# in vm_iso_dir, unattended, ONCE into a golden image (base-<iso name>-<iso date>.qcow2) the first
+# time it's used (~10-30 min). After that each VM is an overlay on it, built in seconds.
+# A newer ISO matching the pattern gets a new golden image; existing VMs keep theirs
+# (overlays point at their backing file, so golden images are never rebuilt in place).
+# -e vm_iso=<file name> pins a specific ISO instead of the newest match.
+vm_os: rocky9
+vm_iso_dir: /data/ISO
+vm_os_catalog:
+  rocky9:
+    image: rocky-9-genericcloud-base.qcow2
+    family: redhat
+    variants: [rocky9, rocky9.0]
+  rhel9:
+    iso: rhel-9.*-x86_64-dvd.iso
+    family: redhat
+    installer: kickstart
+    variants: [rhel9.6, rhel9-unknown, rhel9.4, rhel9.0]
+  rhel10:
+    iso: rhel-10.*-x86_64-dvd.iso
+    family: redhat
+    installer: kickstart
+    variants: [rhel10.2, rhel10.1, rhel10.0, rhel10-unknown]
+  centos-stream9:
+    iso: CentOS-Stream-9-*-x86_64-dvd1.iso
+    family: redhat
+    installer: kickstart
+    variants: [centos-stream9]
+  centos-stream10:
+    iso: CentOS-Stream-10-*-x86_64-dvd1.iso
+    family: redhat
+    installer: kickstart
+    variants: [centos-stream10]
+  fedora44:
+    iso: Fedora-Server-dvd-x86_64-44-*.iso
+    family: redhat
+    installer: kickstart
+    # The Server DVD lacks cloud-init/cockpit extras: install from the mirrors instead.
+    ks_source: |
+      url --mirrorlist=https://mirrors.fedoraproject.org/mirrorlist?repo=fedora-44&arch=x86_64
+      repo --name=updates --mirrorlist=https://mirrors.fedoraproject.org/mirrorlist?repo=updates-released-f44&arch=x86_64
+    variants: [fedora44, fedora-unknown, fedora43]
+  debian13:
+    iso: debian-13.*-amd64-DVD-1.iso
+    family: debian
+    installer: preseed
+    variants: [debian13, debiantesting]
+  ubuntu2604:
+    iso: ubuntu-26.04*-live-server-amd64.iso
+    family: debian
+    installer: autoinstall
+    kernel: casper/vmlinuz
+    initrd: casper/initrd
+    variants: [ubuntu26.04, ubuntu24.04]
+vm_os_variant_fallbacks: [linux2024, linux2022]
+
+# Golden-image build
+vm_base_disk_gb: 12              # overlays grow past this; cloud-init grows the root fs
+vm_base_build_memory_mb: 4096    # Ubuntu's live installer needs >= 4 GB
+vm_base_build_vcpus: 2
+vm_base_build_timeout: 3600      # seconds before an install is considered hung
+
+# Packages baked into golden images; the baseline role installs the same list.
+vm_base_packages_redhat:
+  - vim-enhanced
+  - bash-completion
+  - tmux
+  - curl
+  - wget
+  - bind-utils
+  - jq
+  - rsync
+  - tar
+  - lsof
+  - chrony
+  - rsyslog
+  - cockpit
+  - dnf-automatic
+  - qemu-guest-agent
+  - policycoreutils-python-utils
+  - firewalld
+vm_base_packages_debian:
+  - vim
+  - bash-completion
+  - tmux
+  - curl
+  - wget
+  - bind9-dnsutils
+  - jq
+  - rsync
+  - tar
+  - lsof
+  - chrony
+  - rsyslog
+  - cockpit
+  - unattended-upgrades
+  - qemu-guest-agent
+  - ufw                          # not firewalld: Debian's cloud-init package Conflicts with it
+  - cloud-guest-utils
 
 # --- Defaults (override per run with -e) ------------------------------------------
 vm_memory_mb: 4096

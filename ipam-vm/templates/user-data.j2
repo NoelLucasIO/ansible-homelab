@@ -5,7 +5,7 @@ prefer_fqdn_over_hostname: true
 manage_etc_hosts: true
 users:
   - name: {{ vm_admin_user }}
-    groups: [wheel]
+    groups: [{{ vm_admin_group }}]
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     shell: /bin/bash
     lock_passwd: true

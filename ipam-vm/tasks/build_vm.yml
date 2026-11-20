@@ -50,19 +50,17 @@
         path: "{{ vm_ci.path }}"
         state: absent
 
-    - name: Create and start the VM
+    - name: Create and start the VM ({{ vm_os }})
       ansible.builtin.command:
-        argv:
-          - virt-install
-          - --name={{ vm_name }}
-          - --memory={{ vm_memory_mb }}
-          - --vcpus={{ vm_vcpus }}
-          - --cpu=host-passthrough
-          - --disk={{ vm_image_dir }}/{{ vm_name }}-root.qcow2,bus=virtio
-          - --disk={{ vm_image_dir }}/{{ vm_name }}-cloudinit.iso,device=cdrom
-          - --network=bridge={{ vm_bridge }},model=virtio,mac={{ vm_mac }}
-          - --os-variant={{ vm_os_variant }}
-          - --import
-          - --graphics=none
-          - --noautoconsole
+        argv: "{{ ['virt-install',
+                   '--name=' ~ vm_name,
+                   '--memory=' ~ vm_memory_mb,
+                   '--vcpus=' ~ vm_vcpus,
+                   '--cpu=host-passthrough',
+                   '--disk=' ~ vm_image_dir ~ '/' ~ vm_name ~ '-root.qcow2,bus=virtio',
+                   '--disk=' ~ vm_image_dir ~ '/' ~ vm_name ~ '-cloudinit.iso,device=cdrom',
+                   '--network=bridge=' ~ vm_bridge ~ ',model=virtio,mac=' ~ vm_mac,
+                   '--os-variant=' ~ vm_os_variant,
+                   '--import', '--graphics=none', '--noautoconsole']
+                  + (['--boot=' ~ vm_firmware] if vm_firmware else []) }}"
       changed_when: true   # only runs when the domain doesn't exist

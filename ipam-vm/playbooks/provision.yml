@@ -1,6 +1,7 @@
 ---
 # Build a VM whose address and DNS come from NIOS IPAM.
-#   ansible-playbook playbooks/provision.yml -e vm_name=web01 [-e vm_memory_mb=8192 -e vm_vcpus=4 -e vm_disk_gb=80]
+#   ansible-playbook playbooks/provision.yml -e vm_name=web01 [-e vm_os=debian13] [-e vm_memory_mb=8192 -e vm_vcpus=4 -e vm_disk_gb=80]
+# vm_os keys: see vm_os_catalog in roles/ipam_vm_defaults/defaults/main.yml (default rocky9).
 - name: Provision a VM from NIOS IPAM
   hosts: "{{ nios_kvm_host | default('fedora') }}"
   become: true
@@ -30,7 +31,13 @@
       ansible.builtin.set_fact:
         vm_fqdn: "{{ vm_name }}.{{ vm_domain }}"
         vm_cockpit_fqdn: "{{ vm_name }}{{ vm_cockpit_suffix }}.{{ vm_domain }}"
+
+    - name: Resolve vm_os
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/resolve_os.yml"
   tasks:
+    - name: 0. Golden image for {{ vm_os }} (built from its ISO on first use)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/build_base_image.yml"
+
     - name: 1. Address and host record from NIOS
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/allocate_ip.yml"
 
@@ -54,6 +61,15 @@
     - name: 5. Cockpit through NPM with the wildcard certificate
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/npm_proxy.yml"
 
+    - name: Forget old SSH host keys for this name and address (a reused IP has a new key)
+      ansible.builtin.command: ssh-keygen -R {{ item }}
+      loop: ["{{ vm_fqdn }}", "{{ vm_ip }}"]
+      delegate_to: localhost
+      become: false
+      register: vm_kh
+      changed_when: "'updated' in vm_kh.stdout"
+      failed_when: false
+
     - name: Hand the new VM to the baseline play
       ansible.builtin.add_host:
         name: "{{ vm_fqdn }}"
@@ -62,7 +78,9 @@
         ansible_user: "{{ vm_admin_user }}"
         # CLI runs: the automation private key. In AAP, leave unset; the machine credential supplies it.
         ansible_ssh_private_key_file: "{{ vm_admin_private_key | default(omit) }}"
-        vm_spec: "{{ vm_vcpus }} vCPU, {{ vm_memory_mb }} MB, {{ vm_disk_gb }} GB"
+        # Brand-new VM: accept its fresh host key instead of prompting.
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new"
+        vm_spec: "{{ vm_os }}, {{ vm_vcpus }} vCPU, {{ vm_memory_mb }} MB, {{ vm_disk_gb }} GB"
         baseline_cockpit_fqdn: "{{ vm_cockpit_fqdn }}"
       changed_when: false   # in-memory inventory only
 
