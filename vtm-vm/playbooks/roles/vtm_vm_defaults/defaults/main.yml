@@ -69,8 +69,8 @@ vtm_nios_view: default
 vtm_nios_candidates: 5
 vtm_owner_comment: "vtm-vm: provisioned by AAP"  # destroy refuses VMs and records without it
 
-# --- Admin UI through NPM (wildcard cert stays in NPM) ---------------------------------
-vtm_npm_proxy: true
+# --- Admin UI through NPM (optional; off by default, the appliance is itself a load balancer) ---
+vtm_npm_proxy: false
 vtm_admin_suffix: "-admin"                        # https://<name>-admin.<domain>
 npm_api: http://192.0.2.45:81/api
 npm_ip: 192.0.2.45

@@ -31,7 +31,7 @@ survey carries every Initial Configuration answer and the VM sizing.
 6. **Checks**: the admin server answers on `https://<ip>:9090`, and the REST API accepts the
    new admin password. On failure the play prints the first-boot and startup logs, read from
    the VM's disk with `virt-cat`.
-7. **NPM**: a LAN-only proxy host `https://<name>-admin.<domain>` to the admin UI, with NPM's
+7. **NPM** (optional, off by default: `vtm_npm_proxy`): a LAN-only proxy host `https://<name>-admin.<domain>` to the admin UI, with NPM's
    wildcard certificate, plus an A record for it in NIOS.
 
 A rerun against an existing VM skips the build and only runs the checks and the NPM step.

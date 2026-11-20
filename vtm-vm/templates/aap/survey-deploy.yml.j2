@@ -36,6 +36,6 @@
 {{ q('vtm_rest_enabled', 'REST API', 'multiplechoice', vtm_rest_enabled | string | lower, 'Used by the post-install check', choices=['true', 'false']) }}
 {{ q('vtm_rest_port', 'REST API port', 'integer', vtm_rest_port | int, '', min=1, max=65535) }}
 {{ q('vtm_license_file', 'Licence key file (path on the hypervisor)', 'text', vtm_license_file, 'Blank = developer mode (no licence)', required=false, max=255) }}
-{{ q('vtm_npm_proxy', 'Publish the admin UI through NPM', 'multiplechoice', vtm_npm_proxy | string | lower, 'https://<name>' ~ vtm_admin_suffix ~ '.<domain>, LAN-only', choices=['true', 'false']) }}
+{{ q('vtm_npm_proxy', 'Publish the admin UI through NPM', 'multiplechoice', vtm_npm_proxy | string | lower, 'https://<name>' ~ vtm_admin_suffix ~ '.<domain>, LAN-only', choices=['false', 'true']) }}
 # --- secret
 {{ q('vtm_admin_password', 'admin password', 'password', '', 'Replaces the default admin/admin; 8+ characters', min=8, max=128) }}
