@@ -82,18 +82,20 @@ PTR left at one of its addresses. Refuses anything without the hcp-vm marker.
    changing site values):
 
    ```bash
-   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml \
-     -e aap_url=https://aap.example.com -e aap_user=admin -e aap_password=... \
-     -e aap_machine_credential='homelab ansible' -e aap_secrets_credential='HCP VM secrets'
+   # aap.local.yml (git-ignored, 0600): aap_url, aap_token (AAP API token with write scope),
+   # aap_project, aap_inventory, aap_machine_credential, aap_secrets_credential
+   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml -e @aap.local.yml
    ```
 
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy** and
    **HCP post-install** with their surveys, and the workflow **HCP VM deploy + post-install**
-   (post-install runs when deploy succeeds; its survey asks both sets of questions). Create a credential of the new type, then rerun with
-   `aap_secrets_credential` set so it gets attached.
+   (post-install runs when deploy succeeds; its survey asks both sets of questions). Create a
+   credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
+   AAP 2.5+ gateways may refuse Basic auth on the API ("Authentication credentials were not
+   provided"): use `aap_token` (user menu, API tokens, write scope) instead of user/password.
 4. **CLI** instead of AAP: `playbooks/group_vars/all/vault.yml.example` lists the secrets.
-   `inventory.yml`, `site-vars.yml` and `vault.yml` are git-ignored.
+   `inventory.yml`, `site-vars.yml`, `vault.yml` and `*.local.yml` are git-ignored.
 
 ## Survey (HCP VM deploy)
 

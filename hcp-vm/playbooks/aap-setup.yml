@@ -5,8 +5,9 @@
 #   * workflow "HCP VM deploy + post-install" (deploy, then first-login setup on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
 #
-#   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml \
-#     -e aap_url=https://aap.example.com -e aap_user=admin -e aap_password=...
+#   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml -e @aap.local.yml
+#   aap.local.yml (git-ignored): aap_url, and aap_token (an AAP API token: user menu ->
+#   API tokens, write scope) or aap_user + aap_password where the gateway allows Basic auth.
 #
 # Survey defaults come from the hcp_vm_defaults role overlaid with your site values, so the
 # launch page opens pre-filled with your lab's addresses. Afterwards, create one credential of
@@ -27,14 +28,32 @@
     aap_ee: ""                            # execution environment name; blank = project/org default
   module_defaults:
     ansible.builtin.uri:
-      user: "{{ aap_user }}"
-      password: "{{ aap_password }}"
-      force_basic_auth: true
+      # Token if given (AAP 2.5+ gateways may refuse Basic auth on the API), else Basic.
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
       validate_certs: "{{ aap_validate_certs | default(false) }}"
       body_format: json
       return_content: true
       status_code: [200, 201, 204]
   tasks:
+    - name: AAP connection settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+        fail_msg: "Set aap_url and either aap_token or aap_user + aap_password (e.g. in a git-ignored aap.local.yml)."
+
+    - name: Who am I in AAP? (fails fast on bad credentials)
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/me/"
+      register: aap_me
+
+    - name: Connected
+      ansible.builtin.debug:
+        msg: "Connected to {{ aap_url }} as {{ aap_me.json.results[0].username }}"
+
     # --- credential type -----------------------------------------------------------
     - name: Credential type exists?
       ansible.builtin.uri:
