@@ -70,6 +70,7 @@
       register: vm_kh
       changed_when: "'updated' in vm_kh.stdout"
       failed_when: false
+      when: vm_state.rc != 0   # only when this run created the VM (vm_state: tasks/build_vm.yml)
 
     - name: Hand the new VM to the baseline play
       ansible.builtin.add_host:
@@ -99,5 +100,5 @@
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }} is up at {{ ansible_host }} ({{ vm_spec }}), baselined:
-          users, chrony->gw, firewalld, node_exporter (registered), rsyslog -> Loki + Splunk.
+          users, chrony->gw, host firewall, node_exporter (registered), rsyslog -> Loki + Splunk.
           Cockpit: https://{{ baseline_cockpit_fqdn }}
