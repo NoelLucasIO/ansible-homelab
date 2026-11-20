@@ -1,7 +1,9 @@
 [Unit]
 Description=vtm-vm first boot: unattended vTM Initial Configuration
-# After the appliance's own boot services have named the NICs and raised the network.
-After=network-online.target z-nic-defaults.service z-apply-vmcustomizations.service z-initial-network.service
+# After the appliance's own boot services: NIC naming, network, sysconfig, and above all
+# z-keys-create, which on a fresh image (/recreate-keys) generates a new control certificate.
+# Running alongside it leaves global.cfg holding the old certificate ("Cluster: Error").
+After=network-online.target z-nic-defaults.service z-apply-vmcustomizations.service z-initial-network.service z-apply-sysconfig.service z-keys-create.service
 Wants=network-online.target
 ConditionPathExists=/root/vtm-answers
 

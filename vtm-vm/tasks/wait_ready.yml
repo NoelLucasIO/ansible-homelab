@@ -25,6 +25,21 @@
       delay: 15
       when: vtm_rest_enabled | bool
 
+    - name: Traffic manager reports its state (admin server can reach it)
+      ansible.builtin.uri:
+        url: "https://{{ vtm_addr }}:{{ vtm_rest_port }}/api/tm/{{ vtm_rest.json.children | map(attribute='name') | last }}/status/local_tm/state"
+        user: admin
+        password: "{{ vtm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: raw
+        status_code: [200]
+      register: vtm_state
+      until: vtm_state.status == 200 and 'error_id' not in (vtm_state.json | default({}))
+      retries: 20
+      delay: 15
+      when: vtm_rest_enabled | bool
+
   rescue:
     - name: First-boot log from the VM's disk (read-only)
       ansible.builtin.command: virt-cat -d {{ vtm_name }} /logs/vtm-firstboot.log
@@ -45,9 +60,10 @@
     - name: Not ready
       ansible.builtin.fail:
         msg:
-          - "{{ vtm_name }} did not come up on {{ vtm_addr }} within {{ vtm_ready_timeout }} s."
+          - "{{ vtm_name }} did not come up healthy on {{ vtm_addr }} within {{ vtm_ready_timeout }} s."
           - "vtm-firstboot.log: {{ (vtm_fb_log.stdout_lines | default([]))[-15:] }}"
           - "startup (tail): {{ (vtm_startup_log.stdout_lines | default([]))[-15:] }}"
+          - "Traffic manager state: {{ vtm_state.json | default(vtm_state.msg | default('not checked')) }}"
           - "Console: virsh console {{ vtm_name }} (login admin/admin until configured)."
 
 - name: Name resolves through the LAN resolver
