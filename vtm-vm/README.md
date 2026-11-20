@@ -88,12 +88,20 @@ be overridden from the inventory.
 
 ## Status
 
+- **Tested end to end** from AAP 2.7 on a Fedora 44 KVM host with vTM 22.9r7: deploy (NIOS address,
+  unattended first boot, health check), a rerun against the existing VM (`changed=0`), and destroy.
+  The admin UI reports Cluster: OK and the appliance runs as Community Edition (developer mode).
 - **Read from the 22.9r7 KVM image itself, not from documentation:** the answer keys and their
   validation (from `/usr/bin/z-initial-config`), the partition layout, the OS release, and the
-  appliance's boot services. vtm-firstboot runs after them.
-- **Not yet run end to end.** The first real deploy will confirm:
-  - that `vtm-firstboot.service` runs after the appliance's own network bring-up
-    (`z-initial-network` raises DHCP on NIC 1 first, then `z-initial-config` replaces it with the static address);
-  - the REST API path and port (`https://<ip>:9070/api/tm/`) on 22.9;
+  appliance's boot services.
+- **Two first-boot details that matter** (both in `files/vtm-firstboot.service`):
+  - `After=z-keys-create.service`: a fresh image carries `/recreate-keys`, so the first boot generates
+    a new control certificate. Running `z-initial-config` alongside it leaves `global.cfg` with the
+    old one, and the admin server can't reach the traffic manager ("Cluster: Error").
+  - `KillMode=process`: `z-initial-config` ends by daemonising `start-zeus`. The default KillMode
+    kills the traffic manager along with the one-shot unit.
+- The deploy's last check is `/api/tm/<newest>/status/local_tm/state`, which answers with an error
+  whenever the admin server can't reach the traffic manager.
+- Not yet run on an Arch/CachyOS hypervisor (package names per `vtm_hypervisor_packages`).
 - Not automated: anything after the Initial Configuration, such as traffic IP groups, pools,
   virtual servers and syslog targets. With REST on, those can be a follow-up playbook.
