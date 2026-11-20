@@ -1,7 +1,8 @@
 ---
 # Creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
-#   * job templates "HCP VM deploy" (with survey) and "HCP VM destroy" (with survey)
+#   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (each with a survey)
+#   * workflow "HCP VM deploy + post-install" (deploy, then first-login setup on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
 #
 #   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml \
@@ -93,6 +94,20 @@
           playbook: hcp-vm/playbooks/destroy.yml
           description: Remove an hcp-vm VM, its disks and its NIOS objects
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-destroy.yml.j2') | from_yaml }}"
+        - name: HCP post-install
+          playbook: hcp-vm/playbooks/post_install.yml
+          description: First-login setup of a new HCP system (security account, SSH, MAPI)
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-post-install.yml.j2') | from_yaml }}"
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"
+
+    # --- workflow: deploy, then post-install ------------------------------------------
+    - name: Workflow, deploy then first-login setup
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_workflow.yml"
+      vars:
+        aap_wf_name: HCP VM deploy + post-install
+        aap_wf_survey: >-
+          {{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-deploy.yml.j2') | from_yaml
+             + lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-post-install.yml.j2',
+                      template_vars={'post_install_only': true}) | from_yaml }}

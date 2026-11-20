@@ -1,0 +1,51 @@
+# Survey for "HCP post-install". Defaults are rendered from hcp_vm_defaults + your site values.
+{% if not post_install_only | default(false) %}
+- question_name: Hypervisor
+  variable: hcp_kvm_host
+  type: multiplechoice
+  required: true
+  default: {{ hcp_kvm_host | to_json }}
+  choices: {{ aap_kvm_hosts | to_json }}
+- question_name: System short name
+  question_description: "The system is <short>.{{ hcp_domain }}"
+  variable: hcp_cluster
+  type: text
+  required: true
+  default: {{ hcp_cluster | to_json }}
+  min: 1
+  max: 31
+- question_name: Back-end IP
+  question_description: Reached from the hypervisor over the isolated back-end network
+  variable: hcp_backend_ip
+  type: text
+  required: true
+  default: {{ hcp_backend_ip | to_json }}
+  min: 7
+  max: 15
+{% endif %}
+- question_name: Security account password
+  question_description: Replaces the default password of the initial 'security' account; 14+ characters
+  variable: hcp_security_password
+  type: password
+  required: true
+  default: ""
+  min: 14
+  max: 64
+- question_name: Security account roles
+  variable: hcp_security_roles
+  type: multiselect
+  required: true
+  default: {{ hcp_security_role_choices | join('\n') | to_json }}
+  choices: {{ hcp_security_role_choices | to_json }}
+- question_name: Turn on SSH (front-end)
+  variable: hcp_enable_ssh
+  type: multiplechoice
+  required: true
+  default: {{ hcp_enable_ssh | string | lower | to_json }}
+  choices: ["true", "false"]
+- question_name: Turn on the Management API (MAPI)
+  variable: hcp_enable_mapi
+  type: multiplechoice
+  required: true
+  default: {{ hcp_enable_mapi | string | lower | to_json }}
+  choices: ["true", "false"]

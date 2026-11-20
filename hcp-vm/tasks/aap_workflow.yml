@@ -1,0 +1,64 @@
+---
+# Workflow job template: "HCP VM deploy" -> (on success) "HCP post-install".
+# The workflow's survey answers are passed to both nodes as extra vars.
+- name: Workflow exists? {{ aap_wf_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/workflow_job_templates/?name={{ aap_wf_name | urlencode }}"
+  register: aap_wf_q
+
+- name: Create or update {{ aap_wf_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/workflow_job_templates/{{ (aap_wf_q.json.results[0].id ~ '/') if aap_wf_q.json.count else '' }}"
+    method: "{{ 'PATCH' if aap_wf_q.json.count else 'POST' }}"
+    body:
+      name: "{{ aap_wf_name }}"
+      description: Deploy an HCP VM, then do its first-login setup
+      inventory: "{{ aap_ids.results[1].json.results[0].id }}"
+      organization: "{{ aap_ids.results[0].json.results[0].organization }}"
+      survey_enabled: true
+  register: aap_wf
+  changed_when: true
+
+- name: Survey for {{ aap_wf_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/workflow_job_templates/{{ aap_wf.json.id }}/survey_spec/"
+    method: POST
+    body: {name: "{{ aap_wf_name }}", description: "", spec: "{{ aap_wf_survey }}"}
+  changed_when: true
+
+- name: Template ids
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/?name={{ item | urlencode }}"
+  loop: [HCP VM deploy, HCP post-install]
+  register: aap_wf_jts
+
+- name: Existing nodes
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/workflow_job_templates/{{ aap_wf.json.id }}/workflow_nodes/"
+  register: aap_wf_nodes
+
+- name: Build the two nodes (only when the workflow has none yet)
+  when: aap_wf_nodes.json.count == 0
+  block:
+    - name: Node 1, deploy
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ aap_wf.json.id }}/workflow_nodes/"
+        method: POST
+        body: {unified_job_template: "{{ aap_wf_jts.results[0].json.results[0].id }}", identifier: deploy}
+      register: aap_n1
+      changed_when: true
+
+    - name: Node 2, post-install
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ aap_wf.json.id }}/workflow_nodes/"
+        method: POST
+        body: {unified_job_template: "{{ aap_wf_jts.results[1].json.results[0].id }}", identifier: post-install}
+      register: aap_n2
+      changed_when: true
+
+    - name: Post-install runs when deploy succeeds
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_template_nodes/{{ aap_n1.json.id }}/success_nodes/"
+        method: POST
+        body: {id: "{{ aap_n2.json.id }}"}
+      changed_when: true

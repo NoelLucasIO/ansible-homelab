@@ -43,8 +43,26 @@ installed" marker and the install stages are skipped (a rerun on an installed sy
 `changed=0`). A VM left off part-way resumes from the right stage. `hcp_replace=true` destroys and
 rebuilds the VM, but only one whose libvirt description carries the hcp-vm marker.
 
-Not automated: the System Management Console setup after install (security user, tenants).
-Front-end SSH is closed once HCP is running; enable it in the console if you want it.
+The first-login setup is `post_install.yml` (below). Tenants and namespaces are not automated yet.
+
+## post_install.yml
+
+The steps the System Management Console asks for at first login, without the console:
+
+| Step | How |
+|---|---|
+| Security account password | `admin jvm userAccount update cluster <id> --password …`, only while HCP still demands a change |
+| Security account roles | same command, `--roles` (survey multiselect; default all six) |
+| SSH on the front-end | `admin jvm config set cluster ssh.enabled true` |
+| Management API | `admin jvm gateway mapi start <cluster-uuid>` |
+
+A new system has front-end SSH off, so this runs from the hypervisor over the back-end: the
+hypervisor gets a temporary address on `hcp-backend` (`<back-end /24>.1`, or
+`hcp_backend_host_ip`), and the HCP root key (in root's `authorized_keys_be`) reaches `root` on
+the node's back-end address. The key is copied to the hypervisor for the run and removed after,
+as is the address. Checks: port 22 answers on the front-end, and a MAPI call
+(`/mapi/tenants`) as the security account returns 200, which proves the password and MAPI together.
+Reruns change nothing in HCP.
 
 ## destroy.yml
 
@@ -70,8 +88,9 @@ PTR left at one of its addresses. Refuses anything without the hcp-vm marker.
    ```
 
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
-   key, injected as a 0600 file) and the job templates **HCP VM deploy** and **HCP VM destroy**
-   with their surveys. Create a credential of the new type, then rerun with
+   key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy** and
+   **HCP post-install** with their surveys, and the workflow **HCP VM deploy + post-install**
+   (post-install runs when deploy succeeds; its survey asks both sets of questions). Create a credential of the new type, then rerun with
    `aap_secrets_credential` set so it gets attached.
 4. **CLI** instead of AAP: `playbooks/group_vars/all/vault.yml.example` lists the secrets.
    `inventory.yml`, `site-vars.yml` and `vault.yml` are git-ignored.
@@ -87,6 +106,9 @@ PTR left at one of its addresses. Refuses anything without the hcp-vm marker.
 | Time | time server, time zone |
 | Options | replication, encryption, minimum TLS |
 | Secret | new `install` password (14+) |
+
+**HCP post-install** asks: hypervisor, short name, back-end IP, security account password (14+),
+roles, SSH on/off, MAPI on/off.
 
 Everything else (MTUs, lockdown, MDPL, filesystem, timeouts, installer kernel arguments) is a role
 default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from inventory.
@@ -104,3 +126,9 @@ default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from
 - NIOS auto-creates a PTR for a delegation's glue and refuses to delete it; it goes with the zone.
 - `pgrep -f arc-deploy.py` matches the very shell running it; match the `install` user's
   Python process instead.
+- arc-deploy hands the install to a daemon and switches the default systemd target; a
+  transient unit holding arc-deploy needs `IgnoreOnIsolate=yes` or it is stopped mid-install.
+- An installed HCP closes front-end SSH, but the back-end sshd stays up for the cluster's own
+  use, which is what post-install goes through.
+- The console's first-login settings map to `admin jvm` commands; the web actions in
+  `/var/ris/logs/admin_request.log` show which page did what.
