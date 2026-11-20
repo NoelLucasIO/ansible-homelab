@@ -8,6 +8,9 @@ ConditionPathExists=/root/vtm-answers
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/vtm-firstboot
+# z-initial-config ends by daemonising start-zeus. The default KillMode (control-group) would kill
+# the traffic manager and admin server along with this unit when the script exits.
+KillMode=process
 TimeoutStartSec=900
 
 [Install]
