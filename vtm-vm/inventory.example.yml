@@ -1,0 +1,18 @@
+---
+# Copy to inventory.yml (git-ignored). In AAP these are host/inventory variables.
+all:
+  hosts:
+    fedora:
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3
+      vtm_image_zip: /srv/iso/ZeusTM_229r7_Virtual-Appliance-x86_64_kvm.zip
+      vtm_base_dir: /srv/vm/vtm-base
+      vtm_disk_dir: /srv/vm
+  vars:
+    vtm_domain: example.com
+    vtm_network: 192.0.2.0/24
+    vtm_gateway: 192.0.2.1
+    vtm_dns: [192.0.2.25]
+    nios_ip: 192.0.2.25
+    npm_api: http://192.0.2.45:81/api
+    npm_ip: 192.0.2.45

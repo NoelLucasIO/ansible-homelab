@@ -1,0 +1,41 @@
+---
+# Unpack the vendor zip once per image version. The qcow2 inside is fully preallocated
+# (17 GB for a 16 GiB disk); VMs never run on it, each one gets its own thin copy.
+- name: Base image path
+  ansible.builtin.set_fact:
+    vtm_base_image: >-
+      {{ vtm_base_dir }}/{{ vtm_image_zip | basename | regex_replace('\.zip$', '') }}/VirtualTrafficManager.qcow2
+
+- name: Base image directory
+  ansible.builtin.file:
+    path: "{{ vtm_base_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Unpack the zip, first use only (~2 min), {{ vtm_image_zip | basename }}
+  ansible.builtin.unarchive:
+    src: "{{ vtm_image_zip }}"
+    dest: "{{ vtm_base_dir }}"
+    remote_src: true
+    creates: "{{ vtm_base_image }}"
+
+- name: Base image is read-only from here on
+  ansible.builtin.file:
+    path: "{{ vtm_base_image }}"
+    mode: "0444"
+
+- name: Partition layout of the base image
+  ansible.builtin.command: virt-filesystems -a {{ vtm_base_image }} --filesystems --long
+  environment:
+    LIBGUESTFS_BACKEND: "{{ vtm_guestfs_backend }}"
+  register: vtm_fs
+  changed_when: false
+
+- name: Root and /logs partitions are where vtm-vm expects them (ext4)
+  ansible.builtin.assert:
+    that:
+      - vtm_fs.stdout is search(vtm_root_partition ~ '\s+filesystem\s+ext4')
+      - vtm_fs.stdout is search(vtm_logs_partition ~ '\s+filesystem\s+ext4')
+    fail_msg: >-
+      {{ vtm_root_partition }} (root) or {{ vtm_logs_partition }} (/logs) is not ext4 in this image
+      (layout changed?). Set vtm_root_partition / vtm_logs_partition. Layout: {{ vtm_fs.stdout }}

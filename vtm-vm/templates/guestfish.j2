@@ -1,0 +1,13 @@
+# guestfish script: drop the first-boot files into the root filesystem ({{ vtm_root_partition }}).
+mkdir-p /usr/local/sbin
+upload {{ vtm_stage.path }}/vtm-answers /root/vtm-answers
+chmod 0600 /root/vtm-answers
+upload {{ vtm_stage.path }}/vtm-firstboot /usr/local/sbin/vtm-firstboot
+chmod 0755 /usr/local/sbin/vtm-firstboot
+upload {{ vtm_stage.path }}/vtm-firstboot.service /etc/systemd/system/vtm-firstboot.service
+chmod 0644 /etc/systemd/system/vtm-firstboot.service
+ln-sf /etc/systemd/system/vtm-firstboot.service /etc/systemd/system/multi-user.target.wants/vtm-firstboot.service
+{% if vtm_license_file | length > 0 %}
+upload {{ vtm_license_file }} /root/vtm-license
+chmod 0600 /root/vtm-license
+{% endif %}

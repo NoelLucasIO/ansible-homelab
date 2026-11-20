@@ -1,0 +1,57 @@
+---
+# First boot runs z-initial-config (vtm-firstboot.service), which then restarts the network
+# and starts the traffic manager. Ready = the admin server answers on the new address,
+# and (if enabled) the REST API accepts the new admin password.
+- name: Wait for the appliance to come up configured
+  block:
+    - name: Admin server answers, {{ vtm_addr }}
+      ansible.builtin.wait_for:
+        host: "{{ vtm_addr }}"
+        port: "{{ vtm_admin_port | int }}"
+        timeout: "{{ vtm_ready_timeout | int }}"
+
+    - name: REST API accepts the admin password
+      ansible.builtin.uri:
+        url: "https://{{ vtm_addr }}:{{ vtm_rest_port }}/api/tm/"
+        user: admin
+        password: "{{ vtm_admin_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200]
+      register: vtm_rest
+      until: vtm_rest.status == 200
+      retries: 20
+      delay: 15
+      when: vtm_rest_enabled | bool
+
+  rescue:
+    - name: First-boot log from the VM's disk (read-only)
+      ansible.builtin.command: virt-cat -d {{ vtm_name }} /logs/vtm-firstboot.log
+      environment:
+        LIBGUESTFS_BACKEND: "{{ vtm_guestfs_backend }}"
+      register: vtm_fb_log
+      changed_when: false
+      failed_when: false
+
+    - name: Appliance startup log (read-only)
+      ansible.builtin.command: virt-cat -d {{ vtm_name }} /logs/startup
+      environment:
+        LIBGUESTFS_BACKEND: "{{ vtm_guestfs_backend }}"
+      register: vtm_startup_log
+      changed_when: false
+      failed_when: false
+
+    - name: Not ready
+      ansible.builtin.fail:
+        msg:
+          - "{{ vtm_name }} did not come up on {{ vtm_addr }} within {{ vtm_ready_timeout }} s."
+          - "vtm-firstboot.log: {{ (vtm_fb_log.stdout_lines | default([]))[-15:] }}"
+          - "startup (tail): {{ (vtm_startup_log.stdout_lines | default([]))[-15:] }}"
+          - "Console: virsh console {{ vtm_name }} (login admin/admin until configured)."
+
+- name: Name resolves through the LAN resolver
+  ansible.builtin.command: dig @{{ vtm_gateway }} +short +time=3 +tries=2 {{ vtm_fqdn }}
+  register: vtm_dig
+  changed_when: false
+  failed_when: false
+  when: vtm_use_nios | bool

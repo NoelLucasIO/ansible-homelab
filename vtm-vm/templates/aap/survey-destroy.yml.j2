@@ -1,0 +1,27 @@
+- question_name: Hypervisor
+  variable: vtm_kvm_host
+  type: multiplechoice
+  required: true
+  default: {{ vtm_kvm_host | to_json }}
+  choices: {{ aap_kvm_hosts | to_json }}
+- question_name: Name
+  variable: vtm_name
+  type: text
+  required: true
+  default: ""
+  min: 1
+  max: 63
+- question_name: DNS domain
+  variable: vtm_domain
+  type: text
+  required: true
+  default: {{ vtm_domain | to_json }}
+  min: 3
+  max: 200
+- question_name: Type the name again to confirm
+  variable: confirm
+  type: text
+  required: true
+  default: ""
+  min: 1
+  max: 63

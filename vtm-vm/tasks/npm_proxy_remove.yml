@@ -1,0 +1,34 @@
+---
+- name: Log in to NPM
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/tokens"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    method: POST
+    body: {identity: "{{ npm_identity }}", secret: "{{ npm_secret }}"}
+  register: vtm_npm_login
+  no_log: true
+
+- name: Proxy hosts
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    user: ""
+    password: ""
+    force_basic_auth: false
+    body_format: raw  # no body; the json default sends 'null', which NPM rejects (400)
+    headers: {Authorization: "Bearer {{ vtm_npm_login.json.token }}"}
+  register: vtm_npm_hosts
+
+- name: Remove from NPM, {{ vtm_admin_fqdn }}
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts/{{ item.id }}"
+    user: ""
+    password: ""
+    force_basic_auth: false
+    body_format: raw
+    method: DELETE
+    headers: {Authorization: "Bearer {{ vtm_npm_login.json.token }}"}
+  loop: "{{ vtm_npm_hosts.json | selectattr('domain_names', 'contains', vtm_admin_fqdn) | list }}"
+  loop_control: {label: "{{ vtm_admin_fqdn }} (id {{ item.id }})"}
+  changed_when: true

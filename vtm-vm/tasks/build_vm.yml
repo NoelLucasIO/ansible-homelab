@@ -1,0 +1,138 @@
+---
+# Disk and domain. The disk is prepared offline before the first boot:
+#   virt-resize copies the base image into a thin qcow2 of vtm_disk_gb and grows /logs,
+#   guestfish drops in the z-initial-config answers and a one-shot systemd unit that runs them.
+
+# --- Replace: only VMs this project built --------------------------------------------
+- name: Replace the existing domain
+  when:
+    - vtm_domstate.rc == 0
+    - vtm_replace | bool
+  block:
+    - name: Who built it?
+      ansible.builtin.command: virsh desc {{ vtm_name }}
+      register: vtm_desc
+      changed_when: false
+
+    - name: Only replace VMs built by vtm-vm
+      ansible.builtin.assert:
+        that: vtm_owner_comment in vtm_desc.stdout
+        fail_msg: >-
+          {{ vtm_name }} was not built by this project (its description lacks "{{ vtm_owner_comment }}").
+          Remove it by hand, or pick another name.
+
+    - name: Power off
+      ansible.builtin.command: virsh destroy {{ vtm_name }}
+      when: vtm_domstate.stdout != 'shut off'
+      changed_when: true
+
+    - name: Undefine
+      ansible.builtin.command: virsh undefine {{ vtm_name }}
+      changed_when: true
+
+    - name: The domain is gone now
+      ansible.builtin.set_fact:
+        vtm_domstate: {rc: 1, stdout: ''}
+
+- name: Domain already exists (no replace), leaving it as is
+  ansible.builtin.debug:
+    msg: "{{ vtm_name }} exists; skipping the build and checking it. Set vtm_replace to rebuild it."
+  when: vtm_domstate.rc == 0
+
+# --- Build -------------------------------------------------------------------------
+- name: Build the VM
+  when: vtm_domstate.rc != 0
+  block:
+    - name: Staging directory (answers include the admin password)
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -vtm
+      register: vtm_stage
+
+    - name: Answers file
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/vtm-answers.j2"
+        dest: "{{ vtm_stage.path }}/vtm-answers"
+        mode: "0600"
+      no_log: true
+
+    - name: First-boot script
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/vtm-firstboot.sh.j2"
+        dest: "{{ vtm_stage.path }}/vtm-firstboot"
+        mode: "0755"
+
+    - name: First-boot unit
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/files/vtm-firstboot.service"
+        dest: "{{ vtm_stage.path }}/vtm-firstboot.service"
+        mode: "0644"
+
+    - name: Guestfish script
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/guestfish.j2"
+        dest: "{{ vtm_stage.path }}/guestfish"
+        mode: "0600"
+
+    - name: Empty thin disk (any leftover from a failed run is overwritten), GB {{ vtm_disk_gb }}
+      ansible.builtin.command:
+        argv: [qemu-img, create, -q, -f, qcow2, "{{ vtm_disk }}", "{{ vtm_disk_gb }}G"]
+      changed_when: true
+
+    - name: Copy the base image in and grow /logs, {{ vtm_logs_partition }}
+      ansible.builtin.command:
+        argv: [virt-resize, --expand, "{{ vtm_logs_partition }}", --output-format, qcow2, --quiet,
+               "{{ vtm_base_image }}", "{{ vtm_disk }}"]
+      environment:
+        LIBGUESTFS_BACKEND: "{{ vtm_guestfs_backend }}"
+      changed_when: true
+
+    - name: Add the first-boot files
+      ansible.builtin.command:
+        argv: [guestfish, --rw, -a, "{{ vtm_disk }}", -m, "{{ vtm_root_partition }}", -f, "{{ vtm_stage.path }}/guestfish"]
+      environment:
+        LIBGUESTFS_BACKEND: "{{ vtm_guestfs_backend }}"
+      changed_when: true
+
+    - name: OS variants libosinfo knows
+      ansible.builtin.command: virt-install --osinfo list
+      register: vtm_osinfo
+      changed_when: false
+
+    - name: Pick the OS variant
+      ansible.builtin.set_fact:
+        vtm_variant: >-
+          {{ ([vtm_os_variant] + vtm_os_variant_fallbacks)
+             | select('in', vtm_osinfo.stdout | regex_findall('[\w.-]+')) | first | default('linux2022') }}
+
+    - name: Create and start the VM (os-variant {{ vtm_variant }})
+      ansible.builtin.command:
+        argv: >-
+          {{ ['virt-install',
+              '--name=' ~ vtm_name,
+              '--metadata=description=' ~ vtm_owner_comment ~ ' (' ~ vtm_fqdn ~ ')',
+              '--memory=' ~ (vtm_memory_gb | int * 1024),
+              '--vcpus=' ~ vtm_vcpus,
+              '--cpu=host-passthrough',
+              '--machine=q35',
+              '--os-variant=' ~ vtm_variant,
+              '--disk=path=' ~ vtm_disk ~ ',format=qcow2,bus=virtio',
+              '--network=bridge=' ~ vtm_bridge ~ ',model=virtio,mac=' ~ vtm_macs[0]]
+             + vtm_macs[1:] | map('regex_replace', '^', '--network=' ~ (vtm_extra_nic_network or 'bridge=' ~ vtm_bridge) ~ ',model=virtio,mac=') | list
+             + ['--serial=pty', '--console=pty,target.type=serial',
+                '--graphics=vnc,listen=127.0.0.1',
+                '--channel=unix,target.type=virtio,target.name=org.qemu.guest_agent.0',
+                '--rng=/dev/urandom',
+                '--import', '--noautoconsole'] }}
+      changed_when: true
+
+    - name: Autostart with the host
+      ansible.builtin.command: virsh autostart {{ vtm_name }}
+      changed_when: true
+
+  always:
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ vtm_stage.path }}"
+        state: absent
+      when: vtm_stage.path is defined

@@ -1,0 +1,75 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so inventory variables
+# (AAP inventory included), survey answers and -e all override them.
+# Documentation addresses (RFC 5737) and example.com: real values live in the inventory.
+
+# --- Where the VM is built -------------------------------------------------------
+# vtm_kvm_host picks the hypervisor (inventory hostname). Per-host paths go in host_vars.
+vtm_kvm_host: fedora
+vtm_image_zip: /var/lib/libvirt/images/ZeusTM_229r7_Virtual-Appliance-x86_64_kvm.zip
+vtm_base_dir: /var/lib/libvirt/images/vtm-base   # the zip is unpacked here once
+vtm_disk_dir: /var/lib/libvirt/images             # one thin qcow2 per VM
+vtm_bridge: br0                                   # NIC 1 (management)
+vtm_extra_nic_network: "bridge=br0"               # NICs 2..n: virt-install --network value
+vtm_os_variant: ubuntu24.04                       # the appliance is Ubuntu 24.04.5
+vtm_os_variant_fallbacks: [ubuntu24.04, ubuntu22.04, linux2022]
+# The image's partitions: 1 BIOS boot, 2 /boot, 3+4 root A/B (4 GiB each, fixed), 5 swap,
+# 6 /logs. Only the last one can grow, so extra disk space goes to /logs.
+# Names as libguestfs sees them; base_image.yml checks both against the image.
+vtm_root_partition: /dev/sda3
+vtm_logs_partition: /dev/sda6
+
+# --- Sizing (vTM minimums: 1 vCPU, 2 GB, 20 GB, 1 NIC; the image itself is 16 GiB) ---
+# Everything but /logs takes ~9.3 GiB, so /logs = vtm_disk_gb - 9.3 GiB. /logs needs >= 8 GiB;
+# 30 gives ~20.7 GiB.
+vtm_vcpus: 2
+vtm_memory_gb: 4
+vtm_disk_gb: 30
+vtm_nic_count: 1
+
+# --- Identity ----------------------------------------------------------------------
+vtm_name: vtm01                                   # libvirt name and short hostname
+vtm_domain: example.com
+
+# --- Network -----------------------------------------------------------------------
+vtm_ip: ""                                        # blank = next free address from NIOS
+vtm_network: 192.0.2.0/24                         # NIOS network to allocate from
+vtm_prefix: 24
+vtm_gateway: 192.0.2.1
+vtm_dns: [192.0.2.1]                              # list, or space/comma-separated string
+vtm_search: ""                                    # blank = vtm_domain
+vtm_management_restrict: false                    # true = admin UI/SSH bound to the NIC 1 address only
+
+# --- z-initial-config answers ------------------------------------------------------
+vtm_timezone: America/New_York
+vtm_ssh_intrusion: true                           # fail2ban-style SSH protection
+vtm_rest_enabled: true                            # REST API, used by the post-install check
+vtm_rest_port: 9070
+vtm_admin_port: 9090                              # fixed by the appliance
+vtm_license_file: ""                              # path ON THE HYPERVISOR; blank = developer mode
+# vtm_admin_password: survey (AAP) or vault (CLI); never committed
+
+# --- Lifecycle ---------------------------------------------------------------------
+vtm_replace: false                                # true = destroy an existing vtm-vm VM of the same name first
+vtm_ready_timeout: 900                            # seconds for first boot + initial config
+vtm_guestfs_backend: direct                       # LIBGUESTFS_BACKEND for virt-resize/virt-customize
+
+# --- NIOS (IPAM + DNS) ---------------------------------------------------------------
+vtm_use_nios: true                                # false = static IP only, no NIOS calls
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam
+vtm_nios_view: default
+vtm_nios_candidates: 5
+vtm_owner_comment: "vtm-vm: provisioned by AAP"  # destroy refuses VMs and records without it
+
+# --- Admin UI through NPM (wildcard cert stays in NPM) ---------------------------------
+vtm_npm_proxy: true
+vtm_admin_suffix: "-admin"                        # https://<name>-admin.<domain>
+npm_api: http://192.0.2.45:81/api
+npm_ip: 192.0.2.45
+npm_cert_domain: "*.{{ vtm_domain }}"
+npm_access_list_name: "LAN-only"
+
+# --- Secrets (AAP credential or vault.yml; never committed) ----------------------------
+# nios_api_password, npm_identity, npm_secret  (same keys as ipam-vm: its credential works here)

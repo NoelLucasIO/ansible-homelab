@@ -1,0 +1,101 @@
+---
+# Admin UI at https://<name>-admin.<domain> through NPM, using NPM's wildcard certificate
+# (the key never leaves NPM) and the LAN-only access list. Same pattern as ipam-vm's Cockpit proxy.
+- name: Log in to NPM
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/tokens"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    method: POST
+    body: {identity: "{{ npm_identity }}", secret: "{{ npm_secret }}"}
+    status_code: [200]
+  register: vtm_npm_login
+  no_log: true
+
+- name: NPM auth header
+  ansible.builtin.set_fact:
+    vtm_npm_headers: {Authorization: "Bearer {{ vtm_npm_login.json.token }}"}
+  no_log: true
+
+- name: Existing proxy hosts
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    user: ""
+    password: ""
+    force_basic_auth: false
+    body_format: raw  # no body; the json default sends 'null', which NPM rejects (400)
+    headers: "{{ vtm_npm_headers }}"
+  register: vtm_npm_hosts
+
+- name: Create the proxy host
+  when: vtm_npm_hosts.json | selectattr('domain_names', 'contains', vtm_admin_fqdn) | list | length == 0
+  block:
+    - name: Certificates
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/certificates"
+        user: ""
+        password: ""
+        force_basic_auth: false
+        body_format: raw
+        headers: "{{ vtm_npm_headers }}"
+      register: vtm_npm_certs
+
+    - name: Access lists
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/access-lists"
+        user: ""
+        password: ""
+        force_basic_auth: false
+        body_format: raw
+        headers: "{{ vtm_npm_headers }}"
+      register: vtm_npm_acls
+
+    - name: NPM proxy host to the admin UI, {{ vtm_admin_fqdn }}
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/proxy-hosts"
+        user: ""
+        password: ""
+        force_basic_auth: false
+        method: POST
+        headers: "{{ vtm_npm_headers }}"
+        status_code: [200, 201]
+        body:
+          domain_names: ["{{ vtm_admin_fqdn }}"]
+          forward_scheme: https
+          forward_host: "{{ vtm_addr }}"
+          forward_port: "{{ vtm_admin_port | int }}"
+          certificate_id: "{{ (vtm_npm_certs.json | selectattr('domain_names', 'contains', npm_cert_domain) | sort(attribute='expires_on') | last).id | int }}"
+          access_list_id: "{{ (vtm_npm_acls.json | selectattr('name', 'equalto', npm_access_list_name) | first).id | int }}"
+          ssl_forced: true
+          http2_support: true
+          block_exploits: true
+          allow_websocket_upgrade: true
+          caching_enabled: false
+          hsts_enabled: false
+          hsts_subdomains: false
+          advanced_config: ""
+          locations: []
+          meta: {letsencrypt_agree: false, dns_challenge: false}
+      changed_when: true
+
+- name: A record pointing at NPM, {{ vtm_admin_fqdn }}
+  when: vtm_use_nios | bool
+  block:
+    - name: Look up in NIOS, {{ vtm_admin_fqdn }}
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a?name={{ vtm_admin_fqdn }}&view={{ vtm_nios_view }}"
+      register: vtm_admin_a
+
+    - name: Create it
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a"
+        method: POST
+        status_code: [201]
+        body:
+          name: "{{ vtm_admin_fqdn }}"
+          ipv4addr: "{{ npm_ip }}"
+          view: "{{ vtm_nios_view }}"
+          comment: "{{ vtm_owner_comment }}"
+      when: vtm_admin_a.json | length == 0
+      changed_when: true

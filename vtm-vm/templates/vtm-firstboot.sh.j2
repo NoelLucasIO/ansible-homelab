@@ -1,0 +1,39 @@
+#!/bin/sh
+# vtm-vm first boot: answer the appliance's Initial Configuration from /root/vtm-answers.
+# Installed by virt-customize, run once by vtm-firstboot.service. Log: /logs/vtm-firstboot.log
+set -u
+ANS=/root/vtm-answers
+MAC={{ vtm_macs[0] }}
+exec >>/logs/vtm-firstboot.log 2>&1
+echo "$(date -Is) vtm-firstboot: start"
+
+if [ ! -f "$ANS" ]; then
+   echo "no $ANS, nothing to do"
+   exit 0
+fi
+# Whatever happens, the answers (admin password) and the licence copy don't stay on the disk,
+# and this never runs again. A failed first boot is redeployed (vtm_replace=true), not retried.
+cleanup() {
+   shred -u "$ANS" /root/vtm-license 2>/dev/null || rm -f "$ANS" /root/vtm-license
+   systemctl disable vtm-firstboot.service
+}
+trap cleanup EXIT
+
+# The management NIC is the one with the MAC vtm-vm gave NIC 1 (names depend on z-nic-naming).
+IF=""
+for _ in $(seq 1 60); do
+   IF=$(ip -o link | awk -v m="$MAC" 'tolower($0) ~ m { sub(/:$/, "", $2); sub(/@.*/, "", $2); print $2; exit }')
+   [ -n "$IF" ] && break
+   sleep 2
+done
+if [ -z "$IF" ]; then
+   echo "no interface with MAC $MAC"; ip -o link
+   exit 1
+fi
+echo "management interface: $IF"
+sed -i "s/@MGMT_IF@/$IF/g" "$ANS"
+
+/usr/bin/z-initial-config --replay-from="$ANS" --noninteractive --noloop
+rc=$?
+echo "$(date -Is) z-initial-config exit $rc"
+exit $rc

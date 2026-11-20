@@ -1,0 +1,69 @@
+---
+# Creates/updates in AAP (controller API, built-in modules only) the job templates
+# "vTM VM deploy" and "vTM VM destroy", each with its survey. Idempotent: rerun after
+# changing site values to refresh the survey defaults.
+#
+#   ansible-playbook vtm-vm/playbooks/aap-setup.yml -e @site-vars.yml \
+#     -e aap_url=https://aap.example.com -e aap_user=admin -e aap_password=... \
+#     -e aap_machine_credential='homelab ansible' -e aap_secrets_credential='ipam-vm secrets'
+#
+# Secrets: the playbooks use the same keys as ipam-vm (nios_api_password, npm_identity,
+# npm_secret), so the ipam-vm secrets credential is attached as is. The vTM admin password
+# is a survey answer (password field), never stored in the template.
+- name: AAP job templates for vtm-vm
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - vtm_vm_defaults
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: homelab
+    aap_inventory: homelab
+    aap_kvm_hosts: [fedora]
+    aap_machine_credential: ""     # machine credential for the KVM hosts
+    aap_secrets_credential: ""     # credential that injects nios_api_password, npm_identity, npm_secret
+    aap_ee: ""                     # execution environment name; blank = project/org default
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ aap_user }}"
+      password: "{{ aap_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 204]
+  tasks:
+    - name: Project and inventory ids
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/{{ item.kind }}/?name={{ item.name | urlencode }}"
+      loop:
+        - {kind: projects, name: "{{ aap_project }}"}
+        - {kind: inventories, name: "{{ aap_inventory }}"}
+      register: aap_ids
+
+    - name: Both found
+      ansible.builtin.assert:
+        that: aap_ids.results | map(attribute='json.count') | min > 0
+        fail_msg: "Project '{{ aap_project }}' or inventory '{{ aap_inventory }}' not found in AAP."
+
+    - name: Execution environment id
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/execution_environments/?name={{ aap_ee | urlencode }}"
+      register: aap_ee_q
+      when: aap_ee | length > 0
+
+    - name: Create or update the job templates
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_job_template.yml"
+      loop:
+        - name: vTM VM deploy
+          playbook: vtm-vm/playbooks/deploy.yml
+          description: Ivanti vTM virtual appliance on KVM, NIOS IPAM, unattended initial configuration, NPM admin proxy
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-deploy.yml.j2') | from_yaml }}"
+        - name: vTM VM destroy
+          playbook: vtm-vm/playbooks/destroy.yml
+          description: Remove a vtm-vm VM, its disk, NIOS records and NPM proxy host
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-destroy.yml.j2') | from_yaml }}"
+      loop_control:
+        loop_var: aap_jt
+        label: "{{ aap_jt.name }}"

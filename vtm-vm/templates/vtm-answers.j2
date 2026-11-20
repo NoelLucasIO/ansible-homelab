@@ -1,0 +1,25 @@
+# z-initial-config replay file for {{ vtm_fqdn }}, written by vtm-vm. Removed after first boot.
+# Keys from z-initial-config --list-options (vTM 22.9). The interface placeholder in the
+# net_ keys becomes the name of the NIC carrying {{ vtm_macs[0] }} at first boot.
+accept_license=accept
+zta_register=n
+register=n
+{% if vtm_license_file | length > 0 %}
+license_key=/root/vtm-license
+{% endif %}
+hostname={{ vtm_fqdn }}
+net_@MGMT_IF@_addr={{ vtm_addr }}
+net_@MGMT_IF@_mask={{ vtm_mask }}
+net_gateway={{ vtm_gateway }}
+{% if vtm_management_restrict | bool %}
+net_management={{ vtm_addr }}
+{% endif %}
+dns={{ vtm_dns_list | join(' ') }}
+search={{ vtm_search if vtm_search | length > 0 else vtm_domain }}
+timezone={{ vtm_timezone }}
+password={{ vtm_admin_password }}
+ssh_intrusion={{ 'y' if vtm_ssh_intrusion | bool else 'n' }}
+rest_enabled={{ 'y' if vtm_rest_enabled | bool else 'n' }}
+{% if vtm_rest_enabled | bool %}
+rest_port={{ vtm_rest_port }}
+{% endif %}

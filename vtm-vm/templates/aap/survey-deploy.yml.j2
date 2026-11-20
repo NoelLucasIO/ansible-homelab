@@ -1,0 +1,41 @@
+# Survey for "vTM VM deploy". Defaults are rendered from vtm_vm_defaults + your site values.
+{% macro q(var, name, type, default='', desc='', required=true, min=none, max=none, choices=none) -%}
+- question_name: "{{ name }}"
+  question_description: "{{ desc }}"
+  variable: {{ var }}
+  type: {{ type }}
+  required: {{ required | lower }}
+  default: {{ default | to_json }}
+{% if min is not none %}  min: {{ min }}
+{% endif %}{% if max is not none %}  max: {{ max }}
+{% endif %}{% if choices %}  choices: {{ choices | to_json }}
+{% endif %}
+{%- endmacro %}
+# --- placement and sizing
+{{ q('vtm_kvm_host', 'Hypervisor', 'multiplechoice', vtm_kvm_host, 'KVM host to build on', choices=aap_kvm_hosts) }}
+{{ q('vtm_vcpus', 'vCPUs', 'integer', vtm_vcpus | int, 'Minimum 1', min=1, max=64) }}
+{{ q('vtm_memory_gb', 'Memory (GB)', 'integer', vtm_memory_gb | int, 'Minimum 2', min=2, max=512) }}
+{{ q('vtm_disk_gb', 'Disk (GB)', 'integer', vtm_disk_gb | int, 'Minimum 20. /logs gets the disk minus ~9.3 GB (30 -> ~20.7 GB /logs); root stays 4 GB.', min=20, max=2000) }}
+{{ q('vtm_nic_count', 'NICs', 'integer', vtm_nic_count | int, 'NIC 1 is management (gets the address below); the rest come up unconfigured', min=1, max=8) }}
+{{ q('vtm_extra_nic_network', 'NICs 2..n attach to', 'text', vtm_extra_nic_network, "virt-install --network value, e.g. bridge=br0 or network=isolated", required=false, max=100) }}
+{{ q('vtm_replace', 'Replace an existing vtm-vm VM of the same name', 'multiplechoice', 'false', 'true destroys the VM and its disk and redeploys. Hand-built VMs are always refused.', choices=['false', 'true']) }}
+# --- identity
+{{ q('vtm_name', 'Name', 'text', vtm_name, 'Lowercase; libvirt name and hostname (<name>.<domain>)', min=1, max=63) }}
+{{ q('vtm_domain', 'DNS domain', 'text', vtm_domain, '', min=3, max=200) }}
+# --- network
+{{ q('vtm_ip', 'Management IP', 'text', '', 'Blank = next free address from NIOS in ' ~ vtm_network, required=false, max=15) }}
+{{ q('vtm_use_nios', 'Use NIOS (IPAM, A + PTR)', 'multiplechoice', vtm_use_nios | string | lower, 'false = static IP only; then the IP is required', choices=['true', 'false']) }}
+{{ q('vtm_prefix', 'Prefix length', 'integer', vtm_prefix | int, '', min=8, max=30) }}
+{{ q('vtm_gateway', 'Gateway', 'text', vtm_gateway, '', min=7, max=15) }}
+{{ q('vtm_dns', 'DNS servers', 'text', (vtm_dns if vtm_dns is string else vtm_dns | join(' ')), 'Space- or comma-separated', min=7, max=200) }}
+{{ q('vtm_search', 'DNS search domains', 'text', '', 'Blank = the DNS domain', required=false, max=200) }}
+{{ q('vtm_management_restrict', 'Bind admin UI and SSH to the management IP only', 'multiplechoice', vtm_management_restrict | string | lower, '', choices=['false', 'true']) }}
+# --- initial configuration
+{{ q('vtm_timezone', 'Time zone', 'text', vtm_timezone, 'Olson name (z-initial-config --list-timezones)', min=3, max=64) }}
+{{ q('vtm_ssh_intrusion', 'SSH intrusion protection', 'multiplechoice', vtm_ssh_intrusion | string | lower, '', choices=['true', 'false']) }}
+{{ q('vtm_rest_enabled', 'REST API', 'multiplechoice', vtm_rest_enabled | string | lower, 'Used by the post-install check', choices=['true', 'false']) }}
+{{ q('vtm_rest_port', 'REST API port', 'integer', vtm_rest_port | int, '', min=1, max=65535) }}
+{{ q('vtm_license_file', 'Licence key file (path on the hypervisor)', 'text', vtm_license_file, 'Blank = developer mode (no licence)', required=false, max=255) }}
+{{ q('vtm_npm_proxy', 'Publish the admin UI through NPM', 'multiplechoice', vtm_npm_proxy | string | lower, 'https://<name>' ~ vtm_admin_suffix ~ '.<domain>, LAN-only', choices=['true', 'false']) }}
+# --- secret
+{{ q('vtm_admin_password', 'admin password', 'password', '', 'Replaces the default admin/admin; 8+ characters', min=8, max=128) }}

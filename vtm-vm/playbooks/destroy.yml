@@ -1,0 +1,101 @@
+---
+# Remove a vTM VM this project built, its disk, its NIOS records and its NPM proxy host.
+#   ansible-playbook playbooks/destroy.yml -e vtm_kvm_host=fedora -e vtm_name=vtm01 -e confirm=vtm01
+# Refuses VMs and NIOS objects without the vtm-vm marker, so hand-built appliances are safe.
+- name: Destroy a vTM VM
+  hosts: "{{ vtm_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password | default(omit) }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200]
+      timeout: 60
+  roles:
+    - vtm_vm_defaults
+  tasks:
+    - name: Names
+      ansible.builtin.set_fact:
+        vtm_fqdn: "{{ vtm_name }}.{{ vtm_domain }}"
+        vtm_admin_fqdn: "{{ vtm_name }}{{ vtm_admin_suffix }}.{{ vtm_domain }}"
+
+    - name: Confirmation must repeat the name
+      ansible.builtin.assert:
+        that: confirm | default('') == vtm_name
+        fail_msg: "Set confirm={{ vtm_name }} to destroy it."
+
+    - name: Domain state
+      ansible.builtin.command: virsh domstate {{ vtm_name }}
+      register: vtm_domstate
+      changed_when: false
+      failed_when: false
+
+    - name: Remove the domain and its disks
+      when: vtm_domstate.rc == 0
+      block:
+        - name: Who built it?
+          ansible.builtin.command: virsh desc {{ vtm_name }}
+          register: vtm_desc
+          changed_when: false
+
+        - name: Only VMs built by vtm-vm
+          ansible.builtin.assert:
+            that: vtm_owner_comment in vtm_desc.stdout
+            fail_msg: "{{ vtm_name }} was not built by vtm-vm; not touching it."
+
+        - name: Its disks
+          ansible.builtin.command: virsh domblklist {{ vtm_name }} --details
+          register: vtm_blk
+          changed_when: false
+
+        - name: Power off
+          ansible.builtin.command: virsh destroy {{ vtm_name }}
+          when: vtm_domstate.stdout != 'shut off'
+          changed_when: true
+
+        - name: Undefine
+          ansible.builtin.command: virsh undefine {{ vtm_name }}
+          changed_when: true
+
+        - name: Delete its disks (never the base image)
+          ansible.builtin.file:
+            path: "{{ item.split()[-1] }}"
+            state: absent
+          loop: "{{ vtm_blk.stdout_lines | select('match', '^\\s*file\\s+disk\\s') | reject('search', vtm_base_dir) | list }}"
+
+    - name: NPM proxy host
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/npm_proxy_remove.yml"
+      when: vtm_npm_proxy | bool
+
+    - name: NIOS cleanup (only records carrying the vtm-vm comment)
+      when: vtm_use_nios | bool
+      block:
+        - name: Host record
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:host?name={{ vtm_fqdn }}&view={{ vtm_nios_view }}&_return_fields=comment"
+          register: vtm_host
+
+        - name: Admin UI A record
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:a?name={{ vtm_admin_fqdn }}&view={{ vtm_nios_view }}&_return_fields=comment"
+          register: vtm_admin_a
+
+        - name: Delete them
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ item._ref }}"
+            method: DELETE
+          loop: >-
+            {{ (vtm_host.json + vtm_admin_a.json) | selectattr('comment', 'defined')
+               | selectattr('comment', 'equalto', vtm_owner_comment) | list }}
+          loop_control:
+            label: "{{ item._ref.split(':')[-1] }}"
+          changed_when: true
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "{{ vtm_name }}: domain, disk, NPM proxy and NIOS records removed (where vtm-vm owned them)."

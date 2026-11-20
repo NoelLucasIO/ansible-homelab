@@ -1,0 +1,55 @@
+---
+# Deploy one Ivanti vTM (Virtual Traffic Manager) virtual appliance on KVM, configured unattended.
+#   ansible-playbook playbooks/deploy.yml -e vtm_kvm_host=fedora -e vtm_name=vtm01 [...]
+# Steps: address from NIOS (or static) -> base image unpacked once -> thin disk with /logs grown
+# and the z-initial-config answers injected offline -> VM started -> first boot configures it ->
+# admin UI and REST answer on the new address -> admin UI published through NPM.
+- name: Deploy a vTM virtual appliance
+  hosts: "{{ vtm_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password | default(omit) }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200, 201]
+      timeout: 60
+  roles:
+    - vtm_vm_defaults
+  tasks:
+    - name: 1. Inputs, names, hypervisor checks
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/preflight.yml"
+
+    - name: 2. Management address (NIOS IPAM or static) and DNS
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/allocate_ip.yml"
+
+    - name: 3. Base image (unpacked once per version)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/base_image.yml"
+
+    - name: 4. Disk, first-boot answers, VM
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/build_vm.yml"
+
+    - name: 5. First boot configures it; wait for the admin server and REST API
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/wait_ready.yml"
+
+    - name: 6. Admin UI through NPM with the wildcard certificate
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/npm_proxy.yml"
+      when: vtm_npm_proxy | bool
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "{{ vtm_fqdn }} is up on {{ inventory_hostname }}: {{ vtm_vcpus }} vCPU, {{ vtm_memory_gb }} GB, {{ vtm_disk_gb }} GB, {{ vtm_nic_count }} NIC(s)."
+          - "Admin UI: https://{{ vtm_addr }}:{{ vtm_admin_port }}/  (user admin, the survey password)"
+          - "{{ ('Via NPM: https://' ~ vtm_admin_fqdn ~ '/') if vtm_npm_proxy | bool else 'NPM proxy not requested.' }}"
+          - >-
+            {{ ('REST API: https://' ~ vtm_addr ~ ':' ~ vtm_rest_port ~ '/api/tm/ (versions '
+                ~ (vtm_rest.json.children | default([]) | map(attribute='name') | join(', ')) ~ ')')
+               if vtm_rest_enabled | bool else 'REST API off.' }}
+          - "{{ vtm_fqdn }} via {{ vtm_gateway }}: {{ (vtm_dig.stdout | default('')) or 'not checked or not resolving yet' }}"
+          - "Licence: {{ 'installed from ' ~ vtm_license_file if vtm_license_file | length > 0 else 'none (developer mode)' }}"
+          - "NICs 2..{{ vtm_nic_count }} are attached with no address; configure them in the admin UI (System > Networking)."
