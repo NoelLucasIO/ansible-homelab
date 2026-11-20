@@ -55,7 +55,7 @@
     - name: Done
       ansible.builtin.debug:
         msg:
-          - "{{ vtm_fqdn }} is up on {{ inventory_hostname }}: {{ vtm_vcpus }} vCPU, {{ vtm_memory_gb }} GB, {{ vtm_disk_gb }} GB, {{ vtm_nic_count }} NIC(s)."
+          - "{{ vtm_fqdn }} is up on {{ inventory_hostname }} (os-variant {{ vtm_variant | default('n/a: existing VM') }})."
           - "Admin UI: https://{{ vtm_addr }}:{{ vtm_admin_port }}/  (user admin, the survey password)"
           - "{{ ('Via NPM: https://' ~ vtm_admin_fqdn ~ '/') if vtm_npm_proxy | bool else 'NPM proxy not requested.' }}"
           - >-
@@ -64,4 +64,6 @@
                if vtm_rest_enabled | bool else 'REST API off.' }}
           - "{{ vtm_fqdn }} via {{ vtm_gateway }}: {{ (vtm_dig.stdout | default('')) or 'not checked or not resolving yet' }}"
           - "Licence: {{ 'installed from ' ~ vtm_license_file if vtm_license_file | length > 0 else 'none (developer mode)' }}"
-          - "NICs 2..{{ vtm_nic_count }} are attached with no address; configure them in the admin UI (System > Networking)."
+          - >-
+            {{ ('NICs 2..' ~ vtm_nic_count ~ ' are attached with no address; configure them in the admin UI (System > Networking).')
+               if vtm_nic_count | int > 1 else 'One NIC (management).' }}

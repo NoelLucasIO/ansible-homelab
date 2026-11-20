@@ -105,7 +105,7 @@
           {{ ([vtm_os_variant] + vtm_os_variant_fallbacks)
              | select('in', vtm_osinfo.stdout | regex_findall('[\w.-]+')) | first | default('linux2022') }}
 
-    - name: Create and start the VM (os-variant {{ vtm_variant }})
+    - name: Create and start the VM
       ansible.builtin.command:
         argv: >-
           {{ ['virt-install',
