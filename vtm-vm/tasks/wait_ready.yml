@@ -17,6 +17,7 @@
         password: "{{ vtm_admin_password }}"
         force_basic_auth: true
         validate_certs: false
+        body_format: raw   # no body; the play's json default would send 'null'
         status_code: [200]
       register: vtm_rest
       until: vtm_rest.status == 200
