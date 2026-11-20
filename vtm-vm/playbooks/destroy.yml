@@ -2,6 +2,18 @@
 # Remove a vTM VM this project built, its disk, its NIOS records and its NPM proxy host.
 #   ansible-playbook playbooks/destroy.yml -e vtm_kvm_host=fedora -e vtm_name=vtm01 -e confirm=vtm01
 # Refuses VMs and NIOS objects without the vtm-vm marker, so hand-built appliances are safe.
+- name: The hypervisor must be in the inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check vtm_kvm_host
+      ansible.builtin.assert:
+        that: vtm_kvm_host | default('fedora') in groups['all']
+        fail_msg: >-
+          No inventory host named '{{ vtm_kvm_host | default('fedora') }}'. Inventory hosts:
+          {{ groups['all'] | join(', ') }}. Fix the survey's hypervisor choices (aap_kvm_hosts).
+
 - name: Destroy a vTM VM
   hosts: "{{ vtm_kvm_host | default('fedora') }}"
   become: true

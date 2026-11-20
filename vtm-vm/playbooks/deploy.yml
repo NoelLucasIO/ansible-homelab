@@ -4,6 +4,18 @@
 # Steps: address from NIOS (or static) -> base image unpacked once -> thin disk with /logs grown
 # and the z-initial-config answers injected offline -> VM started -> first boot configures it ->
 # admin UI and REST answer on the new address -> admin UI published through NPM.
+- name: The hypervisor must be in the inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Check vtm_kvm_host
+      ansible.builtin.assert:
+        that: vtm_kvm_host | default('fedora') in groups['all']
+        fail_msg: >-
+          No inventory host named '{{ vtm_kvm_host | default('fedora') }}'. Inventory hosts:
+          {{ groups['all'] | join(', ') }}. Fix the survey's hypervisor choices (aap_kvm_hosts).
+
 - name: Deploy a vTM virtual appliance
   hosts: "{{ vtm_kvm_host | default('fedora') }}"
   become: true
