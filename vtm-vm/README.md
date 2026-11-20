@@ -7,7 +7,7 @@ survey carries every Initial Configuration answer and the VM sizing.
 ## What deploy.yml does
 
 1. **Preflight** on the chosen hypervisor: survey checks, the zip present, installs
-   `guestfs-tools`, `guestfish` and `unzip` if missing.
+   `libguestfs` (which provides `guestfish`), `guestfs-tools` and `unzip` if missing.
 2. **Address**: the survey value, or the next free address in `vtm_network` from NIOS (pinged
    first), recorded as a NIOS host record (A + PTR). Reruns reuse the record.
 3. **Base image**: the zip is unpacked once per version into `vtm_base_dir` and made read-only.
@@ -95,6 +95,5 @@ be overridden from the inventory.
   - that `vtm-firstboot.service` runs after the appliance's own network bring-up
     (`z-initial-network` raises DHCP on NIC 1 first, then `z-initial-config` replaces it with the static address);
   - the REST API path and port (`https://<ip>:9070/api/tm/`) on 22.9;
-  - that `guestfish` is its own package on the hypervisor's distribution (it is on Fedora).
 - Not automated: anything after the Initial Configuration, such as traffic IP groups, pools,
   virtual servers and syslog targets. With REST on, those can be a follow-up playbook.

@@ -13,7 +13,7 @@ vtm_bridge: br0                                   # NIC 1 (management)
 vtm_extra_nic_network: "bridge=br0"               # NICs 2..n: virt-install --network value
 # Packages that provide virt-resize, guestfish, virt-filesystems and unzip, by os_family.
 vtm_hypervisor_packages:
-  RedHat: [guestfs-tools, guestfish, unzip]     # Fedora / RHEL
+  RedHat: [libguestfs, guestfs-tools, unzip]     # Fedora / RHEL (guestfish is in libguestfs)
   Archlinux: [libguestfs, guestfs-tools, unzip]  # Arch / CachyOS
   Debian: [guestfs-tools, libguestfs-tools, unzip]
   default: [guestfs-tools, unzip]
