@@ -1,0 +1,145 @@
+---
+# OS install on the serial console, then root SSH access, then first disk boot.
+#   root SSH already works          -> nothing to do (rerun)
+#   VM off, OS disk empty           -> install-boot definition + console driver (VM powers off at the end)
+#   VM off, OS installed            -> final definition, add the HCP root key, start
+# A running VM without root SSH is left alone: that state needs a person (or hcp_replace).
+- name: Root SSH key, public half
+  ansible.builtin.command: ssh-keygen -y -f {{ hcp_root_key_file }}
+  delegate_to: localhost
+  become: false
+  register: hcp_root_pub
+  changed_when: false
+
+- name: SSH command prefix for the node
+  ansible.builtin.set_fact:
+    hcp_ssh: >-
+      {{ ['ssh', '-i', hcp_root_key_file, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+          '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
+          '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
+          'root@' ~ hcp_fe_ip] }}
+
+- name: Root SSH already working?
+  ansible.builtin.command:
+    argv: "{{ hcp_ssh + ['true'] }}"
+  delegate_to: localhost
+  become: false
+  register: hcp_root_ok
+  changed_when: false
+  failed_when: false
+
+# Decided once: a block's `when` is re-checked for every task inside it, and a skipped task
+# still overwrites its registered variable.
+- name: Does the node need installing or booting?
+  ansible.builtin.set_fact:
+    hcp_needs_boot: "{{ hcp_root_ok.rc != 0 }}"
+
+- name: Install and first boot
+  when: hcp_needs_boot | bool
+  block:
+    - name: Domain state
+      ansible.builtin.command: virsh domstate {{ hcp_domain_name }}
+      register: hcp_state_now
+      changed_when: false
+
+    - name: VM must be off here
+      ansible.builtin.assert:
+        that: hcp_state_now.stdout == 'shut off'
+        fail_msg: >-
+          {{ hcp_domain_name }} is running but root SSH on {{ hcp_fe_ip }} doesn't work, so it is
+          mid-install or was installed by hand. Shut it down and rerun, or set hcp_replace to rebuild.
+
+    - name: Disk helper
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/files/hcp_disk.sh"
+        dest: "{{ hcp_log_dir }}/hcp_disk.sh"
+        mode: "0750"
+
+    - name: Is the OS installed on {{ hcp_disks[0] }}?
+      ansible.builtin.command: "{{ hcp_log_dir }}/hcp_disk.sh probe {{ hcp_disks[0] }}"
+      register: hcp_probe
+      changed_when: false
+
+    - name: OS install on the serial console
+      when: "'EMPTY' in hcp_probe.stdout"
+      block:
+        - name: Install-boot definition
+          ansible.builtin.command: virsh define {{ hcp_log_dir }}/{{ hcp_domain_name }}-install.xml
+          changed_when: true
+
+        - name: Console driver
+          ansible.builtin.copy:
+            src: "{{ playbook_dir | dirname }}/files/hcp_console.py"
+            dest: "{{ hcp_log_dir }}/hcp_console.py"
+            mode: "0750"
+
+        - name: Answers file
+          ansible.builtin.copy:
+            dest: "{{ hcp_log_dir }}/{{ hcp_domain_name }}.answers.json"
+            mode: "0600"
+            content: >-
+              {{ {'domain': hcp_domain_name,
+                  'log': hcp_log_dir ~ '/' ~ hcp_domain_name ~ '-console.log',
+                  'wipe': 'c' if hcp_wipe_volumes | bool else 'p',
+                  'allow_reinstall': hcp_replace | bool,
+                  'fe_ip': hcp_fe_ip, 'fe_mask': hcp_frontend_mask, 'fe_gateway': hcp_gateway,
+                  'be_ip': hcp_backend_ip,
+                  'timeout': hcp_os_install_timeout | int} | to_json }}
+
+        # Follow along on the hypervisor: tail -f <hcp_log_dir>/<VM>-console.log
+        - name: OS install (Clear volumes, network setup; the VM powers off when done)
+          ansible.builtin.command:
+            argv: [python3, "{{ hcp_log_dir }}/hcp_console.py", "{{ hcp_log_dir }}/{{ hcp_domain_name }}.answers.json"]
+          async: "{{ hcp_os_install_timeout | int + 300 }}"
+          poll: 30
+          changed_when: true
+
+      rescue:
+        - name: Console transcript tail
+          ansible.builtin.command: tail -n 40 {{ hcp_log_dir }}/{{ hcp_domain_name }}-console.log
+          register: hcp_console_tail
+          changed_when: false
+          failed_when: false
+
+        - name: OS install failed
+          ansible.builtin.fail:
+            msg: "{{ hcp_console_tail.stdout_lines | default([]) }}"
+
+    - name: VM is off after the installer's reboot
+      ansible.builtin.command: virsh domstate {{ hcp_domain_name }}
+      register: hcp_state_after
+      until: hcp_state_after.stdout == 'shut off'
+      retries: 12
+      delay: 5
+      changed_when: false
+
+    - name: Final definition (disk boot)
+      ansible.builtin.command: virsh define {{ hcp_log_dir }}/{{ hcp_domain_name }}-final.xml
+      changed_when: true
+
+    - name: HCP root key into root's authorized_keys_fe
+      ansible.builtin.command:
+        argv: ["{{ hcp_log_dir }}/hcp_disk.sh", inject, "{{ hcp_disks[0] }}", "{{ hcp_root_pub.stdout }} hcp-vm"]
+      register: hcp_inject
+      changed_when: "'INJECTED' in hcp_inject.stdout"
+
+    - name: First disk boot
+      ansible.builtin.command: virsh start {{ hcp_domain_name }}
+      changed_when: true
+
+    - name: Root SSH on {{ hcp_fe_ip }}
+      ansible.builtin.command:
+        argv: "{{ hcp_ssh + ['true'] }}"
+      delegate_to: localhost
+      become: false
+      register: hcp_root_ready
+      until: hcp_root_ready.rc == 0
+      retries: 60
+      delay: 10
+      changed_when: false
+
+  always:
+    - name: Remove the answers file
+      ansible.builtin.file:
+        path: "{{ hcp_log_dir }}/{{ hcp_domain_name }}.answers.json"
+        state: absent

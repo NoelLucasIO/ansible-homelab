@@ -1,0 +1,7 @@
+---
+# CLI: copy to vault.yml, fill in, then `ansible-vault encrypt vault.yml` (vault.yml is git-ignored).
+# AAP: the "HCP VM secrets" credential type supplies the first two (see README); the
+# install password is a survey answer.
+nios_api_password: CHANGE_ME
+hcp_root_key_file: ~/.ssh/hcp_root          # HCP root SSH private key on the control node
+hcp_install_password: CHANGE_ME             # 14+ characters; replaces the factory password

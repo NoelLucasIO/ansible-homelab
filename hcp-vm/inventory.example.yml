@@ -1,0 +1,23 @@
+---
+# Copy to inventory.yml (git-ignored). In AAP these are host/inventory variables.
+all:
+  hosts:
+    fedora:
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3
+      hcp_iso_path: /srv/iso/HS222_10.1.1.14.iso
+      hcp_os_disk_dir: /srv/vm
+      hcp_data_disk_dir: /srv/vm
+    p620ai:
+      ansible_host: 192.0.2.50
+      ansible_python_interpreter: /usr/bin/python3
+      hcp_iso_path: /home/user/Downloads/HS222_10.1.1.14.iso
+      hcp_os_disk_dir: /home/user/VM
+      hcp_data_disk_dir: /data
+  vars:
+    hcp_domain: example.com
+    hcp_frontend_network: 192.0.2.0/24
+    hcp_gateway: 192.0.2.1
+    hcp_dns_servers: 192.0.2.25
+    hcp_timeserver: 192.0.2.1
+    nios_ip: 192.0.2.25

@@ -1,0 +1,46 @@
+# Survey for "HCP VM deploy". Defaults are rendered from hcp_vm_defaults + your site values.
+{% macro q(var, name, type, default='', desc='', required=true, min=none, max=none, choices=none) -%}
+- question_name: "{{ name }}"
+  question_description: "{{ desc }}"
+  variable: {{ var }}
+  type: {{ type }}
+  required: {{ required | lower }}
+  default: {{ default | to_json }}
+{% if min is not none %}  min: {{ min }}
+{% endif %}{% if max is not none %}  max: {{ max }}
+{% endif %}{% if choices %}  choices: {{ choices | to_json }}
+{% endif %}
+{%- endmacro %}
+# --- placement and sizing
+{{ q('hcp_kvm_host', 'Hypervisor', 'multiplechoice', hcp_kvm_host, 'KVM host to build on', choices=aap_kvm_hosts) }}
+{{ q('hcp_vcpus', 'vCPUs', 'integer', hcp_vcpus | int, 'Minimum 4', min=4, max=64) }}
+{{ q('hcp_memory_gb', 'Memory (GB)', 'integer', hcp_memory_gb | int, 'Minimum 32', min=32, max=512) }}
+{{ q('hcp_os_disk_gb', 'OS disk (GB)', 'integer', hcp_os_disk_gb | int, 'Minimum 100', min=100, max=2000) }}
+{{ q('hcp_data_disk_gb', 'Data disk size (GB, each)', 'integer', hcp_data_disk_gb | int, 'Minimum 500; thin-provisioned qcow2', min=500, max=16000) }}
+{{ q('hcp_data_disk_count', 'Data disks', 'integer', hcp_data_disk_count | int, 'Minimum 2', min=2, max=8) }}
+{{ q('hcp_replace', 'Replace an existing hcp-vm VM of the same name', 'multiplechoice', 'false', 'true destroys the VM and its disks and reinstalls. Hand-built VMs are always refused.', choices=['false', 'true']) }}
+# --- identity
+{{ q('hcp_cluster', 'System short name', 'text', hcp_cluster, 'System name becomes <short>.<domain>, e.g. hcp02.' ~ hcp_domain, min=1, max=31) }}
+{{ q('hcp_domain', 'DNS domain', 'text', hcp_domain, 'Parent zone in NIOS; the system name is delegated from it', min=3, max=200) }}
+{{ q('hcp_vm_name', 'libvirt VM name', 'text', '', 'Blank = short name in upper case', required=false, max=64) }}
+{{ q('hcp_serial_number', 'HCP serial number', 'text', hcp_serial_number, 'Letters, numbers, spaces, - _ #', min=1, max=32) }}
+{{ q('hcp_distributor_key', 'Distributor key', 'text', hcp_distributor_key, 'Case sensitive', min=1, max=64) }}
+# --- front-end network
+{{ q('hcp_frontend_ip', 'Front-end IP', 'text', '', 'Blank = next free address from NIOS in ' ~ hcp_frontend_network, required=false, max=15) }}
+{{ q('hcp_frontend_prefix', 'Front-end prefix length', 'integer', hcp_frontend_prefix | int, '', min=8, max=30) }}
+{{ q('hcp_gateway', 'Front-end gateway', 'text', hcp_gateway, '', min=7, max=15) }}
+{{ q('hcp_dns_servers', 'Corporate DNS servers', 'text', hcp_dns_servers, 'Comma-separated', min=7, max=200) }}
+{{ q('hcp_downstream_dns_mode', 'Downstream DNS mode', 'multiplechoice', hcp_downstream_dns_mode, '', choices=['basic', 'advanced']) }}
+{{ q('hcp_use_nios', 'Use NIOS (IPAM, PTR, delegation)', 'multiplechoice', hcp_use_nios | string | lower, 'false = static front-end IP only; then the front-end IP is required', choices=['true', 'false']) }}
+# --- back-end network
+{{ q('hcp_backend_ip', 'Back-end IP', 'text', hcp_backend_ip, '/24 on the isolated ' ~ hcp_backend_network ~ ' network. Last octet (101-254) is the node number.', min=7, max=15) }}
+{{ q('hcp_mcast', 'Back-end multicast address', 'text', hcp_mcast, '', min=9, max=15) }}
+# --- time
+{{ q('hcp_timeserver', 'Time server', 'text', hcp_timeserver, "Name/IP, or 'internal'", min=1, max=200) }}
+{{ q('hcp_timezone', 'Time zone', 'text', hcp_timezone, 'Olson name', min=3, max=64) }}
+# --- options
+{{ q('hcp_enable_replication', 'Enable replication', 'multiplechoice', hcp_enable_replication | string | lower, '', choices=['true', 'false']) }}
+{{ q('hcp_encryption', 'Encryption at rest', 'multiplechoice', hcp_encryption | string | lower, 'Cannot be changed after install', choices=['false', 'true']) }}
+{{ q('hcp_minimum_ssl_protocol', 'Minimum TLS', 'multiplechoice', hcp_minimum_ssl_protocol, '', choices=['TLSv1.2', 'TLSv1.3']) }}
+# --- secret
+{{ q('hcp_install_password', "New 'install' password", 'password', '', 'Replaces the factory password at first login; 14+ characters', min=14, max=128) }}

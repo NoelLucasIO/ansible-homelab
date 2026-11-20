@@ -1,0 +1,99 @@
+---
+# Front-end address for the node, recorded in NIOS IPAM.
+#   * existing host record for the node name -> reuse it (reruns are safe)
+#   * survey gave an address -> record that one
+#   * otherwise -> next free address in hcp_frontend_network that doesn't answer ping
+# The host record is IPAM-only (configure_for_dns: false): the node's A record lives in
+# HCP's own DNS under the delegated zone. The PTR comes from NIOS itself: adding the
+# delegation (name server name + address) auto-creates it ("Auto-created by Add Zone").
+- name: Static front-end address, no NIOS
+  ansible.builtin.set_fact:
+    hcp_fe_ip: "{{ hcp_frontend_ip }}"
+  when: not hcp_use_nios | bool
+
+- name: NIOS IPAM
+  when: hcp_use_nios | bool
+  block:
+    # No view filter: an IPAM-only host record (configure_for_dns false) has no DNS view.
+    - name: Look up in NIOS, {{ hcp_node_fqdn }}
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:host?name={{ hcp_node_fqdn }}&_return_fields=name,ipv4addrs,comment,view"
+      register: hcp_existing
+
+    - name: Existing record must match a survey address
+      ansible.builtin.assert:
+        that: >-
+          hcp_frontend_ip | length == 0 or
+          hcp_existing.json[0].ipv4addrs[0].ipv4addr == hcp_frontend_ip
+        fail_msg: >-
+          NIOS already has {{ hcp_node_fqdn }} at {{ hcp_existing.json[0].ipv4addrs[0].ipv4addr }},
+          not {{ hcp_frontend_ip }}. Run the destroy template first, or leave the front-end IP blank.
+      when: hcp_existing.json | length > 0
+
+    - name: Reuse its address
+      ansible.builtin.set_fact:
+        hcp_fe_ip: "{{ hcp_existing.json[0].ipv4addrs[0].ipv4addr }}"
+      when: hcp_existing.json | length > 0
+
+    - name: Choose and record an address
+      when: hcp_existing.json | length == 0
+      block:
+        - name: Survey address must be free in NIOS
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/ipv4address?ip_address={{ hcp_frontend_ip }}&_return_fields=status,names"
+          register: hcp_ipam_state
+          when: hcp_frontend_ip | length > 0
+
+        - name: Survey address is unused
+          ansible.builtin.assert:
+            that: hcp_ipam_state.json | length == 0 or hcp_ipam_state.json[0].status == 'UNUSED'
+            fail_msg: "{{ hcp_frontend_ip }} is already used in NIOS by {{ hcp_ipam_state.json[0].names | default([]) }}."
+          when: hcp_frontend_ip | length > 0
+
+        - name: Find the network
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/network?network={{ hcp_frontend_network }}&network_view={{ hcp_nios_network_view | default('default') }}"
+          register: hcp_net
+          when: hcp_frontend_ip | length == 0
+
+        - name: Ask NIOS for free addresses
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ hcp_net.json[0]._ref }}?_function=next_available_ip"
+            method: POST
+            body: '{"num": {{ hcp_nios_candidates | int }}}'
+          register: hcp_free
+          when: hcp_frontend_ip | length == 0
+
+        - name: Ping the candidates (catches devices NIOS doesn't know)
+          ansible.builtin.command: ping -c 2 -W 1 {{ item }}
+          loop: "{{ [hcp_frontend_ip] if hcp_frontend_ip | length > 0 else hcp_free.json.ips }}"
+          register: hcp_ping
+          changed_when: false
+          failed_when: false
+
+        - name: Pick the first silent one
+          ansible.builtin.set_fact:
+            hcp_fe_ip: "{{ (hcp_ping.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list | first) | default('') }}"
+
+        - name: Need a free address
+          ansible.builtin.assert:
+            that: hcp_fe_ip | length > 0
+            fail_msg: >-
+              {{ 'The survey address ' ~ hcp_frontend_ip ~ ' answers ping.' if hcp_frontend_ip | length > 0
+                 else 'All ' ~ hcp_nios_candidates ~ ' addresses NIOS offered answer ping.' }}
+
+        - name: IPAM host record (no DNS; the name lives in HCP's delegated zone)
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:host"
+            method: POST
+            status_code: [201]
+            body:
+              name: "{{ hcp_node_fqdn }}"
+              configure_for_dns: false
+              comment: "{{ hcp_owner_comment }}"
+              ipv4addrs: [{ipv4addr: "{{ hcp_fe_ip }}"}]
+          changed_when: true
+
+- name: Front-end address
+  ansible.builtin.debug:
+    msg: "{{ hcp_node_fqdn }} -> {{ hcp_fe_ip }}/{{ hcp_frontend_prefix }} ({{ hcp_frontend_mask }}), gw {{ hcp_gateway }}"

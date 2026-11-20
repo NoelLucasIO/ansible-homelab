@@ -1,0 +1,142 @@
+---
+# Install HCP with arc-deploy and the rendered cluster.cfg, no wizard.
+# Runs from the controller over SSH as root (HCP root key, added to authorized_keys_fe before
+# first boot). The node's Python (3.6) is older than ansible-core supports, so these are plain
+# ssh commands, not modules. arc-deploy runs as 'install' under ssh-agent with install's key,
+# the way the install shell starts it, detached because it reboots the node when it finishes.
+- name: Paths on the node
+  ansible.builtin.set_fact:
+    hcp_ad_dir: /home/install/arc-deploy
+
+- name: Node identity and install state
+  ansible.builtin.command:
+    argv: "{{ hcp_ssh + [hcp_state_cmd] }}"
+  vars:
+    hcp_state_cmd: >-
+      ip -o -4 addr show | grep -q ' {{ hcp_backend_ip }}/' && echo BACKEND_OK;
+      test -x {{ hcp_ad_dir }}/arc-deploy.py && echo SETUP_FILES;
+      test -e /home/install/.change_passwd && echo PW_PENDING;
+      grep -qs 'Successful ArcDeploy run' {{ hcp_ad_dir }}/logs/arc-deploy.log && echo INSTALLED;
+      { pgrep -u install -f 'python[0-9.]* .*arc-deploy[.]py' || pgrep -f '[d]eploy_daemon[.]py'; } >/dev/null && echo RUNNING; true
+  delegate_to: localhost
+  become: false
+  register: hcp_node_state
+  changed_when: false
+
+- name: Node is the one we built
+  ansible.builtin.assert:
+    that:
+      - "'BACKEND_OK' in hcp_node_state.stdout"
+    fail_msg: >-
+      {{ hcp_fe_ip }} does not hold back-end address {{ hcp_backend_ip }}: it is not the node this run
+      built. Check {{ hcp_log_dir }}/{{ hcp_domain_name }}-console.log on {{ inventory_hostname }}.
+
+- name: Set the install password (replaces the factory one; nothing on the command line)
+  ansible.builtin.command:
+    argv: "{{ hcp_ssh + ['passwd --stdin install >/dev/null && rm -f /home/install/.change_passwd'] }}"
+    stdin: "{{ hcp_install_password }}"
+  delegate_to: localhost
+  become: false
+  no_log: true
+  when: "'PW_PENDING' in hcp_node_state.stdout"
+  changed_when: true
+
+- name: Extract the HCP setup files from the ISO (what the menu's 'Get HCP Setup Files' does)
+  ansible.builtin.command:
+    argv: "{{ hcp_ssh + [hcp_extract_cmd] }}"
+  vars:
+    hcp_extract_cmd: >-
+      set -e; m=$(mktemp -d); mount -o ro /dev/sr0 $m;
+      tar -xzf $m/arc-deploy-*.tgz -C /home/install; umount $m; rmdir $m;
+      chown -R install:install {{ hcp_ad_dir }}; test -x {{ hcp_ad_dir }}/arc-deploy.py
+  delegate_to: localhost
+  become: false
+  when: "'SETUP_FILES' not in hcp_node_state.stdout"
+  changed_when: true
+
+- name: Run arc-deploy
+  when:
+    - "'INSTALLED' not in hcp_node_state.stdout"
+    - "'RUNNING' not in hcp_node_state.stdout"
+  block:
+    - name: Write cluster.cfg
+      ansible.builtin.command:
+        argv: "{{ hcp_ssh + [hcp_write_cmd] }}"
+        stdin: "{{ lookup('ansible.builtin.template', playbook_dir | dirname ~ '/templates/cluster.cfg.j2') }}"
+      vars:
+        hcp_write_cmd: >-
+          cat > {{ hcp_ad_dir }}/cluster.cfg &&
+          chown install:install {{ hcp_ad_dir }}/cluster.cfg && chmod 640 {{ hcp_ad_dir }}/cluster.cfg
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    # No --password: arc-deploy logs its options; the install password was set above and
+    # arc-deploy syncs it to the other nodes. Started as a transient systemd unit so it is fully
+    # detached from this SSH session (arc-deploy reconfigures the network and reboots the node).
+    # IgnoreOnIsolate: arc-deploy's daemon switches the default target, which would otherwise
+    # stop the unit and kill arc-deploy's main process mid-install.
+    - name: Start arc-deploy (fresh install, config file, no prompts)
+      ansible.builtin.command:
+        argv: "{{ hcp_ssh + [hcp_start_cmd] }}"
+      vars:
+        hcp_start_cmd: >-
+          systemd-run --unit=hcp-vm-arc-deploy --collect --uid=install --setenv=HOME=/home/install
+          -p WorkingDirectory={{ hcp_ad_dir }} -p IgnoreOnIsolate=yes
+          -p StandardOutput=file:/home/install/hcp-vm-install.out -p StandardError=file:/home/install/hcp-vm-install.out
+          /usr/bin/ssh-agent /bin/bash -c
+          'ssh-add -q /home/install/.ssh/id_rsa && exec ./arc-deploy.py --installUser -f -c {{ hcp_ad_dir }}/cluster.cfg --noprompt'
+          && sleep 5 && pgrep -u install -f 'python[0-9.]* .*arc-deploy[.]py' >/dev/null
+          || { journalctl -u hcp-vm-arc-deploy --no-pager | tail -20; tail -20 /home/install/hcp-vm-install.out; exit 1; }
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+# Done = the log says so, or the console is already up: arc-deploy reboots about a minute
+# after logging success, and an installed HCP closes SSH on the front-end, so a poll that
+# misses that window would otherwise never see DONE.
+- name: Wait for arc-deploy (the node reboots at the end; unreachable spells are expected)
+  ansible.builtin.command:
+    argv:
+      - bash
+      - -c
+      - >-
+        {{ hcp_ssh | map('quote') | join(' ') }} {{ hcp_poll_cmd | quote }} 2>/dev/null
+        || { timeout 3 bash -c '</dev/tcp/{{ hcp_fe_ip }}/8000' 2>/dev/null && echo SMC_UP; }
+        || echo UNREACHABLE
+  vars:
+    hcp_poll_cmd: >-
+      if grep -qs 'Successful ArcDeploy run' {{ hcp_ad_dir }}/logs/arc-deploy.log; then echo DONE;
+      elif pgrep -u install -f 'python[0-9.]* .*arc-deploy[.]py' >/dev/null || pgrep -f '[d]eploy_daemon[.]py' >/dev/null; then echo RUNNING;
+      else echo STOPPED; fi
+  delegate_to: localhost
+  become: false
+  register: hcp_poll
+  until: hcp_poll.stdout_lines | last | default('') in ['DONE', 'STOPPED', 'SMC_UP']
+  retries: "{{ (hcp_install_timeout | int / 30) | int }}"
+  delay: 30
+  changed_when: false
+  failed_when: false
+
+- name: Why arc-deploy stopped
+  ansible.builtin.command:
+    argv: "{{ hcp_ssh + ['tail -40 /home/install/hcp-vm-install.out; grep -E \"SEVERE|ERROR\" ' ~ hcp_ad_dir ~ '/logs/arc-deploy.log | tail -20'] }}"
+  delegate_to: localhost
+  become: false
+  register: hcp_why
+  changed_when: false
+  failed_when: false
+  when: (hcp_poll.stdout_lines | default(['']) | last) not in ['DONE', 'SMC_UP']
+
+- name: Arc-deploy finished
+  ansible.builtin.assert:
+    that: (hcp_poll.stdout_lines | default(['']) | last) in ['DONE', 'SMC_UP']
+    fail_msg: "arc-deploy did not finish ({{ hcp_poll.stdout | default('node unreachable') }}):\n{{ hcp_why.stdout | default('') }}"
+
+- name: System Management Console listening (8000)
+  ansible.builtin.wait_for:
+    host: "{{ hcp_fe_ip }}"
+    port: 8000
+    timeout: 1800
+  delegate_to: localhost
+  become: false

@@ -1,0 +1,134 @@
+---
+# Remove an HCP VM this project built, and its NIOS objects.
+#   ansible-playbook playbooks/destroy.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 -e confirm=HCP02
+# Refuses VMs and NIOS objects without the hcp-vm marker, so hand-built systems are safe.
+- name: Destroy an HCP VM
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200, 201]
+      timeout: 60
+  roles:
+    - hcp_vm_defaults
+  tasks:
+    - name: Names
+      ansible.builtin.set_fact:
+        hcp_clname: "{{ hcp_cluster }}.{{ hcp_domain }}"
+        hcp_domain_name: "{{ hcp_vm_name if hcp_vm_name | length > 0 else hcp_cluster | upper }}"
+        hcp_node_fqdn: "{{ hcp_hostname_prefix }}{{ hcp_backend_ip.split('.')[-1] }}.{{ hcp_cluster }}.{{ hcp_domain }}"
+
+    - name: Confirmation must name the VM
+      ansible.builtin.assert:
+        that: confirm | default('') == hcp_domain_name
+        fail_msg: "Set confirm={{ hcp_domain_name }} to destroy it."
+
+    - name: Domain state
+      ansible.builtin.command: virsh domstate {{ hcp_domain_name }}
+      register: hcp_domstate
+      changed_when: false
+      failed_when: false
+
+    - name: Remove the domain
+      when: hcp_domstate.rc == 0
+      block:
+        - name: Who built it?
+          ansible.builtin.command: virsh desc {{ hcp_domain_name }}
+          register: hcp_desc
+          changed_when: false
+
+        - name: Only VMs built by hcp-vm
+          ansible.builtin.assert:
+            that: hcp_owner_comment in hcp_desc.stdout
+            fail_msg: "{{ hcp_domain_name }} was not built by hcp-vm; not touching it."
+
+        - name: Its disks
+          ansible.builtin.command: virsh domblklist {{ hcp_domain_name }} --details
+          register: hcp_blk
+          changed_when: false
+
+        - name: Power off
+          ansible.builtin.command: virsh destroy {{ hcp_domain_name }}
+          when: hcp_domstate.stdout != 'shut off'
+          changed_when: true
+
+        - name: Undefine
+          ansible.builtin.command: virsh undefine {{ hcp_domain_name }}
+          changed_when: true
+
+        - name: Delete the disks (never the ISO)
+          ansible.builtin.file:
+            path: "{{ item.split()[-1] }}"
+            state: absent
+          loop: "{{ hcp_blk.stdout_lines | select('match', '^\\s*file\\s+disk\\s') | list }}"
+
+    - name: NIOS cleanup
+      when: hcp_use_nios | bool
+      block:
+        - name: Host record
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:host?name={{ hcp_node_fqdn }}&_return_fields=name,comment,ipv4addrs"
+          register: hcp_host
+
+        - name: Delegation
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/zone_delegated?fqdn={{ hcp_clname }}&view={{ hcp_nios_view }}&_return_fields=comment,delegate_to"
+          register: hcp_deleg
+
+        # Ownership: host records by the hcp-vm comment; PTRs by pointing at the node's name from
+        # an address one of those host records holds. The delegation's PTR is system-generated
+        # ("Auto-created by Add Zone"): NIOS refuses to delete it and removes it with the zone,
+        # so the zone goes first and only leftover, deletable PTRs are cleaned up after.
+        - name: What hcp-vm owns
+          ansible.builtin.set_fact:
+            hcp_owned_hosts: "{{ hcp_host.json | selectattr('comment', 'defined') | selectattr('comment', 'equalto', hcp_owner_comment) | list }}"
+
+        - name: Owned addresses
+          ansible.builtin.set_fact:
+            hcp_owned_ips: "{{ hcp_owned_hosts | map(attribute='ipv4addrs') | flatten | map(attribute='ipv4addr') | list }}"
+
+        - name: Drop this node from the delegation, or delete it if it was the last
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ hcp_deleg.json[0]._ref }}"
+            method: "{{ 'DELETE' if hcp_remaining | length == 0 else 'PUT' }}"
+            body: "{{ omit if hcp_remaining | length == 0 else {'delegate_to': hcp_remaining} }}"
+          vars:
+            hcp_remaining: "{{ hcp_deleg.json[0].delegate_to | rejectattr('name', 'equalto', hcp_node_fqdn) | list }}"
+          when:
+            - hcp_deleg.json | length > 0
+            - hcp_deleg.json[0].comment | default('') == hcp_owner_comment
+          changed_when: true
+
+        - name: Delete hcp-vm's host records
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ item._ref }}"
+            method: DELETE
+          loop: "{{ hcp_owned_hosts }}"
+          loop_control:
+            label: "{{ item.name }} {{ item.ipv4addrs[0].ipv4addr }}"
+          changed_when: true
+
+        - name: PTRs still pointing at the node
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:ptr?ptrdname={{ hcp_node_fqdn }}&view={{ hcp_nios_view }}&_return_fields=ipv4addr,comment"
+          register: hcp_ptrs_left
+
+        - name: Delete leftover PTRs from owned addresses (not system-generated ones)
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ item._ref }}"
+            method: DELETE
+          loop: >-
+            {{ hcp_ptrs_left.json | selectattr('ipv4addr', 'in', hcp_owned_ips)
+               | rejectattr('comment', 'defined') | list
+               + (hcp_ptrs_left.json | selectattr('ipv4addr', 'in', hcp_owned_ips)
+                  | selectattr('comment', 'defined') | rejectattr('comment', 'match', 'Auto-created') | list) }}
+          loop_control:
+            label: "{{ item.ipv4addr }}"
+          changed_when: true

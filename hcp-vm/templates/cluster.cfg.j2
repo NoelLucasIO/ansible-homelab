@@ -1,0 +1,71 @@
+#Written by AD wizard - do not hand edit
+# {{ ansible_managed }}. Same keys the 10.1.1.14 wizard writes for a single-node VM install.
+[settings]
+dns_servers = '{{ hcp_dns_servers | replace(' ', '') }}'
+encryption_management = 'False'
+contact_info = 'United States: (800) 446-0744. Outside the United States: (858) 547-4526'
+storage_type = 'internal'
+gateway = '{{ hcp_gateway }}'
+policy_enabled = 'True'
+encryption = '{{ hcp_encryption | bool }}'
+regionmapsize = '{{ hcp_regionmapsize | default(32) }}'
+reinstall_source_no_dns = 'False'
+strict_time_settings = 'False'
+max_simul_mkfs = '4'
+serial_number = '{{ hcp_serial_number }}'
+zero_copy_failover = 'False'
+idx_configured = 'False'
+max_simul_nodes = '10'
+software_version = '{{ hcp_software_version }}'
+encryption_ivmode = 'essiv:sha256'
+frontend_mtu = '{{ hcp_frontend_mtu }}'
+dns_enabled = '{{ hcp_dns_enabled | bool }}'
+mdpl = '{{ hcp_mdpl }}'
+chassis_ip_csl = 'None'
+currentmsgversion = '{{ hcp_msg_version | default(100100) }}'
+mm_filesystem = '{{ hcp_filesystem }}'
+enable_replication = '{{ hcp_enable_replication | bool }}'
+max_nodes_add = '4'
+dedicated_db_vol_configured = 'False'
+pg_autovacuum = 'True'
+mcast = '{{ hcp_mcast }}'
+capablemsgversion = '{{ hcp_msg_version | default(100100) }}'
+timezone = '{{ hcp_timezone }}'
+backend_mtu = '{{ hcp_backend_mtu }}'
+current_time = 'None'
+clname = '{{ hcp_clname }}'
+encryption_key_length = '256'
+lockdown = '{{ hcp_lockdown | bool }}'
+minimum_ssl_protocol = '{{ hcp_minimum_ssl_protocol }}'
+single_node = 'False'
+encryption_flight = 'True'
+blade_servers = 'False'
+distributor_key = '{{ hcp_distributor_key }}'
+downstream_dns_mode = '{{ hcp_downstream_dns_mode }}'
+kerberos_ssh = 'False'
+encryption_cipher = 'AES'
+disk_flush = 'False'
+hostname_prefix = '{{ hcp_hostname_prefix }}'
+timeserver = '{{ hcp_timeserver }}'
+gateway6_2 = 'None'
+gateway6_1 = 'None'
+old_software_version = 'False'
+num_shared_idx = '1'
+filesystem = '{{ hcp_filesystem }}'
+sdu_configured = 'False'
+
+[install]
+type = install-fresh
+config_key = 9.3.0
+
+[arc_nodes]
+node0 = {{ hcp_backend_ip }}
+
+[search_nodes]
+
+[removed_nodes]
+
+[dedicated_db_volumes]
+
+[arrays]
+

@@ -1,0 +1,167 @@
+---
+# Back-end network, disks and the libvirt domain. The domain is defined, not started:
+# the console driver starts it through `virsh start --console` so no prompt is missed.
+- name: Back-end network present?
+  ansible.builtin.command: virsh net-info {{ hcp_backend_network }}
+  register: hcp_netinfo
+  changed_when: false
+  failed_when: false
+
+- name: Define the isolated back-end network
+  when: hcp_netinfo.rc != 0
+  block:
+    - name: Render network XML
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/backend-net.xml.j2"
+        dest: /tmp/{{ hcp_backend_network }}.xml
+        mode: "0600"
+
+    - name: Define it
+      ansible.builtin.command: virsh net-define /tmp/{{ hcp_backend_network }}.xml
+      changed_when: true
+
+    - name: Autostart it
+      ansible.builtin.command: virsh net-autostart {{ hcp_backend_network }}
+      changed_when: true
+
+    - name: Remove the XML
+      ansible.builtin.file:
+        path: /tmp/{{ hcp_backend_network }}.xml
+        state: absent
+
+- name: Back-end network active?
+  ansible.builtin.command: virsh net-info {{ hcp_backend_network }}
+  register: hcp_netinfo
+  changed_when: false
+
+- name: Start the back-end network
+  ansible.builtin.command: virsh net-start {{ hcp_backend_network }}
+  when: hcp_netinfo.stdout is search('Active:\s+no')
+  changed_when: true
+
+# --- Replace: only VMs this project built --------------------------------------------
+- name: Replace the existing domain
+  when:
+    - hcp_domstate.rc == 0
+    - hcp_replace | bool
+  block:
+    - name: Who built it?
+      ansible.builtin.command: virsh desc {{ hcp_domain_name }}
+      register: hcp_desc
+      changed_when: false
+
+    - name: Only replace VMs built by hcp-vm
+      ansible.builtin.assert:
+        that: hcp_owner_comment in hcp_desc.stdout
+        fail_msg: >-
+          {{ hcp_domain_name }} was not built by this project (its description lacks
+          "{{ hcp_owner_comment }}"). Remove it by hand, or pick another VM name.
+
+    - name: Power off
+      ansible.builtin.command: virsh destroy {{ hcp_domain_name }}
+      when: hcp_domstate.stdout != 'shut off'
+      changed_when: true
+
+    - name: Undefine
+      ansible.builtin.command: virsh undefine {{ hcp_domain_name }}
+      changed_when: true
+
+    - name: Delete its disks
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ hcp_disks }}"
+
+    - name: Domain is gone now
+      ansible.builtin.set_fact:
+        hcp_domstate: {rc: 1, stdout: ''}
+
+- name: Domain already exists (no replace), leaving it as is
+  ansible.builtin.debug:
+    msg: "{{ hcp_domain_name }} exists; continuing with the remaining steps. Set hcp_replace to rebuild it."
+  when: hcp_domstate.rc == 0
+
+# --- Build -------------------------------------------------------------------------
+# Two definitions of the same domain:
+#   install: boots the ISO's kernel directly with console=tty0 console=ttyS0 (the installer's
+#            serial mode, so every prompt reaches the console driver) and on_reboot=destroy,
+#            so the installer's final reboot powers the VM off;
+#   final:   disk boot, ISO still attached (arc-deploy reads it), kept in hcp_log_dir.
+- name: Installer kernel and initrd from the ISO (once per ISO)
+  ansible.builtin.shell: |
+    set -e
+    d={{ hcp_installer_dir | quote }}
+    [ -s "$d/bzImage" ] && [ -s "$d/initrd.img" ] && exit 0
+    m=$(mktemp -d); trap 'umount "$m" 2>/dev/null; rmdir "$m"' EXIT
+    mount -o loop,ro {{ hcp_iso_path | quote }} "$m"
+    mkdir -p "$d"
+    cp "$m/kernels/bzImage" "$m/isolinux/initrd.img" "$d/"
+    echo extracted
+  args:
+    executable: /bin/bash
+  register: hcp_kernel
+  changed_when: "'extracted' in hcp_kernel.stdout"
+
+- name: Disks (thin qcow2; virt-install needs them to exist)
+  ansible.builtin.command:
+    argv: [qemu-img, create, -q, -f, qcow2, "{{ item }}", "{{ hcp_os_disk_gb if idx == 0 else hcp_data_disk_gb }}G"]
+    creates: "{{ item }}"
+  loop: "{{ hcp_disks }}"
+  loop_control:
+    index_var: idx
+  when: hcp_domstate.rc != 0
+
+- name: Domain XML (final and install-boot)
+  ansible.builtin.command:
+    argv: >-
+      {{ ['virt-install', '--print-xml', '--check=all=off',
+          '--name=' ~ hcp_domain_name,
+          '--uuid=' ~ (hcp_domain_name | to_uuid),
+          '--metadata=description=' ~ hcp_owner_comment ~ ' (' ~ hcp_clname ~ ')',
+          '--memory=' ~ (hcp_memory_gb | int * 1024),
+          '--vcpus=' ~ hcp_vcpus,
+          '--cpu=host-passthrough',
+          '--machine=q35',
+          '--os-variant=' ~ hcp_os_variant,
+          '--disk=path=' ~ hcp_disks[0] ~ ',format=qcow2,bus=virtio,boot.order=1']
+         + hcp_disks[1:] | map('regex_replace', '^', '--disk=path=')
+                         | map('regex_replace', '$', ',format=qcow2,bus=virtio') | list
+         + ['--disk=path=' ~ hcp_iso_path ~ ',device=cdrom,bus=sata,readonly=on,boot.order=2',
+            '--network=bridge=' ~ hcp_frontend_bridge ~ ',model=virtio,mac=' ~ hcp_macs[0],
+            '--network=network=' ~ hcp_backend_network ~ ',model=virtio,mac=' ~ hcp_macs[1],
+            '--serial=pty', '--console=pty,target.type=serial',
+            '--graphics=vnc,listen=127.0.0.1',
+            '--channel=unix,target.type=virtio,target.name=org.qemu.guest_agent.0',
+            '--rng=/dev/urandom', '--watchdog=itco,action=reset',
+            '--import', '--noautoconsole']
+         + (['--boot=kernel=' ~ hcp_installer_dir ~ '/bzImage,initrd=' ~ hcp_installer_dir ~ '/initrd.img,'
+             ~ 'kernel_args="' ~ hcp_installer_args ~ '"', '--events=on_reboot=destroy'] if item == 'install' else []) }}
+  loop: [final, install]
+  register: hcp_xml
+  changed_when: false
+
+- name: Log and XML directory
+  ansible.builtin.file:
+    path: "{{ hcp_log_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Keep both XMLs
+  ansible.builtin.copy:
+    content: "{{ item.stdout }}"
+    dest: "{{ hcp_log_dir }}/{{ hcp_domain_name }}-{{ item.item }}.xml"
+    mode: "0600"
+  loop: "{{ hcp_xml.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Build the domain
+  when: hcp_domstate.rc != 0
+  block:
+    - name: Define it for the install boot
+      ansible.builtin.command: virsh define {{ hcp_log_dir }}/{{ hcp_domain_name }}-install.xml
+      changed_when: true
+
+    - name: Autostart with the host
+      ansible.builtin.command: virsh autostart {{ hcp_domain_name }}
+      changed_when: true

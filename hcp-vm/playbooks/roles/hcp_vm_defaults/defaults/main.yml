@@ -1,0 +1,83 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so inventory variables
+# (AAP inventory included), survey answers and -e all override them.
+# Documentation addresses (RFC 5737) and example.com: real values live in the inventory.
+
+# --- Where the VM is built -------------------------------------------------------
+# hcp_kvm_host picks the hypervisor (inventory hostname). Per-host paths go in host_vars:
+#   hcp_iso_path, hcp_os_disk_dir, hcp_data_disk_dir
+hcp_kvm_host: fedora
+hcp_iso_path: /var/lib/libvirt/images/HS222_10.1.1.14.iso
+hcp_os_disk_dir: /var/lib/libvirt/images
+hcp_data_disk_dir: /var/lib/libvirt/images
+hcp_frontend_bridge: br0
+hcp_backend_network: hcp-backend        # isolated libvirt network (no DHCP, no forwarding); created if missing
+hcp_os_variant: centos-stream9          # AOS is Stream 8 based, but Stream 9 is the profile known to work
+hcp_log_dir: /var/log/hcp-vm            # console transcripts and domain XMLs on the hypervisor
+hcp_installer_dir: "{{ hcp_os_disk_dir }}/.hcp-installer-{{ hcp_software_version }}"   # kernel + initrd from the ISO
+# Installer kernel line: the ISO's own, with tty0 first and ttyS0 last. The installer treats
+# "first console= is tty0" as a serial install, and the last console= owns the prompts.
+hcp_installer_args: "imode=node rw console=tty0 console=ttyS0,9600n1 quiet loglevel=1 pci=noaer selinux=0"
+
+# --- Sizing (HCP VM minimums: 4 vCPU, 32 GB, 100 GB OS, 2 x 500 GB data) ---------
+hcp_vcpus: 4
+hcp_memory_gb: 32
+hcp_os_disk_gb: 100
+hcp_data_disk_gb: 500
+hcp_data_disk_count: 2
+
+# --- Identity ----------------------------------------------------------------------
+hcp_cluster: hcp02                      # short name; the system name is <hcp_cluster>.<hcp_domain>
+hcp_domain: example.com
+hcp_vm_name: ""                         # libvirt domain name; blank = hcp_cluster in upper case (HCP02)
+hcp_hostname_prefix: hcp-node-          # node hostname = prefix + node number (back-end last octet)
+hcp_software_version: 10.1.1.14         # must match the ISO's arc-deploy build
+
+# --- Front-end network -------------------------------------------------------------
+hcp_frontend_ip: ""                     # blank = next free address from NIOS IPAM
+hcp_frontend_network: 192.0.2.0/24      # NIOS network to allocate from
+hcp_frontend_prefix: 24
+hcp_gateway: 192.0.2.1
+hcp_frontend_mtu: 1500
+hcp_dns_servers: 192.0.2.25             # comma-separated; HCP's corporate DNS servers
+hcp_dns_enabled: true
+hcp_downstream_dns_mode: basic          # basic | advanced
+
+# --- Back-end network --------------------------------------------------------------
+hcp_backend_ip: 198.51.100.101          # last octet = node number (101-254); /24 is fixed by the installer
+hcp_backend_mtu: 1500
+hcp_mcast: 238.177.1.1
+
+# --- Time --------------------------------------------------------------------------
+hcp_timeserver: 192.0.2.1               # or 'internal'
+hcp_timezone: America/New_York
+
+# --- System options ----------------------------------------------------------------
+hcp_serial_number: "00001"
+hcp_distributor_key: Arizona
+hcp_enable_replication: true
+hcp_encryption: false
+hcp_lockdown: true
+hcp_minimum_ssl_protocol: TLSv1.2       # TLSv1.2 | TLSv1.3
+hcp_filesystem: ext4
+hcp_mdpl: 2                             # what the wizard wrote on the working single-node lab system
+hcp_wipe_volumes: true                  # installer's "C) Clear storage volumes"
+
+# --- Lifecycle ---------------------------------------------------------------------
+hcp_replace: false                      # true = destroy an existing VM of the same name and redeploy
+hcp_os_install_timeout: 3600
+hcp_install_timeout: 3600
+
+# --- NIOS (IPAM + delegation) ------------------------------------------------------
+hcp_use_nios: true                      # false = static front-end IP only, no NIOS calls
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam
+hcp_nios_view: default
+hcp_nios_candidates: 5
+hcp_owner_comment: "hcp-vm: provisioned by AAP"   # destroy refuses NIOS objects without it
+
+# --- Secrets (AAP custom credential or vault.yml; never committed) ---------------------
+# nios_api_password, hcp_install_password (survey)
+# hcp_root_key_file: HCP root SSH private key (the credential injects it as a file). Its public
+# half is added to root's authorized_keys_fe on the new OS disk before first boot.

@@ -1,0 +1,4 @@
+# local values and secrets: never committed
+inventory.yml
+site-vars.yml
+**/vault.yml

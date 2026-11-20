@@ -1,0 +1,41 @@
+---
+# One job template: create or update, survey, credentials. Called from setup.yml per template.
+- name: Job template exists? {{ aap_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/?name={{ aap_jt.name | urlencode }}"
+  register: aap_jt_q
+
+- name: Create or update {{ aap_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ (aap_jt_q.json.results[0].id ~ '/') if aap_jt_q.json.count else '' }}"
+    method: "{{ 'PATCH' if aap_jt_q.json.count else 'POST' }}"
+    body: >-
+      {{ {'name': aap_jt.name,
+          'description': aap_jt.description,
+          'job_type': 'run',
+          'project': aap_ids.results[0].json.results[0].id,
+          'inventory': aap_ids.results[1].json.results[0].id,
+          'playbook': aap_jt.playbook,
+          'become_enabled': true,
+          'survey_enabled': true,
+          'ask_variables_on_launch': false}
+         | combine({'execution_environment': aap_ee_q.json.results[0].id}
+                   if aap_ee | length > 0 and aap_ee_q.json.count | default(0) > 0 else {}) }}
+  register: aap_jt_r
+  changed_when: true
+
+- name: Survey for {{ aap_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ aap_jt_r.json.id }}/survey_spec/"
+    method: POST
+    body:
+      name: "{{ aap_jt.name }}"
+      description: ""
+      spec: "{{ aap_jt.survey }}"
+  changed_when: true
+
+- name: Attach credentials to {{ aap_jt.name }}
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_attach_credential.yml"
+  loop: "{{ [aap_machine_credential, aap_secrets_credential] | select | list }}"
+  loop_control:
+    loop_var: aap_cred_name

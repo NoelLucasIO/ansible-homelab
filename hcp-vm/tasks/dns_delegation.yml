@@ -1,0 +1,58 @@
+---
+# <cluster>.<domain> is a delegated zone in NIOS whose name servers are the HCP nodes'
+# front-end addresses (glue). Created before the install: arc-deploy's DNS precheck
+# expects the system name to resolve. A later node is appended to delegate_to.
+- name: Look up the delegation, {{ hcp_clname }}
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/zone_delegated?fqdn={{ hcp_clname }}&view={{ hcp_nios_view }}&_return_fields=fqdn,delegate_to,comment"
+  register: hcp_deleg
+
+- name: Create the delegated zone
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/zone_delegated"
+    method: POST
+    status_code: [201]
+    body:
+      fqdn: "{{ hcp_clname }}"
+      view: "{{ hcp_nios_view }}"
+      comment: "{{ hcp_owner_comment }}"
+      delegate_to: [{name: "{{ hcp_node_fqdn }}", address: "{{ hcp_fe_ip }}"}]
+  when: hcp_deleg.json | length == 0
+  changed_when: true
+
+- name: This node's previous address in the delegation
+  ansible.builtin.set_fact:
+    hcp_old_addrs: >-
+      {{ (hcp_deleg.json[0].delegate_to if hcp_deleg.json | length > 0 else [])
+         | selectattr('name', 'equalto', hcp_node_fqdn) | rejectattr('address', 'equalto', hcp_fe_ip)
+         | map(attribute='address') | list }}
+
+- name: Add this node to the existing delegation
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/{{ hcp_deleg.json[0]._ref }}"
+    method: PUT
+    body:
+      delegate_to: >-
+        {{ (hcp_deleg.json[0].delegate_to | rejectattr('name', 'equalto', hcp_node_fqdn) | list)
+           + [{'name': hcp_node_fqdn, 'address': hcp_fe_ip}] }}
+  when:
+    - hcp_deleg.json | length > 0
+    - hcp_deleg.json[0].delegate_to | selectattr('name', 'equalto', hcp_node_fqdn)
+      | selectattr('address', 'equalto', hcp_fe_ip) | list | length == 0
+  changed_when: true
+
+# NIOS keeps the old address's auto-created PTR as a plain PTR when the delegation moves.
+- name: PTRs left at the node's old address
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/record:ptr?ipv4addr={{ item }}&ptrdname={{ hcp_node_fqdn }}&view={{ hcp_nios_view }}&_return_fields=comment"
+  loop: "{{ hcp_old_addrs }}"
+  register: hcp_old_ptrs
+
+- name: Remove them (never system-generated ones)
+  ansible.builtin.uri:
+    url: "{{ nios_wapi }}/{{ item._ref }}"
+    method: DELETE
+  loop: "{{ hcp_old_ptrs.results | map(attribute='json') | flatten | rejectattr('comment', 'defined') | list }}"
+  loop_control:
+    label: "{{ item._ref.split(':')[-1] }}"
+  changed_when: true

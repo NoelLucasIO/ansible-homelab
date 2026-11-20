@@ -1,0 +1,98 @@
+---
+# Creates/updates in AAP (controller API, built-in modules only):
+#   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
+#   * job templates "HCP VM deploy" (with survey) and "HCP VM destroy" (with survey)
+# Idempotent: rerun after changing defaults to refresh the surveys.
+#
+#   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml \
+#     -e aap_url=https://aap.example.com -e aap_user=admin -e aap_password=...
+#
+# Survey defaults come from the hcp_vm_defaults role overlaid with your site values, so the
+# launch page opens pre-filled with your lab's addresses. Afterwards, create one credential of
+# type "HCP VM secrets" and attach it (with the machine credential) to both templates.
+- name: AAP job templates for hcp-vm
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - hcp_vm_defaults
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: homelab
+    aap_inventory: homelab
+    aap_kvm_hosts: [fedora, p620ai]
+    aap_secrets_credential: ""            # name of the "HCP VM secrets" credential, if it exists already
+    aap_machine_credential: ""            # name of the machine credential for the KVM hosts
+    aap_ee: ""                            # execution environment name; blank = project/org default
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ aap_user }}"
+      password: "{{ aap_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 204]
+  tasks:
+    # --- credential type -----------------------------------------------------------
+    - name: Credential type exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ 'HCP VM secrets' | urlencode }}"
+      register: aap_ct
+
+    - name: Create or update the credential type
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/{{ (aap_ct.json.results[0].id ~ '/') if aap_ct.json.count else '' }}"
+        method: "{{ 'PATCH' if aap_ct.json.count else 'POST' }}"
+        body:
+          name: HCP VM secrets
+          kind: cloud
+          description: NIOS API password and HCP root SSH key for hcp-vm
+          inputs:
+            fields:
+              - {id: nios_api_password, label: NIOS API password, type: string, secret: true}
+              - {id: hcp_root_key, label: HCP root SSH private key, type: string, secret: true, multiline: true}
+            required: [nios_api_password, hcp_root_key]
+          injectors:
+            file:
+              template.hcp_root_key: "{% raw %}{{ hcp_root_key }}{% endraw %}\n"
+            extra_vars:
+              nios_api_password: "{% raw %}{{ nios_api_password }}{% endraw %}"
+              hcp_root_key_file: "{% raw %}{{ tower.filename.hcp_root_key }}{% endraw %}"
+      changed_when: true
+
+    # --- lookups ---------------------------------------------------------------------
+    - name: Project and inventory ids
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/{{ item.kind }}/?name={{ item.name | urlencode }}"
+      loop:
+        - {kind: projects, name: "{{ aap_project }}"}
+        - {kind: inventories, name: "{{ aap_inventory }}"}
+      register: aap_ids
+
+    - name: Both found
+      ansible.builtin.assert:
+        that: aap_ids.results | map(attribute='json.count') | min > 0
+        fail_msg: "Project '{{ aap_project }}' or inventory '{{ aap_inventory }}' not found in AAP."
+
+    - name: Execution environment id
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/execution_environments/?name={{ aap_ee | urlencode }}"
+      register: aap_ee_q
+      when: aap_ee | length > 0
+
+    # --- job templates ---------------------------------------------------------------
+    - name: Create or update the job templates
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_job_template.yml"
+      loop:
+        - name: HCP VM deploy
+          playbook: hcp-vm/playbooks/deploy.yml
+          description: Single-node HCP VM on KVM from the HCP ISO, NIOS IPAM + delegation, unattended install
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-deploy.yml.j2') | from_yaml }}"
+        - name: HCP VM destroy
+          playbook: hcp-vm/playbooks/destroy.yml
+          description: Remove an hcp-vm VM, its disks and its NIOS objects
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-destroy.yml.j2') | from_yaml }}"
+      loop_control:
+        loop_var: aap_jt
+        label: "{{ aap_jt.name }}"

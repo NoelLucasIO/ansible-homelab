@@ -1,0 +1,74 @@
+---
+# Deploy a single-node HCP (VSP One Object classic) VM on KVM from the HCP ISO, end to end.
+#   ansible-playbook playbooks/deploy.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 [...]
+# Steps: front-end IP from NIOS (or static) -> NIOS delegation -> back-end network, disks,
+# domain -> OS installer on the serial console (volumes, network) -> root key added to the
+# OS disk -> first boot -> install password, setup files, arc-deploy with a
+# rendered cluster.cfg -> System Management Console up on :8000.
+- name: Deploy an HCP VM
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200, 201]
+      timeout: 60
+  roles:
+    - hcp_vm_defaults
+  tasks:
+    - name: 1. Inputs, names, hypervisor checks
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/preflight.yml"
+
+    - name: 2. Front-end address (NIOS IPAM or static)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/allocate_ip.yml"
+
+    - name: 3. NIOS delegation for the system name (NIOS adds the PTR)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/dns_delegation.yml"
+      when: hcp_use_nios | bool
+
+    - name: 4. Back-end network, disks, domain
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/build_vm.yml"
+
+    # An installed HCP closes SSH on the front-end, so the console port is the rerun marker.
+    - name: Already installed? (System Management Console on :8000)
+      ansible.builtin.wait_for:
+        host: "{{ hcp_fe_ip }}"
+        port: 8000
+        timeout: 5
+      delegate_to: localhost
+      become: false
+      register: hcp_smc
+      ignore_errors: true    # closed is the normal case before the install
+
+    - name: 5. OS install on the serial console, root key, first boot
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/console_install.yml"
+      when: hcp_smc is failed
+
+    - name: 6. Install password, setup files, arc-deploy with cluster.cfg
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/hcp_install.yml"
+      when: hcp_smc is failed
+
+    - name: 7. Delegation answers through the LAN resolver
+      ansible.builtin.command: dig @{{ hcp_gateway }} +short +time=3 +tries=2 admin.{{ hcp_clname }}
+      register: hcp_dig
+      until: hcp_fe_ip in hcp_dig.stdout_lines
+      retries: 12
+      delay: 10
+      changed_when: false
+      failed_when: false     # report, don't fail: the install itself is done
+      when: hcp_use_nios | bool
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "{{ hcp_clname }} is installed on {{ hcp_domain_name }} ({{ inventory_hostname }})."
+          - "Node {{ hcp_node_fqdn }}: front-end {{ hcp_fe_ip }}, back-end {{ hcp_backend_ip }}."
+          - "System Management Console: https://admin.{{ hcp_clname }}:8000 (https://{{ hcp_fe_ip }}:8000)"
+          - "admin.{{ hcp_clname }} via {{ hcp_gateway }}: {{ hcp_dig.stdout | default('') or 'not resolving yet (NIOS delegation / HCP DNS)' }}"
+          - "Next: log in with the default security account and set up the system (not automated)."

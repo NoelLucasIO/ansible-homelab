@@ -1,0 +1,8 @@
+<!-- {{ ansible_managed }} -->
+<!-- HCP back-end: isolated L2 (no <forward>, no <ip>, so libvirt adds no DHCP, NAT or host address).
+     Node-to-node and multicast traffic stays on this host. -->
+<network>
+  <name>{{ hcp_backend_network }}</name>
+  <bridge name="{{ hcp_backend_bridge | default('virbr-hcpbe') }}" stp="off" delay="0"/>
+  <mtu size="{{ hcp_backend_mtu }}"/>
+</network>
