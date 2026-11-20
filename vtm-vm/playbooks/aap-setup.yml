@@ -20,7 +20,7 @@
     aap_api: "{{ aap_url }}/api/controller/v2"
     aap_project: ansible-homelab   # AAP project that syncs this repo; -e aap_project=... if yours is named differently
     aap_inventory: homelab         # -e aap_inventory=... likewise
-    aap_kvm_hosts: [fedora]
+    aap_kvm_hosts: [fedora]       # survey's hypervisor choices: -e '{"aap_kvm_hosts": ["fedora", "p620ai"]}'
     aap_machine_credential: ""     # machine credential for the KVM hosts
     aap_secrets_credential: ""     # credential that injects nios_api_password, npm_identity, npm_secret
     aap_ee: ""                     # execution environment name; blank = project/org default

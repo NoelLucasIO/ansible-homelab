@@ -56,7 +56,9 @@ sending them empty. See `templates/vtm-answers.j2`.
 
 ## Setup
 
-1. **Image on each hypervisor**: copy the vendor zip to the path in `vtm_image_zip` (host vars;
+1. **Image on each hypervisor**. Every hypervisor in the survey's list (`aap_kvm_hosts` in
+   `aap-setup.yml`) needs `vtm_image_zip`, `vtm_base_dir` and `vtm_disk_dir` as host variables,
+   and a `br0` bridge (or set `vtm_bridge`). copy the vendor zip to the path in `vtm_image_zip` (host vars;
    see `inventory.example.yml`). Licence key files (optional) also go on the hypervisor.
 2. **Secrets**: the same keys as ipam-vm (`nios_api_password`, `npm_identity`, `npm_secret`),
    so the ipam-vm secrets credential works unchanged. The admin password is a survey answer.

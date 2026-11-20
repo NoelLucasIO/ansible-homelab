@@ -11,6 +11,12 @@ vtm_base_dir: /var/lib/libvirt/images/vtm-base   # the zip is unpacked here once
 vtm_disk_dir: /var/lib/libvirt/images             # one thin qcow2 per VM
 vtm_bridge: br0                                   # NIC 1 (management)
 vtm_extra_nic_network: "bridge=br0"               # NICs 2..n: virt-install --network value
+# Packages that provide virt-resize, guestfish, virt-filesystems and unzip, by os_family.
+vtm_hypervisor_packages:
+  RedHat: [guestfs-tools, guestfish, unzip]     # Fedora / RHEL
+  Archlinux: [libguestfs, guestfs-tools, unzip]  # Arch / CachyOS
+  Debian: [guestfs-tools, libguestfs-tools, unzip]
+  default: [guestfs-tools, unzip]
 vtm_os_variant: ubuntu24.04                       # the appliance is Ubuntu 24.04.5
 vtm_os_variant_fallbacks: [ubuntu24.04, ubuntu22.04, linux2022]
 # The image's partitions: 1 BIOS boot, 2 /boot, 3+4 root A/B (4 GiB each, fixed), 5 swap,
