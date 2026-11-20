@@ -36,7 +36,7 @@
     src: "{{ playbook_dir | dirname }}/templates/systemd/{{ item }}.j2"
     dest: "/etc/systemd/system/{{ item }}"
     mode: "0644"
-  loop: [vigil-import@.service, vigil-feed-sync.service, vigil-feed-sync.timer]
+  loop: [vigil-import@.service, vigil-feed-sync.service, vigil-feed-sync.timer, vigil-code-fetch.service]
   register: vigil_sysunits
 
 - name: Job timers
@@ -80,4 +80,6 @@
       {{ (vigil_units.results | selectattr('changed') | map(attribute='c')
           | rejectattr('kind', 'equalto', 'job') | map(attribute='name') | list)
          + (vigil_containers | selectattr('env_file', 'defined') | map(attribute='name') | list
-            if vigil_dojo_env_changed | bool else []) }}
+            if vigil_dojo_env_changed | bool else [])
+         + (['vigil-falco'] if (vigil_falco_settings | default({})) is changed
+                              or (vigil_falco_rules_file | default({})) is changed else []) }}

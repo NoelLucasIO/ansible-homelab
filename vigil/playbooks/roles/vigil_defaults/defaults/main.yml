@@ -27,6 +27,10 @@ vigil_dojo_nginx_image: "docker.io/defectdojo/defectdojo-nginx:{{ vigil_dojo_ver
 vigil_valkey_image: docker.io/valkey/valkey:9.1.2-alpine
 vigil_nuclei_image: docker.io/projectdiscovery/nuclei:v3.11.1
 vigil_zap_image: docker.io/zaproxy/zap-stable:2.17.0
+vigil_falco_image: docker.io/falcosecurity/falco:0.45.2
+vigil_falcosidekick_image: docker.io/falcosecurity/falcosidekick:2.35.1
+vigil_semgrep_image: docker.io/semgrep/semgrep:1.186.0
+vigil_checkov_image: docker.io/bridgecrew/checkov:3.4.6
 
 # --- Ports (the pod shares the host network: keep clear of 80/443/5432/6379) --
 vigil_gsad_port: 9392                     # 127.0.0.1 only; gsad also serves the GSA web UI
@@ -35,6 +39,8 @@ vigil_dojo_port: 8080                     # DefectDojo nginx; fixed in its image
 vigil_dojo_uwsgi_http_port: 8081          # fixed in the uwsgi entrypoint, all interfaces
 vigil_dojo_uwsgi_port: 3031               # 127.0.0.1 only
 vigil_dojo_valkey_port: 6380              # 127.0.0.1 only; 6379 is often taken
+vigil_falco_port: 8765                    # 127.0.0.1 only; Falco's /healthz
+vigil_falcosidekick_port: 2801            # 127.0.0.1 only; events in, /metrics out
 
 # --- DefectDojo -------------------------------------------------------------------
 vigil_dojo_fqdn: "dojo.{{ vigil_domain }}"
@@ -81,10 +87,33 @@ vigil_nuclei_rate_limit: 100              # requests/second
 vigil_nuclei_concurrency: 25
 vigil_zap_spider_minutes: 2               # passive baseline per site
 
+# --- Code: Semgrep (SAST) + Checkov (IaC) of git repos -> DefectDojo -----------------
+# Each repo becomes a DefectDojo product. auth: true sends vigil_git_token (a read-only
+# token, secret) as "Authorization: token ..." (Forgejo/Gitea/GitHub). Empty list: no-op.
+vigil_code_repos: []
+#  - { name: ansible-homelab, url: "https://github.com/example/ansible-homelab.git" }
+#  - { name: homelab, url: "https://git.example.com/me/homelab.git", auth: true, product: Homelab (private) }
+vigil_semgrep_configs: [p/default]        # Semgrep registry rulesets (fetched each run)
+vigil_checkov_frameworks: [ansible, dockerfile, github_actions]   # secrets: gitleaks covers that
+
+# --- Falco: runtime detection on the host (modern eBPF), alerts -> Falcosidekick -> Loki ---
+vigil_falco_priority: notice              # lowest rule priority Falco emits
+vigil_falco_caps: [BPF, PERFMON, SYS_RESOURCE, SYS_PTRACE]   # older kernels (<5.8): SYS_ADMIN instead of BPF+PERFMON
+# Podman API sockets the container plugin reads names/images from: rootful, and the rootless
+# owner's (vigil_owner_uid is set in preflight). A socket listed here must exist at start.
+vigil_falco_podman_sockets:
+  - /run/podman/podman.sock
+  - "/run/user/{{ vigil_owner_uid }}/podman/podman.sock"
+vigil_falco_rules: []                     # extra rules/macros/exceptions, rendered to rules.d/vigil.yaml
+vigil_loki_push: http://127.0.0.1:3100    # Falcosidekick's Loki output
+vigil_falco_alert_priority: critical|alert|emergency   # Prometheus alert VigilFalcoCriticalEvent
+
 # --- Schedules (systemd OnCalendar, host local time) ----------------------------------
 vigil_oncalendar:
   nuclei: "Sat *-*-* 01:00"
   zap: "Sat *-*-* 04:00"
+  semgrep: "Sun *-*-* 03:00"              # each code scan fetches the repos first
+  checkov: "Sun *-*-* 03:30"              # apart from semgrep: imports into the same products
   gvm_export: "*-*-* 07:00"               # imports each scope's newest finished Greenbone report
   feed_sync: "*-*-* 05:30"                # pulls new Greenbone feed images
 

@@ -15,3 +15,7 @@ vigil_dojo_secret_key: CHANGE_ME           # Django SECRET_KEY, 50+ chars: token
 vigil_dojo_aes_key: CHANGE_ME              # DD_CREDENTIAL_AES_256_KEY, exactly 32 chars: token_urlsafe(24)
 vigil_gvm_admin_password: CHANGE_ME        # Greenbone web login (user: admin)
 vigil_grafana_db_password: CHANGE_ME       # read-only vigil_ro role used by Grafana
+
+# Optional: read-only git token for vigil_code_repos entries with auth: true
+# (Forgejo/Gitea: Settings > Applications, scope read:repository; GitHub: fine-grained, Contents: read)
+# vigil_git_token: CHANGE_ME

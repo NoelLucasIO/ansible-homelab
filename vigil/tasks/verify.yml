@@ -37,6 +37,29 @@
   retries: 10
   delay: 15
 
+- name: Falco and Falcosidekick answer (Falco's /healthz is up once its eBPF probe is loaded)
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item }}"
+    status_code: [200]
+  loop:
+    - "{{ vigil_falco_port }}/healthz"
+    - "{{ vigil_falcosidekick_port }}/ping"
+  register: vigil_falco_up
+  until: vigil_falco_up is succeeded
+  retries: 12
+  delay: 10
+
+- name: Falco log
+  ansible.builtin.command: journalctl -q --no-pager -o cat CONTAINER_NAME=vigil-falco --since -1h
+  register: vigil_falco_log
+  changed_when: false
+
+- name: Falco opened the syscall source with the modern eBPF probe
+  ansible.builtin.assert:
+    that: vigil_falco_log.stdout is search('modern BPF')
+    fail_msg: "Falco log: {{ vigil_falco_log.stdout_lines[-15:] }}"
+    quiet: true
+
 - name: Greenbone setup state (background; retries until the feed is loaded)
   ansible.builtin.command: systemctl show -p ActiveState,Result,NRestarts --value vigil-gb-setup.service  # noqa: command-instead-of-module
   register: vigil_setup_state
@@ -52,3 +75,5 @@
          (watch: journalctl -fu vigil-gb-setup)"
       - "Web targets: {{ (vigil_web_urls | length) if vigil_web_urls is defined else '(run with the config tag to list)' }} URLs from NPM + extras"
       - "Next scans: systemctl list-timers 'vigil-*'"
+      - "Code repos: {{ vigil_code_repos | map(attribute='name') | join(', ') or 'none (set vigil_code_repos)' }}"
+      - "Falco alerts: Loki {source=\"syscall\"} | json   (Grafana: Explore)"

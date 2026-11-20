@@ -11,6 +11,24 @@ groups:
         annotations:
           summary: DefectDojo in the vigil pod is not answering /django_metrics/metrics
 
+      - alert: VigilFalcosidekickDown
+        expr: up{job="vigil-falcosidekick"} == 0
+        for: 10m
+        labels: { severity: warning, pod: {{ vigil_name }} }
+        annotations:
+          summary: Falcosidekick is not answering, so Falco alerts aren't reaching Loki
+
+      # Falco events by priority, counted by Falcosidekick (priority_raw: lowercase name)
+      - alert: VigilFalcoCriticalEvent
+        expr: |
+          sum by (rule, priority_raw, hostname) (
+            increase(falcosecurity_falcosidekick_falco_events_total{priority_raw=~"{{ vigil_falco_alert_priority }}"}[15m])
+          ) > 0
+        labels: { severity: critical, pod: {{ vigil_name }} }
+        annotations:
+          summary: "Falco: {{ '{{' }} $labels.rule {{ '}}' }} ({{ '{{' }} $labels.priority_raw {{ '}}' }}) on {{ '{{' }} $labels.hostname {{ '}}' }}"
+          description: 'Details in Loki: {source="syscall"} | json | rule="{{ '{{' }} $labels.rule {{ '}}' }}"'
+
       # podman_container_state: 2 = running (prometheus-podman-exporter)
       - alert: VigilContainerNotRunning
         expr: |

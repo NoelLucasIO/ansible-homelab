@@ -41,7 +41,8 @@
         {{ [vigil_quadlet_dir ~ '/' ~ vigil_name ~ '.pod',
             '/etc/systemd/system/vigil-import@.service',
             '/etc/systemd/system/vigil-feed-sync.service',
-            '/etc/systemd/system/vigil-feed-sync.timer']
+            '/etc/systemd/system/vigil-feed-sync.timer',
+            '/etc/systemd/system/vigil-code-fetch.service']
            + (vigil_containers | map(attribute='name') | map('regex_replace', '^(.*)$', vigil_quadlet_dir ~ '/\1.container') | list)
            + (vigil_containers | selectattr('timer', 'defined') | map(attribute='name')
               | map('regex_replace', '^(.*)$', '/etc/systemd/system/\1.timer') | list) }}

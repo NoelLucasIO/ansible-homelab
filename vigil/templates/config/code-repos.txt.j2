@@ -1,0 +1,5 @@
+# {{ ansible_managed }}
+# name  url  auth(0|1)   read by vigil-code-fetch (host); semgrep/checkov scan <vigil_data>/src/<name>
+{% for r in vigil_code_repos %}
+{{ r.name }} {{ r.url }} {{ 1 if r.auth | default(false) else 0 }}
+{% endfor %}

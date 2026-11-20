@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# vigil-code-fetch <vigil_etc> <src dir>: shallow-clone or update every repo listed in
+# <vigil_etc>/code/repos.txt into <src dir>/<name> (default branch), and drop repos no
+# longer listed. Repos marked auth=1 get <vigil_etc>/code-token as HTTP Basic auth
+# (user x-access-token: works for Forgejo/Gitea/GitHub tokens). The token goes in through
+# the environment, so it never reaches the process list or the clone's .git/config.
+# Exits non-zero only if no repo could be fetched, so one broken repo doesn't stop the scans.
+set -uo pipefail
+
+etc=${1:?usage: vigil-code-fetch <vigil_etc> <src dir>}
+src=${2:?usage: vigil-code-fetch <vigil_etc> <src dir>}
+token=""
+[[ -s $etc/code-token ]] && token=$(<"$etc/code-token")
+mkdir -p "$src"
+chmod 0700 "$src"
+
+ok=0; failed=0; keep=" "
+while read -r name url auth; do
+  [[ -z ${name:-} || $name == \#* ]] && continue
+  keep+="$name "
+  dir=$src/$name
+  env=(GIT_TERMINAL_PROMPT=0)
+  if [[ ${auth:-0} == 1 ]]; then
+    if [[ -z $token ]]; then
+      echo "vigil-code-fetch: $name needs vigil_git_token, skipping" >&2
+      failed=$((failed + 1)); continue
+    fi
+    env+=(GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraHeader
+          "GIT_CONFIG_VALUE_0=Authorization: Basic $(printf 'x-access-token:%s' "$token" | base64 -w0)")
+  fi
+  if [[ -d $dir/.git ]]; then
+    env "${env[@]}" git -C "$dir" fetch -q --depth 1 origin HEAD \
+      && git -C "$dir" reset -q --hard FETCH_HEAD && git -C "$dir" clean -qfdx
+  else
+    rm -rf "$dir"
+    env "${env[@]}" git clone -q --depth 1 "$url" "$dir"
+  fi
+  if (($? == 0)); then
+    echo "vigil-code-fetch: $name at $(git -C "$dir" rev-parse --short HEAD)"
+    ok=$((ok + 1))
+  else
+    echo "vigil-code-fetch: $name ($url) FAILED" >&2
+    failed=$((failed + 1))
+  fi
+done < "$etc/code/repos.txt"
+
+for d in "$src"/*/; do
+  [[ -d $d ]] || continue
+  n=$(basename "$d")
+  if [[ $keep != *" $n "* ]]; then
+    rm -rf "$d"
+    echo "vigil-code-fetch: removed $n (no longer in vigil_code_repos)"
+  fi
+done
+
+echo "vigil-code-fetch: $ok fetched, $failed failed"
+((ok > 0 || failed == 0))

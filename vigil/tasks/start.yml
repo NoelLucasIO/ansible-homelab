@@ -14,6 +14,13 @@
   changed_when: true
   tags: [skip_ansible_lint]   # try-restart: only units already running
 
+# Starting a pod that is already running doesn't start containers added since.
+- name: Long-running services are started (picks up ones added to a running pod)
+  ansible.builtin.systemd:
+    name: "{{ item }}.service"
+    state: started
+  loop: "{{ vigil_containers | selectattr('kind', 'equalto', 'service') | map(attribute='name') | list }}"
+
 - name: Drop the old gvmd socket volume (replaced by vigil_gvmd_run_dir)
   ansible.builtin.command: podman volume rm vigil-gb-gvmd-sock
   register: vigil_old_sock

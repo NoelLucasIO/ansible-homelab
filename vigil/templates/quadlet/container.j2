@@ -35,9 +35,15 @@ EnvironmentFile={{ c.env_file }}
 {% for vol in c.volumes | default([]) %}
 Volume={{ vol }}
 {% endfor %}
+{% if c.drop_caps is defined %}
+DropCapability={{ c.drop_caps | join(' ') }}
+{% endif %}
 {% for cap in c.caps | default([]) %}
 AddCapability={{ cap }}
 {% endfor %}
+{% if c.label_disable | default(false) %}
+SecurityLabelDisable=true
+{% endif %}
 {% if c.seccomp_unconfined | default(false) %}
 SeccompProfile=unconfined
 {% endif %}

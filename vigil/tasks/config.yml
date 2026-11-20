@@ -18,6 +18,12 @@
     - { path: "{{ vigil_data }}/reports/nuclei" }
     - { path: "{{ vigil_data }}/reports/gvm", owner: "{{ vigil_uid.gvm }}" }
     - { path: "{{ vigil_data }}/reports/zap", owner: "{{ vigil_uid.zap }}" }
+    - { path: "{{ vigil_data }}/reports/semgrep" }   # semgrep and checkov images run as root
+    - { path: "{{ vigil_data }}/reports/checkov" }
+    - { path: "{{ vigil_data }}/src", mode: "0700" }   # repo checkouts (vigil-code-fetch)
+    - { path: "{{ vigil_etc }}/code" }
+    - { path: "{{ vigil_etc }}/falco" }
+    - { path: "{{ vigil_etc }}/falco/rules.d" }
 
 - name: Scripts
   ansible.builtin.copy:
@@ -31,6 +37,9 @@
     - { name: nuclei-run.sh, mode: "0644" }       # nuclei container
     - { name: zap-run.sh, mode: "0644" }          # ZAP container
     - { name: openvas-config.sh, mode: "0644" }   # openvas-scanner container
+    - { name: vigil-code-fetch, mode: "0755" }    # host
+    - { name: semgrep-run.sh, mode: "0644" }      # semgrep container
+    - { name: checkov-run.sh, mode: "0644" }      # checkov container
 
 - name: Secrets and settings
   ansible.builtin.template:
@@ -43,8 +52,36 @@
     - { src: import.env.j2, dest: "{{ vigil_etc }}/import.env", mode: "0600" }
     - { src: gvm-tools.conf.j2, dest: "{{ vigil_etc }}/gvm/gvm-tools.conf", owner: "{{ vigil_uid.gvm }}", mode: "0600" }
     - { src: scan.env.j2, dest: "{{ vigil_etc }}/targets/scan.env", mode: "0644" }
+    - { src: code.env.j2, dest: "{{ vigil_etc }}/code/code.env", mode: "0644" }
+    - { src: code-repos.txt.j2, dest: "{{ vigil_etc }}/code/repos.txt", mode: "0644" }
   register: vigil_secrets
   no_log: true
+
+- name: Git token for vigil_code_repos with auth (outside the dir mounted into the scanners)
+  ansible.builtin.copy:
+    dest: "{{ vigil_etc }}/code-token"
+    content: "{{ vigil_git_token }}"
+    mode: "0600"
+  when: vigil_git_token | default('') | length > 0
+  no_log: true
+
+# --- Falco ------------------------------------------------------------------------
+- name: Falco settings (config.d drop-in)
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/config/falco.yaml.j2"
+    dest: "{{ vigil_etc }}/falco/vigil.yaml"
+    mode: "0644"
+  register: vigil_falco_settings
+
+- name: Falco local rules (vigil_falco_rules)
+  ansible.builtin.copy:
+    dest: "{{ vigil_etc }}/falco/rules.d/vigil.yaml"
+    mode: "0644"
+    content: |
+      # Managed by Ansible (vigil_falco_rules): local rules, macros, lists, exceptions
+      # A comment-only file is valid (Falco loads it like the image falco_rules.local.yaml).
+      {{ vigil_falco_rules | to_nice_yaml(sort_keys=False) if vigil_falco_rules else '# (none)' }}
+  register: vigil_falco_rules_file
 
 - name: Greenbone scopes (read by vigil-gvm.py setup)
   ansible.builtin.copy:

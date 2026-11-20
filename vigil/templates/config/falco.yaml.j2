@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+# Mounted as /etc/falco/config.d/zz-vigil.yaml: loaded after the image's own config.d
+# files (container plugin, ISO 8601 time), overriding falco.yaml.
+engine:
+  kind: modern_ebpf
+priority: {{ vigil_falco_priority }}
+json_output: true
+json_include_output_property: true
+json_include_tags_property: true
+# Alerts go to Falcosidekick only; stdout would put a second copy in the journal (and Loki).
+stdout_output:
+  enabled: false
+http_output:
+  enabled: true
+  url: http://127.0.0.1:{{ vigil_falcosidekick_port }}/
+webserver:
+  enabled: true
+  listen_address: 127.0.0.1
+  listen_port: {{ vigil_falco_port }}

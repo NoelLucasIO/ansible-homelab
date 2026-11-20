@@ -13,7 +13,7 @@ with a custom execution environment (ansible-core 2.20).
 | `playbooks/observability-agents.yml` | Ships the system journal to Loki with Grafana Alloy (Podman quadlet), and installs the Splunk Universal Forwarder as a deployment client. Never installs a forwarder beside Splunk Enterprise. |
 | `playbooks/ping.yml` | Connectivity and facts smoke test. |
 | `ipam-vm/` | Provisions KVM virtual machines with addresses allocated from Infoblox NIOS (WAPI), cloud-init, DNS records, a baseline role (users, chrony, rsyslog forwarding, node_exporter, firewalld) and Cockpit published through Nginx Proxy Manager. Includes decommissioning, and `scripts/nios-ipam-access.py`, which checks or creates the NIOS side (network, reserved range, API-only admin group, permissions, API user). See [`ipam-vm/README.md`](ipam-vm/README.md). |
-| `vigil/` | A security-scanning pod as Podman Quadlets: Greenbone CE, DefectDojo, and timer-driven Nuclei/ZAP scans imported into DefectDojo, with Prometheus alerts, a Grafana findings dashboard, NPM proxy hosts and NIOS records. See [`vigil/README.md`](vigil/README.md). |
+| `vigil/` | A security-scanning pod as Podman Quadlets: Greenbone CE, DefectDojo, timer-driven Nuclei/ZAP scans and Semgrep/Checkov scans of git repos imported into DefectDojo, Falco runtime detection with alerts to Loki, with Prometheus alerts, a Grafana findings dashboard, NPM proxy hosts and NIOS records. See [`vigil/README.md`](vigil/README.md). |
 | `ee/` | `ansible-builder` definition for the execution environment: Red Hat `ee-minimal-rhel9:2.20` plus the collections in `collections/requirements.yml`. |
 
 ## Running it

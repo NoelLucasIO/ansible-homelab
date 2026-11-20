@@ -236,6 +236,31 @@ vigil_containers:
     volumes: ["vigil-dojo-media:/usr/share/nginx/html/media"]
     after: [vigil-dojo-uwsgi]
 
+  # --- Falco runtime detection (host-wide syscalls via modern eBPF; no kernel module) ---
+  - name: vigil-falcosidekick
+    desc: Falco alerts -> Loki + Prometheus metrics (127.0.0.1:{{ vigil_falcosidekick_port }})
+    kind: service
+    image: "{{ vigil_falcosidekick_image }}"
+    env:
+      LISTENADDRESS: 127.0.0.1
+      LISTENPORT: "{{ vigil_falcosidekick_port }}"
+      LOKI_HOSTPORT: "{{ vigil_loki_push }}"
+      LOKI_FORMAT: json
+      LOKI_EXTRALABELS: rule      # Loki labels: rule, priority, source, hostname
+  - name: vigil-falco
+    desc: Falco runtime threat detection (modern eBPF, least privilege)
+    kind: service
+    image: "{{ vigil_falco_image }}"
+    drop_caps: [all]
+    caps: "{{ vigil_falco_caps }}"
+    label_disable: true             # reads the host's /proc and /etc under SELinux
+    volumes: >-
+      {{ ['/sys/kernel/tracing:/sys/kernel/tracing:ro', '/proc:/host/proc:ro', '/etc:/host/etc:ro',
+          vigil_etc ~ '/falco/vigil.yaml:/etc/falco/config.d/zz-vigil.yaml:ro',
+          vigil_etc ~ '/falco/rules.d:/etc/falco/rules.d:ro']
+         + (vigil_falco_podman_sockets | map('regex_replace', '^(.*)$', '\1:/host\1') | list) }}
+    after: [vigil-falcosidekick]
+
   # --- Jobs (timers; never started with the pod) ---
   - name: vigil-gb-setup
     desc: Greenbone targets, schedules and tasks from vigil_scopes
@@ -288,3 +313,30 @@ vigil_containers:
       - "{{ vigil_data }}/reports/zap:/zap/wrk"
     on_success: vigil-import@zap.service
     timer: zap
+  # Both need vigil-code-fetch.service (host git, see vigil_code_repos) to have run first.
+  - name: vigil-scan-semgrep
+    desc: Semgrep SAST of every repo in vigil_code_repos
+    kind: job
+    image: "{{ vigil_semgrep_image }}"
+    entrypoint: ["/bin/sh", "/vigil/semgrep-run.sh"]
+    volumes:
+      - "{{ vigil_etc }}/code:/vigil-conf:ro"
+      - "{{ vigil_libexec }}/semgrep-run.sh:/vigil/semgrep-run.sh:ro"
+      - "{{ vigil_data }}/src:/src:ro"
+      - "{{ vigil_data }}/reports/semgrep:/reports"
+    after: [vigil-code-fetch]
+    on_success: vigil-import@semgrep.service
+    timer: semgrep
+  - name: vigil-scan-checkov
+    desc: Checkov IaC scan of every repo in vigil_code_repos
+    kind: job
+    image: "{{ vigil_checkov_image }}"
+    entrypoint: ["/bin/sh", "/vigil/checkov-run.sh"]
+    volumes:
+      - "{{ vigil_etc }}/code:/vigil-conf:ro"
+      - "{{ vigil_libexec }}/checkov-run.sh:/vigil/checkov-run.sh:ro"
+      - "{{ vigil_data }}/src:/src:ro"
+      - "{{ vigil_data }}/reports/checkov:/reports"
+    after: [vigil-code-fetch]
+    on_success: vigil-import@checkov.service
+    timer: checkov

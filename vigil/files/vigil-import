@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# vigil-import <gvm|nuclei|zap>: (re)import the newest reports of one tool into DefectDojo.
+# vigil-import <gvm|nuclei|zap|semgrep|checkov>: (re)import the newest reports of one tool into DefectDojo.
 #   Reports:  $REPORTS/<tool>/<scope>[--<label>].<ext>   (scope picks the DefectDojo product)
 #   Then:     moved to $REPORTS/archive/<date>/<tool>/, archives older than $KEEP_DAYS deleted.
 # reimport-scan with auto_create_context creates the product/engagement/test on first
 # use, then updates that test: fixed findings are closed, new ones added, repeats deduplicated.
 set -euo pipefail
 
-tool=${1:?usage: vigil-import <gvm|nuclei|zap>}
+tool=${1:?usage: vigil-import <gvm|nuclei|zap|semgrep|checkov>}
 set -a
 # shellcheck source=/dev/null
 . /etc/vigil/import.env
@@ -16,6 +16,8 @@ case $tool in
   gvm)    scan_type="OpenVAS Parser"; pattern='*.xml' ;;
   nuclei) scan_type="Nuclei Scan";    pattern='*.jsonl' ;;
   zap)    scan_type="ZAP Scan";       pattern='*.xml' ;;
+  semgrep) scan_type="Semgrep JSON Report"; pattern='*.json' ;;
+  checkov) scan_type="Checkov Scan";  pattern='*.json' ;;
   *) echo "vigil-import: unknown tool '$tool'" >&2; exit 64 ;;
 esac
 
@@ -58,6 +60,8 @@ for f in "${files[@]}"; do
     gvm)    title="Greenbone" ;;
     nuclei) title="Nuclei" ;;
     zap)    title="ZAP ${label:-$scope}" ;;
+    semgrep) title="Semgrep" ;;
+    checkov) title="Checkov" ;;
   esac
 
   if out=$(curl -fsS --max-time 600 -X POST "$DOJO_URL/api/v2/reimport-scan/" \

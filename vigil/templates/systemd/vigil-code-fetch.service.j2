@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Required by vigil-scan-semgrep / vigil-scan-checkov: clones or updates every repo in
+# {{ vigil_etc }}/code/repos.txt into {{ vigil_data }}/src before they scan it.
+[Unit]
+Description=vigil: fetch git repos for code scanning
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ vigil_libexec }}/vigil-code-fetch {{ vigil_etc }} {{ vigil_data }}/src

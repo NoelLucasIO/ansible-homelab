@@ -76,7 +76,8 @@
     quiet: true
   vars:
     vigil_ports: "{{ [vigil_gsad_port, vigil_openvasd_port, vigil_dojo_port, vigil_dojo_uwsgi_http_port,
-                      vigil_dojo_uwsgi_port, vigil_dojo_valkey_port] | map('string') | list }}"
+                      vigil_dojo_uwsgi_port, vigil_dojo_valkey_port,
+                      vigil_falco_port, vigil_falcosidekick_port] | map('string') | list }}"
     vigil_listening: "{{ vigil_ss.stdout_lines | map('split') | map(attribute=3)
                          | map('regex_replace', '^.*:', '') | list }}"
     vigil_busy: "{{ vigil_ports | intersect(vigil_listening) }}"
