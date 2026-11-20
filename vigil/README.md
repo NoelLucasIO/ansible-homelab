@@ -62,7 +62,7 @@ Falco (host syscalls, modern eBPF) ─► Falcosidekick 127.0.0.1:2801 ─► Lo
    - `vigil_scopes` (real CIDRs), and `vigil_domain` (or ipam-vm's `vm_domain`)
    - The NIOS/NPM variables ipam-vm already uses (`nios_ip`, `npm_api`, `npm_ip`, ...) plus `vigil_dns_resolver`
    - Optional: `vigil_code_repos` (repos for Semgrep/Checkov; empty means no code scans), and `vigil_loki_push` if Loki isn't on `127.0.0.1:3100`
-2. **Secrets** (nine; `playbooks/group_vars/all/vault.yml.example` lists them):
+2. **Secrets** (nine, plus an optional git token; `playbooks/group_vars/all/vault.yml.example` lists them):
    - **CLI:** copy it to `vault.yml` (git-ignored), fill it in, `ansible-vault encrypt vault.yml`.
    - **AAP:** the three NIOS/NPM secrets come from ipam-vm's secrets credential. Add a second custom credential type for vigil's own six and attach both to the templates:
 
@@ -75,7 +75,6 @@ Falco (host syscalls, modern eBPF) ─► Falcosidekick 127.0.0.1:2801 ─► Lo
        - {id: vigil_dojo_aes_key, label: DefectDojo AES-256 key (exactly 32 chars), type: string, secret: true}
        - {id: vigil_gvm_admin_password, label: Greenbone admin password, type: string, secret: true}
        - {id: vigil_grafana_db_password, label: Grafana read-only DB password, type: string, secret: true}
-       - {id: vigil_git_token, label: Read-only git token for vigil_code_repos (optional), type: string, secret: true}
      required: [vigil_dojo_db_password, vigil_dojo_admin_password, vigil_dojo_secret_key,
                 vigil_dojo_aes_key, vigil_gvm_admin_password, vigil_grafana_db_password]
      ```
@@ -89,9 +88,24 @@ Falco (host syscalls, modern eBPF) ─► Falcosidekick 127.0.0.1:2801 ─► Lo
        vigil_dojo_aes_key: '{{ vigil_dojo_aes_key }}'
        vigil_gvm_admin_password: '{{ vigil_gvm_admin_password }}'
        vigil_grafana_db_password: '{{ vigil_grafana_db_password }}'
-       vigil_git_token: '{{ vigil_git_token | default("") }}'
      ```
-3. **AAP job templates**, each with the machine credential and both secrets credentials, privilege escalation on, any EE (only `ansible.builtin` is used):
+   - **Git token (optional, AAP):** only needed if a repo in `vigil_code_repos` has `auth: true`. Use its own credential type rather than adding a field to the one above: AAP won't change the inputs of a credential type that a credential already uses, and this keeps the token optional. Give the token read access only (Forgejo/Gitea: scope `read:repository`; GitHub: fine-grained, Contents: read), and attach the credential to **vigil deploy** only.
+
+     ```yaml
+     # Input configuration
+     fields:
+       - {id: vigil_git_token, label: Read-only git token for vigil_code_repos, type: string, secret: true}
+     required: [vigil_git_token]
+     ```
+
+     ```yaml
+     # Injector configuration
+     extra_vars:
+       vigil_git_token: '{{ vigil_git_token }}'
+     ```
+
+     Without it, public repos are still scanned; `auth: true` repos are skipped with a message in `journalctl -u vigil-code-fetch`.
+3. **AAP job templates**, each with the machine credential and both secrets credentials (plus the git token credential on deploy, if used), privilege escalation on, any EE (only `ansible.builtin` is used):
    - **vigil deploy**: playbook `vigil/playbooks/deploy.yml`. Optional survey `vigil_pull_latest` (boolean). Tick "Prompt on launch" for job tags to allow partial runs.
    - **vigil remove**: playbook `vigil/playbooks/remove.yml`. Survey: `confirm` (text, required), `purge` (boolean, default false).
    - Steps that touch the rootless Postgres/Prometheus/Grafana run as root via `runuser -u <vigil_pg_owner>`, so the SSH user only needs sudo to root.
