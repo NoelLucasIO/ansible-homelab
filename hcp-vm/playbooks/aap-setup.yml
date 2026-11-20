@@ -95,6 +95,40 @@
         that: aap_ids.results | map(attribute='json.count') | min > 0
         fail_msg: "Project '{{ aap_project }}' or inventory '{{ aap_inventory }}' not found in AAP."
 
+    # Templates can only point at playbooks AAP has already pulled: sync the project first.
+    - name: Sync project {{ aap_project }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ aap_ids.results[0].json.results[0].id }}/update/"
+        method: POST
+        status_code: [202]
+      register: aap_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ aap_sync.json.id }}/"
+      register: aap_sync_job
+      until: aap_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+
+    - name: Playbooks the project offers
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ aap_ids.results[0].json.results[0].id }}/playbooks/"
+      register: aap_playbooks
+
+    - name: The project has hcp-vm
+      ansible.builtin.assert:
+        that:
+          - aap_sync_job.json.status == 'successful'
+          - "'hcp-vm/playbooks/deploy.yml' in aap_playbooks.json"
+        fail_msg: >-
+          Project '{{ aap_project }}' sync {{ aap_sync_job.json.status }}; it pulls from
+          {{ aap_ids.results[0].json.results[0].scm_url }} (branch
+          '{{ aap_ids.results[0].json.results[0].scm_branch | default('', true) or 'default' }}'),
+          which has no hcp-vm/playbooks/deploy.yml. Point aap_project at a project that syncs the
+          repo containing hcp-vm.
+
     - name: Execution environment id
       ansible.builtin.uri:
         url: "{{ aap_api }}/execution_environments/?name={{ aap_ee | urlencode }}"
