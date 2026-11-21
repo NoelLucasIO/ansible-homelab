@@ -26,5 +26,12 @@
     src: 50-forward.conf.j2
     dest: /etc/rsyslog.d/50-forward.conf
     mode: "0644"
-    validate: rsyslogd -N1 -f %s
+    # Ubuntu's AppArmor profile for rsyslogd can't read Ansible's temp file, so on the
+    # Debian family the whole installed config is checked right after instead.
+    validate: "{{ omit if baseline_debian else 'rsyslogd -N1 -f %s' }}"
   notify: Restart rsyslog
+
+- name: Check the installed rsyslog config (Debian/Ubuntu)
+  ansible.builtin.command: rsyslogd -N1
+  changed_when: false
+  when: baseline_debian

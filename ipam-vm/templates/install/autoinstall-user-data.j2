@@ -21,9 +21,14 @@ autoinstall:
   late-commands:
     # Seal for cloning: drop the installer's cloud-init/netplan config so the per-VM
     # NoCloud seed is what configures each clone.
-    - rm -f /target/etc/cloud/cloud.cfg.d/50-curtin-networking.cfg /target/etc/cloud/cloud.cfg.d/90-installer-network.cfg /target/etc/cloud/cloud.cfg.d/99-installer.cfg /target/etc/cloud/cloud.cfg.d/subiquity-disable-cloudinit-networking.cfg /target/etc/cloud/cloud-init.disabled
+    # Globs, not exact names: 26.04 prefixes them (00-subiquity-disable-cloudinit-networking.cfg).
+    - rm -f /target/etc/cloud/cloud.cfg.d/*subiquity-disable-cloudinit-networking.cfg /target/etc/cloud/cloud.cfg.d/*curtin-networking.cfg /target/etc/cloud/cloud.cfg.d/*installer*.cfg /target/etc/cloud/cloud-init.disabled
+    # Fail the build if any config that disables cloud-init networking is still there.
+    - "sh -c '! grep -rlsE \"config:[[:space:]]*disabled\" /target/etc/cloud/cloud.cfg.d/'"
     - rm -f /target/etc/netplan/*.yaml /target/etc/ssh/ssh_host_*
-    - curtin in-target -- sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="console=tty0 console=ttyS0,115200n8"/' /etc/default/grub
+    # net.ifnames=0: the NIC is eth0 from boot. 26.04's dracut initramfs brings it up early,
+    # so cloud-init can't rename enp1s0 -> eth0 later ([busy]) and the netplan config never matches.
+    - curtin in-target -- sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="net.ifnames=0 console=tty0 console=ttyS0,115200n8"/' /etc/default/grub
     - curtin in-target -- update-grub
     - curtin in-target -- apt-get clean
     - curtin in-target -- cloud-init clean --logs --machine-id

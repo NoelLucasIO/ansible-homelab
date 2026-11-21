@@ -92,6 +92,7 @@
   gather_facts: true
   vars:
     baseline_manage_firewalld: true
+    baseline_full_update: "{{ vm_update_on_provision }}"
   roles:
     - ipam_vm_defaults
     - baseline

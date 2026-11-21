@@ -36,8 +36,12 @@ Optional: `-e vm_memory_mb=8192 -e vm_vcpus=4 -e vm_disk_gb=80`
 - **Firmware:** ISO-built OSes boot UEFI; decommission uses `virsh undefine --nvram`.
 - **os-variant** is the most specific one the host's osinfo-db knows (falls back to `linux2024`).
   Override with `-e vm_os_variant=<short-id>`.
-- **RHEL:** installs from the DVD without a subscription. To get dnf repos afterwards, set
-  `rhsm_org` and `rhsm_activation_key` (vault or credential) and the baseline registers it.
+- **Updates:** each new VM gets one full update (`dnf upgrade` / `apt full-upgrade`) and a reboot if
+  anything changed, so it starts current however old its golden image is. Skip with
+  `-e vm_update_on_provision=false`. Daily security updates take over after that.
+- **RHEL:** installs from the DVD without a subscription. Set `rhsm_org` and `rhsm_activation_key` (vault, or two more fields on the
+  AAP secrets credential type) and the baseline registers it before the update; without them
+  RHEL VMs have no repos and get no updates.
 - **AAP:** add `vm_os` to the VM provision survey as a multiple choice of the keys above, and raise
   the job timeout for a first-use build.
 

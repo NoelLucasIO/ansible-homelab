@@ -113,6 +113,9 @@ vm_base_packages_debian:
 vm_memory_mb: 4096
 vm_vcpus: 2
 vm_disk_gb: 40
+# Full OS update (and reboot if needed) the first time a new VM is baselined, so it
+# starts current however old its golden image is. RHEL needs rhsm_org/rhsm_activation_key.
+vm_update_on_provision: true
 
 # --- Network / IPAM (documentation addresses: override in your inventory) ---------------------------------------------------------------
 vm_domain: example.com

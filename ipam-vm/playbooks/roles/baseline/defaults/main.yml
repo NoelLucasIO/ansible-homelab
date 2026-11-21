@@ -26,6 +26,10 @@ baseline_chrony_conf: "{{ '/etc/chrony/chrony.conf' if baseline_debian else '/et
 # On Debian/Ubuntu, unattended-upgrades' own origin list decides (security by default),
 # so 'default' behaves like 'security' there.
 baseline_auto_updates: security    # security | default | none
+# One full dnf upgrade / apt dist-upgrade (+ reboot if anything changed). Off here so
+# baseline.yml never upgrades existing hosts; provision.yml turns it on for new VMs.
+baseline_full_update: false
+baseline_full_update_marker: /var/lib/baseline-full-update
 baseline_update_timer: >-
   {{ 'apt-daily-upgrade.timer' if baseline_debian
      else ('dnf5-automatic.timer' if ansible_facts.pkg_mgr | default('') == 'dnf5' else 'dnf-automatic.timer') }}

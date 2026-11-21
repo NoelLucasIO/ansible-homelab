@@ -13,6 +13,41 @@
   changed_when: true
   when: baseline_rhsm.rc | default(0) != 0
 
+# One full update on a new VM so it starts current however old its golden image is.
+# A marker keeps reruns from doing it again; daily security updates take over after.
+- name: Full update already done on this host?
+  ansible.builtin.stat:
+    path: "{{ baseline_full_update_marker }}"
+  register: baseline_upd
+  when: baseline_full_update | bool
+
+- name: Full update (dnf)
+  ansible.builtin.dnf:   # noqa: package-latest
+    name: "*"
+    state: latest
+    update_cache: true
+  register: baseline_upd_dnf
+  when: baseline_full_update | bool and not baseline_debian and not baseline_upd.stat.exists
+
+- name: Full update (apt)
+  ansible.builtin.apt:
+    upgrade: dist
+    update_cache: true
+  register: baseline_upd_apt
+  when: baseline_full_update | bool and baseline_debian and not baseline_upd.stat.exists
+
+- name: Reboot onto the updated kernel and libraries
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+  when: baseline_upd_dnf is changed or baseline_upd_apt is changed
+
+- name: Record the full update
+  ansible.builtin.copy:
+    dest: "{{ baseline_full_update_marker }}"
+    content: "full update applied by the baseline role\n"
+    mode: "0644"
+  when: baseline_full_update | bool and not baseline_upd.stat.exists
+
 - name: Base packages (dnf)
   ansible.builtin.dnf:
     name: "{{ baseline_packages }}"
