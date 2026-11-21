@@ -1,6 +1,6 @@
 # hcp-vm
 
-Deploys a single-node HCP (VSP One Object classic) VM on KVM from the HCP ISO, unattended,
+Deploys a single-node HCP (Hitachi Content Platform) VM on KVM from the HCP ISO, unattended,
 from an AAP job template whose survey carries every installer answer and the VM sizing.
 Tested end to end with HCP 10.1.1.14 (ISO `HS222_10.1.1.14.iso`).
 
