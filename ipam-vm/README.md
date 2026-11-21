@@ -91,8 +91,8 @@ Unregisters RHEL VMs from Red Hat (if reachable), then destroys and undefines th
        baseline_admin_password_hash: '{{ baseline_admin_password_hash }}'
      ```
 3. **AAP job templates.** `playbooks/aap-setup.yml` creates or updates both (survey with the OS
-   choice, 90-minute provision timeout, credentials attached), syncs the project, and adds the
-   optional RHSM fields to the secrets credential type, storing your vault's values on it:
+   choice, 90-minute provision timeout, credentials attached), syncs the project, and creates a
+   "RHEL activation key" credential (`homelab-rhsm`) from your vault's `rhsm_*` values:
    `ansible-playbook playbooks/aap-setup.yml --ask-vault-pass -e @../hcp-vm/aap.local.yml -e aap_secrets_credential=homelab-secrets`.
    By hand instead: each template with the machine credential and the secrets credential:
    - **VM provision**, playbook `ipam-vm/playbooks/provision.yml`. Survey: `vm_name` (text, required), `vm_vcpus`, `vm_memory_mb`, `vm_disk_gb` (integers, with defaults 2 / 4096 / 40).

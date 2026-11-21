@@ -3,8 +3,8 @@
 #   * syncs the project, so AAP has the current playbooks
 #   * job templates "VM provision" (OS choice survey, 90 min timeout for a first-use image
 #     build) and "VM decommission", with the machine and secrets credentials attached
-#   * adds optional rhsm_org / rhsm_activation_key fields to the secrets credential type,
-#     and, when those two are in the vault, stores them on the secrets credential
+#   * credential type "RHEL activation key" and, when rhsm_org / rhsm_activation_key are in
+#     the vault, credential "homelab-rhsm" with them, attached to "VM provision"
 #
 #   ansible-playbook playbooks/aap-setup.yml --ask-vault-pass -e @../hcp-vm/aap.local.yml \
 #     -e aap_secrets_credential=homelab-secrets
@@ -21,6 +21,8 @@
     aap_inventory: homelab
     aap_machine_credential: homelab-ssh
     aap_secrets_credential: homelab-secrets
+    aap_rhsm_type: RHEL activation key
+    aap_rhsm_credential: homelab-rhsm
     aap_ee: ""                     # execution environment name; blank = project/org default
     aap_provision_timeout: 5400    # seconds; a first-use golden image build can take 30 min
     # Literal AAP injector templates (!unsafe: not rendered by Ansible here).
@@ -90,8 +92,9 @@
       register: aap_ee_q
       when: aap_ee | length > 0
 
-    # --- RHSM fields on the secrets credential type -----------------------------------
-    - name: Secrets credential
+    # --- RHEL activation key: its own credential type + credential ---------------------
+    # (AAP won't change the fields of a credential type already in use, so not homelab-secrets.)
+    - name: Secrets credential (for its organization)
       ansible.builtin.uri:
         url: "{{ aap_api }}/credentials/?name={{ aap_secrets_credential | urlencode }}"
       register: aap_sec
@@ -102,41 +105,53 @@
         fail_msg: "Credential '{{ aap_secrets_credential }}' not found; pass -e aap_secrets_credential=<name>."
         quiet: true
 
-    - name: Its credential type
+    - name: RHEL activation key credential type exists?
       ansible.builtin.uri:
-        url: "{{ aap_api }}/credential_types/{{ aap_sec.json.results[0].credential_type }}/"
-      register: aap_ct
+        url: "{{ aap_api }}/credential_types/?name={{ aap_rhsm_type | urlencode }}"
+      register: aap_rhsm_ct_q
 
-    - name: Add the RHSM fields to {{ aap_ct.json.name }}
-      vars:
-        aap_ct_fields: "{{ aap_ct.json.inputs.fields | default([]) }}"
-        aap_ct_missing: "{{ aap_rhsm_fields | rejectattr('id', 'in', aap_ct_fields | map(attribute='id') | list) | list }}"
+    - name: Create the RHEL activation key credential type
       ansible.builtin.uri:
-        url: "{{ aap_api }}/credential_types/{{ aap_ct.json.id }}/"
-        method: PATCH
+        url: "{{ aap_api }}/credential_types/"
+        method: POST
         body:
-          inputs: "{{ aap_ct.json.inputs | combine({'fields': aap_ct_fields + aap_ct_missing}) }}"
-          injectors: >-
-            {{ aap_ct.json.injectors | combine({'extra_vars':
-                 (aap_ct.json.injectors.extra_vars | default({})) | combine(aap_rhsm_injectors)}) }}
-      when: aap_ct_missing | length > 0
+          name: "{{ aap_rhsm_type }}"
+          description: Registers RHEL VMs (ipam-vm baseline) with an activation key
+          kind: cloud
+          inputs:
+            fields: "{{ aap_rhsm_fields }}"
+            required: [rhsm_org, rhsm_activation_key]
+          injectors:
+            extra_vars: "{{ aap_rhsm_injectors }}"
+      register: aap_rhsm_ct_new
+      when: aap_rhsm_ct_q.json.count == 0
       changed_when: true
 
-    - name: Store the RHSM values on {{ aap_secrets_credential }}
-      vars:
-        aap_sec_inputs: "{{ aap_sec.json.results[0].inputs }}"
-      ansible.builtin.uri:
-        url: "{{ aap_api }}/credentials/{{ aap_sec.json.results[0].id }}/"
-        method: PATCH
-        # Secret inputs come back as $encrypted$; sending that back keeps the stored value.
-        body:
-          inputs: "{{ aap_sec_inputs | combine({'rhsm_org': rhsm_org | string, 'rhsm_activation_key': rhsm_activation_key}) }}"
-      no_log: true
+    - name: RHEL activation key credential
       when:
         - rhsm_org | default('') | string | length > 0
         - rhsm_activation_key | default('') | length > 0
-        - aap_sec_inputs.rhsm_org | default('') != rhsm_org | string or 'rhsm_activation_key' not in aap_sec_inputs
-      changed_when: true
+      vars:
+        aap_rhsm_ct_id: "{{ aap_rhsm_ct_new.json.id if aap_rhsm_ct_q.json.count == 0 else aap_rhsm_ct_q.json.results[0].id }}"
+      block:
+        - name: Does the credential exist? {{ aap_rhsm_credential }}
+          ansible.builtin.uri:
+            url: "{{ aap_api }}/credentials/?name={{ aap_rhsm_credential | urlencode }}"
+          register: aap_rhsm_q
+
+        - name: Create or update {{ aap_rhsm_credential }}
+          ansible.builtin.uri:
+            url: "{{ aap_api }}/credentials/{{ (aap_rhsm_q.json.results[0].id ~ '/') if aap_rhsm_q.json.count else '' }}"
+            method: "{{ 'PATCH' if aap_rhsm_q.json.count else 'POST' }}"
+            body:
+              name: "{{ aap_rhsm_credential }}"
+              credential_type: "{{ aap_rhsm_ct_id | int }}"
+              organization: "{{ aap_sec.json.results[0].organization }}"
+              inputs:
+                rhsm_org: "{{ rhsm_org | string }}"
+                rhsm_activation_key: "{{ rhsm_activation_key }}"
+          no_log: true
+          changed_when: true
 
     # --- Job templates ------------------------------------------------------------------
     - name: Create or update the job templates
@@ -146,6 +161,7 @@
           playbook: ipam-vm/playbooks/provision.yml
           description: KVM VM on fedora with its address from NIOS IPAM; choice of OS; baselined
           timeout: "{{ aap_provision_timeout }}"
+          extra_credentials: ["{{ aap_rhsm_credential }}"]   # attached if it exists
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-provision.yml.j2') | from_yaml }}"
         - name: VM decommission
           playbook: ipam-vm/playbooks/decommission.yml
