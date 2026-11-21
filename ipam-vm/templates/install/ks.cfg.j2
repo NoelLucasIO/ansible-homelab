@@ -17,7 +17,9 @@ reqpart
 # Root last and no swap/LVM, so cloud-init's growpart can extend it on bigger overlays.
 part / --fstype=xfs --size=4096 --grow
 bootloader --timeout=1 --append="console=ttyS0,115200n8"
-services --enabled=sshd,cloud-init,qemu-guest-agent,chronyd
+# cloud-init is not listed: its package enables its own units, and newer releases
+# (Fedora 44) renamed cloud-init.service to cloud-init-network.service.
+services --enabled=sshd,qemu-guest-agent,chronyd
 poweroff
 
 %packages --ignoremissing
@@ -31,6 +33,10 @@ cloud-utils-growpart
 %end
 
 %post --log=/root/ks-post.log
+# cloud-init units under old and new names (the new names arrived in cloud-init 24.3); enable whichever exist.
+for u in cloud-init-local cloud-init cloud-init-main cloud-init-network cloud-config cloud-final; do
+  systemctl enable "$u.service" >/dev/null 2>&1 || true
+done
 # Seal for cloning: every overlay must boot as a new machine.
 rm -f /etc/NetworkManager/system-connections/*
 rm -f /etc/ssh/ssh_host_*

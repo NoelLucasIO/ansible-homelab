@@ -20,6 +20,8 @@
   vars:
     vm_builder: "ipam-base-{{ vm_os }}"
     vm_partial: "{{ vm_base_image }}.partial"
+    # Next to the disks, not in the 0700 staging dir: qemu (not root) opens attached disks.
+    vm_inst_seed: "{{ vm_image_dir }}/{{ vm_builder }}-autoinstall.iso"
   block:
     - name: Install media label
       ansible.builtin.command: blkid -o value -s LABEL {{ vm_iso_path }}
@@ -74,7 +76,7 @@
 
     - name: Autoinstall seed ISO (label cidata)
       ansible.builtin.command:
-        argv: [xorriso, -as, genisoimage, -output, "{{ vm_inst.path }}/autoinstall.iso",
+        argv: [xorriso, -as, genisoimage, -output, "{{ vm_inst_seed }}",
                -volid, cidata, -joliet, -rock, "{{ vm_inst.path }}/user-data", "{{ vm_inst.path }}/meta-data"]
       changed_when: true
       when: vm_os_entry.installer == 'autoinstall'
@@ -100,7 +102,7 @@
         vm_inst_inject:
           kickstart: ["--initrd-inject={{ vm_inst.path }}/ks.cfg"]
           preseed: ["--initrd-inject={{ vm_inst.path }}/preseed.cfg", "--initrd-inject={{ vm_inst.path }}/seal.sh"]
-          autoinstall: ["--disk={{ vm_inst.path }}/autoinstall.iso,device=cdrom"]
+          autoinstall: ["--disk={{ vm_inst_seed }},device=cdrom"]
       ansible.builtin.command:
         argv: "{{ ['virt-install',
                    '--name=' ~ vm_builder,
@@ -134,8 +136,8 @@
         group: root
         mode: "0444"
   always:
-    - name: Remove installer staging dir
+    - name: Remove installer staging files
       ansible.builtin.file:
-        path: "{{ vm_inst.path }}"
+        path: "{{ item }}"
         state: absent
-      when: vm_inst.path is defined
+      loop: "{{ [vm_inst_seed] + ([vm_inst.path] if vm_inst.path is defined else []) }}"
