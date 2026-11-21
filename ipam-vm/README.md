@@ -98,7 +98,11 @@ Destroys and undefines the VM, removes its disk and ISO, and deletes the host re
 
 - **Tested end to end** from AAP 2.7 and from the CLI: provision a VM, then run it again;
   the second run reports `changed=0` on both the KVM host and the new VM.
-- **OS choice:** rocky9 is tested end to end. The ISO-built OSes are new and not yet tested on fedora.
+- **OS choice:** all eight tested on fedora (Nov 2026): golden-image build, provision, one-time
+  update + reboot, baseline. debian13 also tested for rerun idempotency and decommission.
+  Quirks handled: Debian's cloud-init conflicts with firewalld (ufw used) and its ifupdown
+  renderer needs net-tools; Ubuntu 26.04 needs `net.ifnames=0` (dracut initramfs brings the NIC
+  up early) and AppArmor blocks rsyslog's temp-file validation; Fedora 44 renamed cloud-init's units.
 - **Ping caveat:** a device that drops ICMP looks free. Run NIOS Discovery on the subnet
   occasionally to catch those.
 - **Credentials:** WAPI calls use `nios_api_user` (default `aap-ipam`), a NIOS account
