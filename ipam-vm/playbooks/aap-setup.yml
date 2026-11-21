@@ -1,0 +1,157 @@
+---
+# Brings AAP in line with this project (controller API, built-in modules only). Idempotent.
+#   * syncs the project, so AAP has the current playbooks
+#   * job templates "VM provision" (OS choice survey, 90 min timeout for a first-use image
+#     build) and "VM decommission", with the machine and secrets credentials attached
+#   * adds optional rhsm_org / rhsm_activation_key fields to the secrets credential type,
+#     and, when those two are in the vault, stores them on the secrets credential
+#
+#   ansible-playbook playbooks/aap-setup.yml --ask-vault-pass -e @../hcp-vm/aap.local.yml \
+#     -e aap_secrets_credential=homelab-secrets
+#   (aap.local.yml, git-ignored: aap_url and aap_token, or aap_user + aap_password)
+- name: AAP setup for ipam-vm
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - ipam_vm_defaults
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    aap_inventory: homelab
+    aap_machine_credential: homelab-ssh
+    aap_secrets_credential: homelab-secrets
+    aap_ee: ""                     # execution environment name; blank = project/org default
+    aap_provision_timeout: 5400    # seconds; a first-use golden image build can take 30 min
+    # Literal AAP injector templates (!unsafe: not rendered by Ansible here).
+    aap_rhsm_fields:
+      - {id: rhsm_org, label: RHEL organization ID, type: string}
+      - {id: rhsm_activation_key, label: RHEL activation key name, type: string, secret: true}
+    aap_rhsm_injectors:
+      rhsm_org: !unsafe "{{ rhsm_org }}"
+      rhsm_activation_key: !unsafe "{{ rhsm_activation_key }}"
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 202, 204]
+  tasks:
+    - name: AAP connection settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+        fail_msg: "Pass -e @../hcp-vm/aap.local.yml (aap_url + aap_token) or aap_user/aap_password."
+        quiet: true
+
+    - name: Project and inventory ids
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/{{ item.kind }}/?name={{ item.name | urlencode }}"
+      loop:
+        - {kind: projects, name: "{{ aap_project }}"}
+        - {kind: inventories, name: "{{ aap_inventory }}"}
+      register: aap_ids
+
+    - name: Both found
+      ansible.builtin.assert:
+        that: aap_ids.results | map(attribute='json.count') | min > 0
+        fail_msg: "Project '{{ aap_project }}' or inventory '{{ aap_inventory }}' not found in AAP."
+        quiet: true
+
+    - name: Sync the project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ aap_ids.results[0].json.results[0].id }}/update/"
+        method: POST
+      register: aap_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ aap_sync.json.id }}/"
+      register: aap_sync_job
+      until: aap_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+
+    - name: Sync succeeded
+      ansible.builtin.assert:
+        that: aap_sync_job.json.status == 'successful'
+        fail_msg: "Project sync {{ aap_sync_job.json.status }}; see project update {{ aap_sync.json.id }} in AAP."
+        quiet: true
+
+    - name: Execution environment id
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/execution_environments/?name={{ aap_ee | urlencode }}"
+      register: aap_ee_q
+      when: aap_ee | length > 0
+
+    # --- RHSM fields on the secrets credential type -----------------------------------
+    - name: Secrets credential
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ aap_secrets_credential | urlencode }}"
+      register: aap_sec
+
+    - name: Secrets credential found
+      ansible.builtin.assert:
+        that: aap_sec.json.count == 1
+        fail_msg: "Credential '{{ aap_secrets_credential }}' not found; pass -e aap_secrets_credential=<name>."
+        quiet: true
+
+    - name: Its credential type
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/{{ aap_sec.json.results[0].credential_type }}/"
+      register: aap_ct
+
+    - name: Add the RHSM fields to {{ aap_ct.json.name }}
+      vars:
+        aap_ct_fields: "{{ aap_ct.json.inputs.fields | default([]) }}"
+        aap_ct_missing: "{{ aap_rhsm_fields | rejectattr('id', 'in', aap_ct_fields | map(attribute='id') | list) | list }}"
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/{{ aap_ct.json.id }}/"
+        method: PATCH
+        body:
+          inputs: "{{ aap_ct.json.inputs | combine({'fields': aap_ct_fields + aap_ct_missing}) }}"
+          injectors: >-
+            {{ aap_ct.json.injectors | combine({'extra_vars':
+                 (aap_ct.json.injectors.extra_vars | default({})) | combine(aap_rhsm_injectors)}) }}
+      when: aap_ct_missing | length > 0
+      changed_when: true
+
+    - name: Store the RHSM values on {{ aap_secrets_credential }}
+      vars:
+        aap_sec_inputs: "{{ aap_sec.json.results[0].inputs }}"
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/{{ aap_sec.json.results[0].id }}/"
+        method: PATCH
+        # Secret inputs come back as $encrypted$; sending that back keeps the stored value.
+        body:
+          inputs: "{{ aap_sec_inputs | combine({'rhsm_org': rhsm_org | string, 'rhsm_activation_key': rhsm_activation_key}) }}"
+      no_log: true
+      when:
+        - rhsm_org | default('') | string | length > 0
+        - rhsm_activation_key | default('') | length > 0
+        - aap_sec_inputs.rhsm_org | default('') != rhsm_org | string or 'rhsm_activation_key' not in aap_sec_inputs
+      changed_when: true
+
+    # --- Job templates ------------------------------------------------------------------
+    - name: Create or update the job templates
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_job_template.yml"
+      loop:
+        - name: VM provision
+          playbook: ipam-vm/playbooks/provision.yml
+          description: KVM VM on fedora with its address from NIOS IPAM; choice of OS; baselined
+          timeout: "{{ aap_provision_timeout }}"
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-provision.yml.j2') | from_yaml }}"
+        - name: VM decommission
+          playbook: ipam-vm/playbooks/decommission.yml
+          description: Remove an ipam-vm VM, unregister RHEL, free its NIOS address and NPM proxy
+          timeout: 600
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-decommission.yml.j2') | from_yaml }}"
+      loop_control:
+        loop_var: aap_jt
+        label: "{{ aap_jt.name }}"

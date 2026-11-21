@@ -1,0 +1,19 @@
+# Survey for "VM provision". Defaults come from ipam_vm_defaults (plus any -e overrides).
+{% macro q(var, name, type, default='', desc='', required=true, min=none, max=none, choices=none) -%}
+- question_name: "{{ name }}"
+  question_description: "{{ desc }}"
+  variable: {{ var }}
+  type: {{ type }}
+  required: {{ required | lower }}
+  default: {{ default | to_json }}
+{% if min is not none %}  min: {{ min }}
+{% endif %}{% if max is not none %}  max: {{ max }}
+{% endif %}{% if choices %}  choices: {{ choices | to_json }}
+{% endif %}
+{%- endmacro %}
+{{ q('vm_name', 'Name', 'text', '', 'Lowercase hostname; the VM becomes <name>.' ~ vm_domain, min=1, max=63) }}
+{{ q('vm_os', 'Operating system', 'multiplechoice', vm_os, 'ISO-based choices build a golden image on first use (5-30 min); later VMs take seconds', choices=vm_os_catalog.keys() | list) }}
+{{ q('vm_vcpus', 'vCPUs', 'integer', vm_vcpus | int, '', min=1, max=64) }}
+{{ q('vm_memory_mb', 'Memory (MB)', 'integer', vm_memory_mb | int, '', min=1024, max=262144) }}
+{{ q('vm_disk_gb', 'Disk (GB)', 'integer', vm_disk_gb | int, 'At least the golden image size (' ~ vm_base_disk_gb ~ ' GB)', min=vm_base_disk_gb | int, max=2000) }}
+{{ q('vm_update_on_provision', 'Fully update on first boot', 'multiplechoice', 'true', 'One full dnf/apt update and a reboot if needed; RHEL registers first', choices=['true', 'false']) }}

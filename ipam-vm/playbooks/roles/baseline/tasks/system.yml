@@ -4,7 +4,7 @@
   register: baseline_rhsm
   changed_when: false
   failed_when: false
-  when: ansible_facts.distribution == 'RedHat' and rhsm_org is defined and rhsm_activation_key is defined
+  when: ansible_facts.distribution == 'RedHat' and rhsm_org | default('') | length > 0 and rhsm_activation_key | default('') | length > 0
 
 - name: Register RHEL with an activation key
   ansible.builtin.command: >-
