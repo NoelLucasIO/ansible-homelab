@@ -38,6 +38,9 @@
           credential (root key), and security roles from {{ hcp_security_role_choices | join(', ') }}.
       no_log: true
 
+    - name: Root SSH key (repairs a pasted key's lost line breaks)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/root_key.yml"
+
     - name: Names
       ansible.builtin.set_fact:
         hcp_clname: "{{ hcp_cluster }}.{{ hcp_domain }}"
@@ -66,7 +69,7 @@
 
         - name: HCP root key on the hypervisor (removed afterwards)
           ansible.builtin.copy:
-            src: "{{ hcp_root_key_file }}"
+            src: "{{ hcp_key_path }}"
             dest: "{{ hcp_key_on_host }}"
             mode: "0600"
 

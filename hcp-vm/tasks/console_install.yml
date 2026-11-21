@@ -4,17 +4,13 @@
 #   VM off, OS disk empty           -> install-boot definition + console driver (VM powers off at the end)
 #   VM off, OS installed            -> final definition, add the HCP root key, start
 # A running VM without root SSH is left alone: that state needs a person (or hcp_replace).
-- name: Root SSH key, public half
-  ansible.builtin.command: ssh-keygen -y -f {{ hcp_root_key_file }}
-  delegate_to: localhost
-  become: false
-  register: hcp_root_pub
-  changed_when: false
+- name: Root SSH key (repairs a pasted key's lost line breaks)
+  ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/root_key.yml"
 
 - name: SSH command prefix for the node
   ansible.builtin.set_fact:
     hcp_ssh: >-
-      {{ ['ssh', '-i', hcp_root_key_file, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
+      {{ ['ssh', '-i', hcp_key_path, '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10',
           '-o', 'ServerAliveInterval=15', '-o', 'ServerAliveCountMax=4',
           '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=/dev/null', '-o', 'LogLevel=ERROR',
           'root@' ~ hcp_fe_ip] }}
@@ -119,7 +115,7 @@
 
     - name: HCP root key into root's authorized_keys_fe
       ansible.builtin.command:
-        argv: ["{{ hcp_log_dir }}/hcp_disk.sh", inject, "{{ hcp_disks[0] }}", "{{ hcp_root_pub.stdout }} hcp-vm"]
+        argv: ["{{ hcp_log_dir }}/hcp_disk.sh", inject, "{{ hcp_disks[0] }}", "{{ hcp_root_pubkey }} hcp-vm"]
       register: hcp_inject
       changed_when: "'INJECTED' in hcp_inject.stdout"
 
