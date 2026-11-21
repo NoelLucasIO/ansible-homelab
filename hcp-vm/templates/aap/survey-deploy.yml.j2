@@ -12,7 +12,7 @@
 {% endif %}
 {%- endmacro %}
 # --- placement and sizing
-{{ q('hcp_kvm_host', 'Hypervisor', 'multiplechoice', hcp_kvm_host, 'KVM host to build on', choices=aap_kvm_hosts) }}
+{{ q('hcp_kvm_host', 'Hypervisor', 'multiplechoice', (hcp_kvm_host if hcp_kvm_host in aap_kvm_hosts else aap_kvm_hosts[0]), 'KVM host to build on', choices=aap_kvm_hosts) }}
 {{ q('hcp_vcpus', 'vCPUs', 'integer', hcp_vcpus | int, 'Minimum 4', min=4, max=64) }}
 {{ q('hcp_memory_gb', 'Memory (GB)', 'integer', hcp_memory_gb | int, 'Minimum 32', min=32, max=512) }}
 {{ q('hcp_os_disk_gb', 'OS disk (GB)', 'integer', hcp_os_disk_gb | int, 'Minimum 100', min=100, max=2000) }}

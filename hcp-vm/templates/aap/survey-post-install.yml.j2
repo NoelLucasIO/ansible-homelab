@@ -4,7 +4,7 @@
   variable: hcp_kvm_host
   type: multiplechoice
   required: true
-  default: {{ hcp_kvm_host | to_json }}
+  default: {{ (hcp_kvm_host if hcp_kvm_host in aap_kvm_hosts else aap_kvm_hosts[0]) | to_json }}
   choices: {{ aap_kvm_hosts | to_json }}
 - question_name: System short name
   question_description: "The system is <short>.{{ hcp_domain }}"
