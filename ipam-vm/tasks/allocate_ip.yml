@@ -47,7 +47,8 @@
       ansible.builtin.set_fact:
         vm_host_body: >-
           {{ {'name': vm_fqdn, 'view': 'default', 'configure_for_dns': true,
-              'comment': vm_owner_comment, 'ipv4addrs': [{'ipv4addr': vm_ip}]}
+              'comment': vm_owner_comment, 'ipv4addrs': [{'ipv4addr': vm_ip}],
+              'ttl': vm_dns_ttl | int, 'use_ttl': true}
              | combine({'extattrs': vm_extattrs} if vm_extattrs else {}) }}
       vars:
         vm_extattrs: >-

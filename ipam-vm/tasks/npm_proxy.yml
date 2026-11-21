@@ -101,5 +101,7 @@
       name: "{{ vm_cockpit_fqdn }}"
       ipv4addr: "{{ npm_ip }}"
       view: default
+      ttl: "{{ vm_dns_ttl | int }}"
+      use_ttl: true
       comment: "{{ vm_owner_comment }}"
   when: vm_cockpit_a.json | length == 0

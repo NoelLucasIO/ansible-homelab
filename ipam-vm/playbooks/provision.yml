@@ -56,8 +56,10 @@
       register: vm_dig
       changed_when: false
       until: vm_ip in vm_dig.stdout
-      retries: 10
-      delay: 6
+      # Long enough for a cached answer from a previous VM of the same name to expire
+      # (ipam-vm records carry vm_dns_ttl; older records may need an Unbound flush).
+      retries: "{{ (vm_dns_ttl | int / 10) | round(0, 'ceil') | int + 6 }}"
+      delay: 10
 
     - name: 5. Cockpit through NPM with the wildcard certificate
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/npm_proxy.yml"

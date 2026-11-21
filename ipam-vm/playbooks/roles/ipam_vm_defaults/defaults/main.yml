@@ -126,6 +126,8 @@ vm_dns: [192.0.2.1]
 nios_ip: 192.0.2.25
 nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
 nios_api_user: aap-ipam          # limited NIOS account (password: nios_api_password in vault.yml)
+# TTL on the DNS records ipam-vm creates: a reused name's stale cached answer clears this fast.
+vm_dns_ttl: 300
 vm_candidates: 5                 # free IPs requested from NIOS; first one that doesn't answer ping wins
 
 # Marks records this project owns; decommission refuses anything without it.
