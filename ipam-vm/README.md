@@ -47,7 +47,7 @@ Optional: `-e vm_memory_mb=8192 -e vm_vcpus=4 -e vm_disk_gb=80`
 
 ## decommission.yml (`-e vm_name=web01 -e confirm=web01`)
 
-Destroys and undefines the VM, removes its disk and ISO, and deletes the host record, which frees the IP. It refuses unless the NIOS record carries the ipam-vm comment, so hand-built VMs can't be removed with it.
+Unregisters RHEL VMs from Red Hat (if reachable), then destroys and undefines the VM, removes its disk and ISO, and deletes the host record, which frees the IP. It refuses unless the NIOS record carries the ipam-vm comment, so hand-built VMs can't be removed with it.
 
 ## Setup
 

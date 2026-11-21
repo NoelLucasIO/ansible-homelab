@@ -39,6 +39,28 @@
           - vm_rec.json[0].comment | default('') == vm_owner_comment
         fail_msg: "{{ vm_name }}.{{ vm_domain }} has no NIOS host record owned by ipam-vm. Nothing removed."
 
+    # Before it's destroyed, so it doesn't linger in the Red Hat Hybrid Cloud Console. A no-op on
+    # non-RHEL and unregistered VMs; skipped if the VM is off or unreachable.
+    - name: Reach the VM directly (in-memory inventory only)
+      ansible.builtin.add_host:
+        name: "{{ vm_name }}.{{ vm_domain }}"
+        ansible_host: "{{ vm_rec.json[0].ipv4addrs[0].ipv4addr }}"
+        ansible_user: "{{ vm_admin_user }}"
+        ansible_ssh_private_key_file: "{{ vm_admin_private_key | default(omit) }}"
+        ansible_ssh_common_args: "-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
+      changed_when: false
+
+    - name: Unregister from Red Hat (RHEL VMs)
+      ansible.builtin.shell: |
+        if command -v subscription-manager >/dev/null && subscription-manager identity >/dev/null 2>&1; then
+          subscription-manager unregister >/dev/null && echo UNREGISTERED
+        fi
+      delegate_to: "{{ vm_name }}.{{ vm_domain }}"
+      register: vm_unreg
+      changed_when: "'UNREGISTERED' in vm_unreg.stdout | default('')"
+      failed_when: false
+      ignore_unreachable: true
+
     - name: Stop the VM
       ansible.builtin.command: virsh destroy {{ vm_name }}
       register: vm_d
