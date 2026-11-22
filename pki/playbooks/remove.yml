@@ -1,0 +1,61 @@
+---
+# Stop and remove the CA pod and its units. Keeps the data directory (keys, certs),
+# the database, DNS records and NPM hosts, so deploy.yml brings it back as it was.
+#   ansible-playbook playbooks/remove.yml -e @../site-vars.yml -K
+- name: Remove the lab CA pod
+  hosts: "{{ pki_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - pki_defaults
+  tasks:
+    - name: Owner of the rootless Quadlets
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ pki_owner }}"
+
+    - name: Paths and environment
+      ansible.builtin.set_fact:
+        pki_home: "{{ ansible_facts.getent_passwd[pki_owner][4] }}"
+        pki_user_env:
+          XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[pki_owner][1] }}"
+          DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[pki_owner][1] }}/bus"
+
+    - name: Stop units
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        state: stopped
+      loop: ["{{ pki_name }}-metrics.timer", "{{ pki_name }}-pod.service"]
+      become: true
+      become_user: "{{ pki_owner }}"
+      environment: "{{ pki_user_env }}"
+      failed_when: false
+
+    - name: Remove unit files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ pki_home }}/.config/containers/systemd/{{ pki_name }}.pod"
+        - "{{ pki_home }}/.config/containers/systemd/{{ pki_name }}-ca.container"
+        - "{{ pki_home }}/.config/containers/systemd/{{ pki_name }}-web.container"
+        - "{{ pki_home }}/.config/systemd/user/{{ pki_name }}-metrics.service"
+        - "{{ pki_home }}/.config/systemd/user/{{ pki_name }}-metrics.timer"
+        - "{{ pki_prom_config }}/scrape.d/{{ pki_name }}.yml"
+        - "{{ pki_prom_config }}/rules.d/{{ pki_name }}.yml"
+        - "{{ pki_splunk_uf_home }}/etc/apps/{{ pki_name }}_stepca_inputs"
+
+    - name: Reload the user's systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        scope: user
+      become: true
+      become_user: "{{ pki_owner }}"
+      environment: "{{ pki_user_env }}"
+
+    - name: Reload Prometheus
+      ansible.builtin.uri:
+        url: "{{ pki_prom_url }}/-/reload"
+        method: POST
+      failed_when: false

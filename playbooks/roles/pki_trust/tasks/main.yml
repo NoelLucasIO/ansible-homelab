@@ -1,0 +1,68 @@
+---
+# Put the lab root CA into the OS trust store (Fedora/RHEL/CentOS, Debian/Ubuntu, Arch,
+# SUSE). Browsers with their own store (Firefox, LibreWolf) still need it imported there.
+- name: OS family
+  ansible.builtin.setup:
+    gather_subset: [min]
+  when: ansible_facts.os_family is not defined
+
+- name: Root certificate given
+  ansible.builtin.assert:
+    that:
+      - pki_root_ca_pem is search('-----BEGIN CERTIFICATE-----')
+      - pki_root_ca_pem is search('-----END CERTIFICATE-----')
+    fail_msg: "Set pki_root_ca_pem (inventory) to the text of the lab root_ca.crt."
+    quiet: true
+  when: pki_trust_state == 'present'
+
+- name: Where this OS keeps trust anchors
+  ansible.builtin.set_fact:
+    pki_trust_store: "{{ pki_trust_stores[ansible_facts.os_family] | default(none) }}"
+  vars:
+    pki_trust_stores:
+      RedHat: { dir: /etc/pki/ca-trust/source/anchors, refresh: update-ca-trust extract }
+      Archlinux: { dir: /etc/ca-certificates/trust-source/anchors, refresh: update-ca-trust extract }
+      Debian: { dir: /usr/local/share/ca-certificates, refresh: update-ca-certificates --fresh }
+      Suse: { dir: /etc/pki/trust/anchors, refresh: update-ca-certificates }
+
+- name: Supported OS
+  ansible.builtin.assert:
+    that: pki_trust_store is not none
+    fail_msg: "pki_trust: no trust-store layout for os_family {{ ansible_facts.os_family }}."
+    quiet: true
+
+- name: Trust tools are installed (Debian minimal images can lack them)
+  ansible.builtin.package:
+    name: ca-certificates
+    state: present
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Root CA anchor
+  ansible.builtin.copy:
+    dest: "{{ pki_trust_store.dir }}/{{ pki_trust_name }}.crt"
+    content: "{{ pki_root_ca_pem | trim }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+  when: pki_trust_state == 'present'
+  register: pki_trust_anchor
+
+- name: Remove the anchor
+  ansible.builtin.file:
+    path: "{{ pki_trust_store.dir }}/{{ pki_trust_name }}.crt"
+    state: absent
+  when: pki_trust_state == 'absent'
+  register: pki_trust_removed
+
+- name: Rebuild the trust bundle
+  ansible.builtin.command: "{{ pki_trust_store.refresh }}"
+  when: pki_trust_anchor is changed or pki_trust_removed is changed
+  changed_when: true
+
+- name: The system bundle has the root (openssl verifies it against the default store)
+  ansible.builtin.command:
+    cmd: openssl verify {{ pki_trust_store.dir }}/{{ pki_trust_name }}.crt
+  register: pki_trust_verify
+  changed_when: false
+  failed_when: "pki_trust_verify.rc != 0 or pki_trust_verify.stdout is not search(': OK')"
+  when: pki_trust_state == 'present'

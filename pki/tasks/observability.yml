@@ -1,0 +1,82 @@
+---
+# Logs need nothing here: the pod logs to the owner's user journal, and Alloy's
+# loki.source.journal already labels its lines container="pki-ca" / "pki-web".
+- name: Prometheus fragment directories
+  ansible.builtin.file:
+    path: "{{ pki_prom_config }}/{{ item }}"
+    state: directory
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0755"
+  loop: [scrape.d, rules.d]
+
+- name: Prometheus loads scrape.d and rules.d (existing entries are left alone)
+  ansible.builtin.lineinfile:
+    path: "{{ pki_prom_config }}/prometheus.yml"
+    insertafter: "^{{ item.section }}:"
+    line: "  - /etc/prometheus/{{ item.dir }}/*.yml"
+    backup: true
+  loop:
+    - { section: scrape_config_files, dir: scrape.d }
+    - { section: rule_files, dir: rules.d }
+  register: pki_prom_main
+
+- name: Scrape config and alert rules
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+    dest: "{{ pki_prom_config }}/{{ item.dest }}"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  loop:
+    - { src: prometheus-scrape.yml.j2, dest: "scrape.d/{{ pki_name }}.yml" }
+    - { src: prometheus-rules.yml.j2, dest: "rules.d/{{ pki_name }}.yml" }
+  register: pki_prom_files
+
+- name: Prometheus config and rules are valid
+  ansible.builtin.command:
+    cmd: podman exec prometheus sh -c 'promtool check config /etc/prometheus/prometheus.yml && promtool check rules /etc/prometheus/rules.d/{{ pki_name }}.yml'
+    chdir: /
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  changed_when: false
+  when: pki_prom_main is changed or pki_prom_files is changed
+
+- name: Reload Prometheus
+  ansible.builtin.uri:
+    url: "{{ pki_prom_url }}/-/reload"
+    method: POST
+    status_code: [200]
+  when: pki_prom_main is changed or pki_prom_files is changed
+
+- name: Grafana dashboard directory
+  ansible.builtin.file:
+    path: "{{ pki_grafana_provisioning }}/dashboards/{{ pki_name }}"
+    state: directory
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0755"
+
+- name: Grafana dashboard provider and dashboard
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+    dest: "{{ pki_grafana_provisioning }}/{{ item.dest }}"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  loop:
+    - { src: grafana-dashboards.yaml.j2, dest: "dashboards/{{ pki_name }}.yaml" }
+    - { src: pki-overview.json.j2, dest: "dashboards/{{ pki_name }}/pki-overview.json" }
+  register: pki_grafana_files
+
+# A new provider needs a restart; dashboard edits are picked up every 60 s.
+- name: Restart Grafana to load the new dashboard provider
+  ansible.builtin.systemd_service:
+    name: "{{ pki_grafana_unit }}"
+    scope: user
+    state: restarted
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  when: pki_grafana_files.results[0] is changed  # noqa: no-handler

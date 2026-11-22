@@ -1,0 +1,63 @@
+---
+# Deploy (or update) the lab CA: step-ca + a small nginx front page in one rootless pod.
+# Safe to rerun. Run ceremony.yml once first (root CA on the YubiKeys).
+#   ansible-playbook playbooks/deploy.yml -e @site-vars.yml --ask-vault-pass -K
+#   Only part of it:  --tags config,quadlets   |   --tags observability   |   --tags dns
+#   New intermediate (key + cert):  -e pki_reissue_intermediate=true
+- name: Deploy the lab CA
+  hosts: "{{ pki_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - pki_defaults
+  pre_tasks:
+    - name: 0. Preflight
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+      tags: always
+  tasks:
+    - name: 1. Database on the existing Postgres
+      ansible.builtin.import_tasks: ../tasks/database.yml
+      tags: [db]
+
+    - name: 2. Directories, Podman secrets, admin provisioner key
+      ansible.builtin.import_tasks: ../tasks/config.yml
+      tags: [config, quadlets, start]
+
+    - name: 3. Intermediate CA (key on this host, signed with the root from AAP)
+      ansible.builtin.import_tasks: ../tasks/intermediate.yml
+      tags: [intermediate, config, quadlets, start]
+
+    - name: 4. ca.json, leaf template, landing page
+      ansible.builtin.import_tasks: ../tasks/files.yml
+      tags: [config, quadlets, start]
+
+    - name: 5. Quadlets and the expiry-check timer
+      ansible.builtin.import_tasks: ../tasks/quadlets.yml
+      tags: [quadlets, start]
+
+    - name: 6. Start and wait
+      ansible.builtin.import_tasks: ../tasks/start.yml
+      tags: [start]
+
+    - name: 7. Prometheus, alerts, Grafana (logs reach Loki via Alloy already)
+      ansible.builtin.import_tasks: ../tasks/observability.yml
+      tags: [observability]
+
+    - name: 8. Splunk input for the CA's logs
+      ansible.builtin.import_tasks: ../tasks/splunk.yml
+      when: pki_splunk_enabled | bool
+      tags: [splunk, observability]
+
+    - name: 9. NPM proxy hosts and NIOS DNS
+      ansible.builtin.import_tasks: ../tasks/proxy_dns.yml
+      tags: [dns]
+
+    - name: 10. Verify (issue, check, revoke a test certificate)
+      ansible.builtin.import_tasks: ../tasks/verify.yml
+      tags: [verify]
+
+  handlers:
+    - name: Restart splunk forwarder
+      ansible.builtin.systemd_service:
+        name: SplunkForwarder.service
+        state: restarted

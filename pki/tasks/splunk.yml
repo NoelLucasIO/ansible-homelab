@@ -1,0 +1,36 @@
+---
+# The host's Universal Forwarder reads the CA's journal lines through a small local app.
+- name: Universal Forwarder present?
+  ansible.builtin.stat:
+    path: "{{ pki_splunk_uf_home }}/bin/splunk"
+  register: pki_uf
+
+- name: No forwarder on this host
+  ansible.builtin.debug:
+    msg: "No Splunk UF at {{ pki_splunk_uf_home }}: skipped. Install it with playbooks/observability-agents.yml, or set pki_splunk_enabled=false."
+  when: not pki_uf.stat.exists
+
+- name: Splunk input app
+  when: pki_uf.stat.exists
+  block:
+    - name: Forwarder's owner
+      ansible.builtin.stat:
+        path: "{{ pki_splunk_uf_home }}/etc"
+      register: pki_uf_etc
+
+    - name: App directory
+      ansible.builtin.file:
+        path: "{{ pki_splunk_uf_home }}/etc/apps/{{ pki_name }}_stepca_inputs/local"
+        state: directory
+        owner: "{{ pki_uf_etc.stat.pw_name }}"
+        group: "{{ pki_uf_etc.stat.gr_name }}"
+        mode: "0755"
+
+    - name: Input definition (inputs.conf)
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/splunk/inputs.conf.j2"
+        dest: "{{ pki_splunk_uf_home }}/etc/apps/{{ pki_name }}_stepca_inputs/local/inputs.conf"
+        owner: "{{ pki_uf_etc.stat.pw_name }}"
+        group: "{{ pki_uf_etc.stat.gr_name }}"
+        mode: "0644"
+      notify: Restart splunk forwarder

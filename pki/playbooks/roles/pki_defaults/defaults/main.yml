@@ -1,0 +1,85 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so anything set in the
+# inventory (AAP inventory variables included) or with -e overrides them.
+# A playbook-adjacent group_vars/all would NOT: it outranks inventory-level vars.
+# Addresses use the RFC 5737 documentation ranges and example.com: set real values
+# in your inventory (see inventory.example.yml).
+
+# --- Names -------------------------------------------------------------------------
+pki_name: pki                             # pod name; containers are pki-ca and pki-web
+pki_domain: "{{ vm_domain | default('example.com') }}"   # shares ipam-vm's domain when set
+pki_ca_name: Example Lab                  # CNs: "<name> Root CA", "<name> Intermediate CA"
+pki_ca_org: Example Lab
+pki_ca_fqdn: "ca.{{ pki_domain }}"        # ACME/API on :pki_ca_port, CRL on http://<this>/crl (baked into certs)
+pki_web_fqdn: "pki.{{ pki_domain }}"      # landing page: root cert, Apple profile, how-to
+pki_ca_ip: 192.0.2.45                     # the Podman host; ca.<domain> must reach step-ca directly
+pki_tz: America/New_York
+
+# --- Root (public half; made by ceremony.yml). The private key never lives on the CA host.
+pki_root_ca_pem: ""                       # PEM text of root_ca.crt (inventory var; pki_trust uses it too)
+pki_root_days: 7305                       # 20 years (ceremony.yml)
+pki_root_curve: secp384r1                 # YubiKey 5 PIV: ECCP256 / ECCP384
+
+# --- Intermediate (online; key stays on the CA host, encrypted with pki_intermediate_password)
+pki_intermediate_days: 1826               # 5 years
+pki_intermediate_renew_days: 365          # re-issued on deploy once less than this is left
+pki_reissue_intermediate: false           # -e pki_reissue_intermediate=true forces a new one
+pki_name_constraints_permitted: []        # e.g. ["DNS:.example.com", "IP:192.0.2.0/255.255.255.0"]; empty = none
+
+# --- Leaf certificates
+pki_leaf_default: 2160h                   # 90 days (ACME and step CLI default)
+pki_leaf_max: 8760h                       # 1 year, admin provisioner only; ACME is capped at the default
+pki_leaf_min: 5m
+pki_acme_challenges: [http-01, dns-01, tls-alpn-01]
+
+# --- Host ---------------------------------------------------------------------------
+pki_owner: CHANGE_ME                      # owner of the rootless postgres/prometheus/grafana Quadlets
+pki_data_mount: /srv                      # must be a mount point; the pod won't start without it
+pki_data: "{{ pki_data_mount }}/pki"
+pki_min_podman: "5.3"                     # Quadlet .pod UserNS=
+
+# --- Images (pinned so upgrades are deliberate)
+pki_stepca_image: docker.io/smallstep/step-ca:0.30.2
+pki_web_image: docker.io/library/nginx:1.30.7-alpine
+
+# --- Ports (the pod shares the host network) ----------------------------------------
+pki_ca_port: 9443                         # step-ca HTTPS (ACME, API, /crl, /health), all interfaces
+pki_metrics_port: 9444                    # step-ca Prometheus metrics, 127.0.0.1 only
+pki_web_port: 8446                        # nginx: landing page + /crl over HTTP, 127.0.0.1 only (NPM in front)
+
+# --- Database on the existing rootless PostgreSQL (16+) Quadlet, Network=host on 5432
+pki_pg_container: postgres
+pki_pg_host: 127.0.0.1
+pki_pg_port: 5432
+pki_db: stepca
+pki_db_user: stepca
+
+# --- Reverse proxy and DNS (same variables as ipam-vm/vigil) --------------------------
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam                   # password: nios_api_password (secret)
+npm_api: http://192.0.2.45:81/api
+npm_ip: 192.0.2.45
+npm_cert_domain: "*.{{ pki_domain }}"
+npm_access_list_name: "LAN-only"
+pki_dns_resolver: 192.0.2.1               # the resolver clients use
+pki_record_comment: "pki: managed by Ansible"
+
+# --- Observability (existing rootless Prometheus, Grafana, Loki/Alloy on the same host) ---
+pki_prom_config: /srv/prometheus/config   # mounted at /etc/prometheus in the prometheus container
+pki_prom_url: http://127.0.0.1:9091
+pki_grafana_provisioning: /srv/grafana-provisioning   # mounted at /etc/grafana/provisioning
+pki_grafana_unit: grafana.service         # rootless user unit
+pki_grafana_folder: Security
+pki_loki_url: http://127.0.0.1:3100       # verify step only: Alloy already ships the journal
+pki_metrics_interval: 15min               # how often pki-metrics checks cert/CRL expiry
+
+# --- Splunk (Universal Forwarder already on the host) --------------------------------
+pki_splunk_enabled: true
+pki_splunk_uf_home: /opt/splunkforwarder
+pki_splunk_index: linux
+pki_splunk_sourcetype: "stepca:journald"
+
+# --- Ceremony (ceremony.yml, run on the workstation the YubiKeys plug into) ------------
+pki_yubikey_primary: ""                   # serial (ykman list); required
+pki_yubikey_backup: ""                    # serial; blank = primary only

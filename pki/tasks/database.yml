@@ -1,0 +1,23 @@
+---
+# step-ca's database lives on the existing rootless Postgres (same pattern as vigil).
+# psql runs inside that container as its owner, so no superuser password is needed;
+# the SQL (with the password) goes in on stdin, never on a command line.
+- name: Role and database on {{ pki_pg_container }}
+  ansible.builtin.command:
+    cmd: podman exec -i {{ pki_pg_container }} psql -U postgres -v ON_ERROR_STOP=1 -X
+    stdin: "{{ lookup('ansible.builtin.template', (playbook_dir | dirname) ~ '/templates/config/db.sql.j2') }}"
+    chdir: /
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  register: pki_db_result
+  changed_when: "'CREATE ROLE' in pki_db_result.stdout or 'CREATE DATABASE' in pki_db_result.stdout"
+  failed_when: false              # reported below with the password masked
+  no_log: true
+
+- name: Database step failed (password masked)
+  ansible.builtin.fail:
+    msg: >-
+      rc={{ pki_db_result.rc }}: {{ (pki_db_result.stderr | default('') ~ ' ' ~ pki_db_result.stdout | default(''))
+        | replace(pki_db_password, '***') | regex_replace("PASSWORD '(?:[^']|'')*'", "PASSWORD '***'") }}
+  when: pki_db_result.rc | default(1) != 0

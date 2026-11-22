@@ -1,0 +1,63 @@
+---
+- name: Admin provisioner key (public JWK + encrypted private key)
+  ansible.builtin.slurp:
+    src: "{{ pki_data }}/config/{{ item }}"
+  loop: [admin.pub.json, admin.jwe]
+  register: pki_admin_files
+
+- name: Parse it
+  ansible.builtin.set_fact:
+    pki_admin_pub: "{{ pki_admin_files.results[0].content | b64decode | from_json }}"
+    pki_admin_jwe: "{{ pki_admin_files.results[1].content | b64decode | trim }}"
+
+- name: Step-ca config and leaf template
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/config/{{ item.src }}"
+    dest: "{{ pki_data }}/{{ item.dest }}"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0640"
+  loop:
+    - { src: ca.json.j2, dest: config/ca.json }
+    - { src: leaf.tpl.j2, dest: templates/leaf.tpl }
+  register: pki_ca_files
+
+- name: Landing page, nginx config, Apple profile
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/config/{{ item.src }}"
+    dest: "{{ pki_data }}/{{ item.dest }}"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  loop:
+    - { src: index.html.j2, dest: web/index.html }
+    - { src: root_ca.mobileconfig.j2, dest: web/root_ca.mobileconfig }
+    - { src: nginx.conf.j2, dest: config/nginx.conf }
+  register: pki_web_files
+
+- name: Public certificates on the landing page (PEM)
+  ansible.builtin.copy:
+    src: "{{ pki_data }}/certs/{{ item }}"
+    dest: "{{ pki_data }}/web/{{ item }}"
+    remote_src: true
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  loop: [root_ca.crt, intermediate_ca.crt]
+
+# DER copies: Windows import, and the AIA URL in every leaf (RFC 5280 wants DER there).
+- name: Public certificates on the landing page (DER)
+  ansible.builtin.command:
+    cmd: openssl x509 -in {{ pki_data }}/certs/{{ item }}_ca.crt -outform DER -out {{ pki_data }}/web/{{ item }}_ca.der
+    creates: "{{ omit if (pki_root_file is changed or pki_intermediate_changed | default(false)) else pki_data ~ '/web/' ~ item ~ '_ca.der' }}"
+  loop: [root, intermediate]
+  become: true
+  become_user: "{{ pki_owner }}"
+
+- name: Expiry-check script
+  ansible.builtin.copy:
+    src: "{{ playbook_dir | dirname }}/files/pki-metrics.sh"
+    dest: "{{ pki_data }}/bin/pki-metrics.sh"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0755"

@@ -1,0 +1,73 @@
+# {{ ansible_managed }}
+# Loaded via rule_files: /etc/prometheus/rules.d/*.yml
+groups:
+  - name: pki
+    rules:
+      - alert: PKICADown
+        expr: up{job="pki-stepca"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "step-ca is down: no ACME issuance or renewal on the LAN"
+          description: "Check: systemctl --user status {{ pki_name }}-ca (as {{ pki_owner }}); journalctl --user -u {{ pki_name }}-ca"
+
+      - alert: PKIExpiryCheckStale
+        expr: absent(pki_metrics_last_run_seconds) or time() - pki_metrics_last_run_seconds > 3600
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "The {{ pki_name }}-metrics timer hasn't written expiry gauges for an hour"
+
+      - alert: PKIIntermediateExpiring
+        expr: (pki_cert_not_after_seconds{cert="intermediate"} - time()) / 86400 < {{ [pki_intermediate_renew_days - 30, 60] | max }}
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "Intermediate CA expires in {% raw %}{{ $value | humanize }}{% endraw %} days: rerun the PKI deploy job with the PKI root CA credential"
+
+      - alert: PKIIntermediateExpiringSoon
+        expr: (pki_cert_not_after_seconds{cert="intermediate"} - time()) / 86400 < 30
+        for: 1h
+        labels: { severity: critical }
+        annotations:
+          summary: "Intermediate CA expires in {% raw %}{{ $value | humanize }}{% endraw %} days"
+
+      - alert: PKIRootExpiring
+        expr: (pki_cert_not_after_seconds{cert="root"} - time()) / 86400 < 730
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "Root CA expires in {% raw %}{{ $value | humanize }}{% endraw %} days: plan a new ceremony and trust roll-out"
+
+      - alert: PKIServingCertExpiring
+        expr: (pki_cert_not_after_seconds{cert="serving"} - time()) < 3600
+        for: 30m
+        labels: { severity: critical }
+        annotations:
+          summary: "step-ca's own TLS certificate is about to expire (it normally renews itself daily)"
+
+      - alert: PKICRLUnavailable
+        expr: pki_crl_fetch_success == 0
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "CRL can't be fetched from http://127.0.0.1:{{ pki_web_port }}/crl"
+
+      - alert: PKICRLStale
+        expr: pki_crl_next_update_seconds - time() < 3600
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "CRL nextUpdate is less than an hour away and hasn't been regenerated"
+
+      - alert: PKIIssuanceFailures
+        expr: sum by (provisioner) (increase(step_ca_x509_signed_total{success="false"}[30m])) > 3
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}{{ $value | humanize }}{% endraw %} failed signings on provisioner {% raw %}{{ $labels.provisioner }}{% endraw %} in 30 minutes"
+
+      - alert: PKIRenewalFailures
+        expr: sum by (provisioner) (increase(step_ca_x509_renewed_total{success="false"}[1h])) > 0
+        labels: { severity: warning }
+        annotations:
+          summary: "Failed renewals on provisioner {% raw %}{{ $labels.provisioner }}{% endraw %}"

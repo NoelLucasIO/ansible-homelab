@@ -1,0 +1,22 @@
+---
+- name: Log in to NPM
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/tokens"
+    method: POST
+    body_format: json
+    body: { identity: "{{ npm_identity }}", secret: "{{ npm_secret }}" }
+    status_code: [200]
+  register: npm_login
+  no_log: true
+
+- name: NPM auth header
+  ansible.builtin.set_fact:
+    npm_headers: { Authorization: "Bearer {{ npm_login.json.token }}" }
+  no_log: true
+
+- name: Existing proxy hosts
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    headers: "{{ npm_headers }}"
+    return_content: true
+  register: npm_hosts

@@ -1,0 +1,10 @@
+-- {{ ansible_managed }}
+-- step-ca's role and database. Idempotent: creates what is missing, keeps the password in sync.
+{% set pw = pki_db_password | replace("'", "''") %}
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', '{{ pki_db_user }}', '{{ pw }}')
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{{ pki_db_user }}')\gexec
+ALTER ROLE "{{ pki_db_user }}" WITH LOGIN PASSWORD '{{ pw }}';
+SELECT format('CREATE DATABASE %I OWNER %I', '{{ pki_db }}', '{{ pki_db_user }}')
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ pki_db }}')\gexec
+REVOKE ALL ON DATABASE "{{ pki_db }}" FROM PUBLIC;
+GRANT CONNECT, TEMPORARY ON DATABASE "{{ pki_db }}" TO "{{ pki_db_user }}";

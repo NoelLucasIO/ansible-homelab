@@ -1,0 +1,110 @@
+---
+- name: Secrets are filled in (AAP credential "PKI secrets", or group_vars/all/vault.yml)
+  ansible.builtin.assert:
+    that:
+      - lookup('vars', item, default='CHANGE_ME') != 'CHANGE_ME'
+    fail_msg: "{{ item }} is missing or CHANGE_ME. See playbooks/group_vars/all/vault.yml.example."
+    quiet: true
+  loop:
+    - pki_intermediate_password
+    - pki_admin_password
+    - pki_db_password
+    - pki_owner
+    - nios_api_password
+    - npm_identity
+    - npm_secret
+  no_log: true
+
+- name: Root CA certificate is set (pki_root_ca_pem, from ceremony.yml)
+  ansible.builtin.assert:
+    that:
+      - pki_root_ca_pem is search('-----BEGIN CERTIFICATE-----')
+      - pki_root_ca_pem is search('-----END CERTIFICATE-----')
+    fail_msg: "Set pki_root_ca_pem (inventory) to the text of root_ca.crt from ceremony.yml."
+    quiet: true
+
+- name: Passwords are long enough
+  ansible.builtin.assert:
+    that: lookup('vars', item) | length >= 20
+    fail_msg: "{{ item }} is shorter than 20 characters; use python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+    quiet: true
+  loop: [pki_intermediate_password, pki_admin_password, pki_db_password]
+  no_log: true
+
+# ca.<domain> serves ACME straight from step-ca on this host and the CRL through NPM,
+# so one A record covers both only when NPM runs here too.
+- name: NPM runs on the CA host
+  ansible.builtin.assert:
+    that: npm_ip == pki_ca_ip
+    fail_msg: "npm_ip ({{ npm_ip }}) != pki_ca_ip ({{ pki_ca_ip }}): {{ pki_ca_fqdn }} must reach both."
+    quiet: true
+
+- name: Data mount point is mounted ({{ pki_data_mount }})
+  ansible.builtin.command: mountpoint -q {{ pki_data_mount }}
+  changed_when: false
+
+- name: Podman version
+  ansible.builtin.command: podman version --format '{{ "{{" }}.Client.Version{{ "}}" }}'
+  register: pki_podman_version
+  changed_when: false
+
+- name: Podman is new enough for Quadlet pods with UserNS=
+  ansible.builtin.assert:
+    that: pki_podman_version.stdout is version(pki_min_podman, '>=')
+    fail_msg: "Podman {{ pki_podman_version.stdout }} < {{ pki_min_podman }}"
+    quiet: true
+
+- name: Owner of the rootless Quadlets
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ pki_owner }}"
+
+- name: Remember uid, home and the environment rootless Podman/systemd need
+  ansible.builtin.set_fact:
+    pki_owner_uid: "{{ ansible_facts.getent_passwd[pki_owner][1] }}"
+    pki_owner_gid: "{{ ansible_facts.getent_passwd[pki_owner][2] }}"
+    pki_owner_home: "{{ ansible_facts.getent_passwd[pki_owner][4] }}"
+    pki_quadlet_dir: "{{ ansible_facts.getent_passwd[pki_owner][4] }}/.config/containers/systemd"
+    pki_user_unit_dir: "{{ ansible_facts.getent_passwd[pki_owner][4] }}/.config/systemd/user"
+    pki_user_env:
+      XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[pki_owner][1] }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[pki_owner][1] }}/bus"
+
+- name: Lingering is on (user services run without a login)
+  ansible.builtin.stat:
+    path: /var/lib/systemd/linger/{{ pki_owner }}
+  register: pki_linger
+
+- name: Lingering check
+  ansible.builtin.assert:
+    that: pki_linger.stat.exists
+    fail_msg: "Run: loginctl enable-linger {{ pki_owner }}"
+    quiet: true
+
+- name: Is the pod already running?
+  ansible.builtin.systemd_service:
+    name: "{{ pki_name }}-pod.service"
+    scope: user
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  register: pki_pod_state
+  failed_when: false
+
+- name: Listening TCP ports
+  ansible.builtin.command: ss -Hltn
+  register: pki_ss
+  changed_when: false
+  when: pki_pod_state.status.ActiveState | default('inactive') != 'active'
+
+- name: Ports the pod needs are free (first deploy only)
+  ansible.builtin.assert:
+    that: pki_busy | length == 0
+    fail_msg: "Already in use on {{ inventory_hostname }}: {{ pki_busy | join(', ') }}. Change the pki_*_port vars."
+    quiet: true
+  vars:
+    pki_ports: "{{ [pki_ca_port, pki_metrics_port, pki_web_port] | map('string') | list }}"
+    pki_listening: "{{ pki_ss.stdout_lines | map('split') | map(attribute=3)
+                       | map('regex_replace', '^.*:', '') | list }}"
+    pki_busy: "{{ pki_ports | intersect(pki_listening) }}"
+  when: pki_pod_state.status.ActiveState | default('inactive') != 'active'

@@ -1,0 +1,20 @@
+# {{ ansible_managed }}
+# Lab CA: step-ca (ACME, API, CRL) + nginx landing page. Rootless, host network.
+# keep-id maps {{ pki_owner }} to uid 1000 ("step" in the step-ca image), so files
+# under {{ pki_data }} stay owned by {{ pki_owner }} on the host.
+[Unit]
+Description=Lab CA pod (step-ca + landing page)
+AssertPathIsMountPoint={{ pki_data_mount }}
+Wants=postgres.service
+After=postgres.service
+
+[Pod]
+PodName={{ pki_name }}
+Network=host
+UserNS=keep-id:uid=1000,gid=1000
+
+[Service]
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

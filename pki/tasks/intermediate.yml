@@ -1,0 +1,150 @@
+---
+# The intermediate's key is made on this host and never leaves it. Its CSR is signed on the
+# controller (the AAP execution environment) with the root key from the "PKI root CA"
+# credential, which is only needed here: first deploy, renewal, or a forced re-issue.
+- name: Root certificate on the CA host
+  ansible.builtin.copy:
+    dest: "{{ pki_data }}/certs/root_ca.crt"
+    content: "{{ pki_root_ca_pem | trim }}\n"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  register: pki_root_file
+
+- name: Root certificate details
+  community.crypto.x509_certificate_info:
+    path: "{{ pki_data }}/certs/root_ca.crt"
+  register: pki_root_info
+
+- name: Root is a CA certificate
+  ansible.builtin.assert:
+    that:
+      - "'CA:TRUE' in pki_root_info.basic_constraints"
+      - pki_root_info.subject_key_identifier | default("", true) | length > 0
+    fail_msg: "pki_root_ca_pem is not a CA certificate with a subject key identifier."
+    quiet: true
+
+- name: Current intermediate
+  ansible.builtin.stat:
+    path: "{{ pki_data }}/certs/intermediate_ca.crt"
+  register: pki_int_file
+
+- name: Current intermediate details
+  community.crypto.x509_certificate_info:
+    path: "{{ pki_data }}/certs/intermediate_ca.crt"
+    valid_at:
+      renew: "+{{ pki_intermediate_renew_days }}d"
+  register: pki_int_info
+  when: pki_int_file.stat.exists
+
+- name: Does the intermediate need (re)issuing?
+  ansible.builtin.set_fact:
+    pki_int_reasons: >-
+      {{ (['missing'] if not pki_int_file.stat.exists else [])
+         + (['forced (pki_reissue_intermediate)'] if pki_reissue_intermediate | bool else [])
+         + (['expires within ' ~ pki_intermediate_renew_days ~ ' days']
+            if pki_int_file.stat.exists and not pki_int_info.valid_at.renew else [])
+         + (['issued by a different root']
+            if pki_int_file.stat.exists
+               and pki_int_info.authority_key_identifier != pki_root_info.subject_key_identifier else []) }}
+
+- name: Issue the intermediate
+  when: pki_int_reasons | length > 0
+  block:
+    - name: Why
+      ansible.builtin.debug:
+        msg: "Issuing a new intermediate: {{ pki_int_reasons | join(', ') }}"
+
+    - name: Root key and passphrase are available (AAP credential "PKI root CA")
+      ansible.builtin.assert:
+        that:
+          - pki_root_key_pem | default('') is search('PRIVATE KEY')
+          - pki_root_key_passphrase | default('') | length > 0
+        fail_msg: >-
+          Signing an intermediate needs pki_root_key_pem (the encrypted root key from ceremony.yml)
+          and pki_root_key_passphrase. Attach the "PKI root CA" credential to this job.
+        quiet: true
+      no_log: true
+
+    # A key pasted into an AAP credential field can lose its line breaks (see hcp-vm).
+    - name: Normalise the root key text
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import re, sys, textwrap
+            k = sys.stdin.read().replace('\r', '').strip()
+            m = re.match(r'-----BEGIN ([A-Z0-9 ]+)-----\s*(.*?)\s*-----END \1-----$', k, re.S)
+            if not m:
+                sys.exit('not a PEM private key: paste the whole file, BEGIN and END lines included')
+            body = re.sub(r'\s+', '', m.group(2))
+            print('-----BEGIN %s-----\n%s\n-----END %s-----' % (m.group(1), '\n'.join(textwrap.wrap(body, 64)), m.group(1)))
+        stdin: "{{ pki_root_key_pem }}"
+      delegate_to: localhost
+      become: false
+      register: pki_root_key_fixed
+      changed_when: false
+      no_log: true
+
+    - name: New intermediate key (next to the live one until the certificate is in hand)
+      community.crypto.openssl_privatekey:
+        path: "{{ pki_data }}/secrets/intermediate_ca_key.new"
+        type: ECC
+        curve: secp256r1
+        format: pkcs8
+        passphrase: "{{ pki_intermediate_password }}"
+        cipher: auto
+        force: true
+        owner: "{{ pki_owner }}"
+        group: "{{ pki_owner }}"
+        mode: "0600"
+      no_log: true
+
+    - name: CSR
+      community.crypto.openssl_csr_pipe:
+        privatekey_path: "{{ pki_data }}/secrets/intermediate_ca_key.new"
+        privatekey_passphrase: "{{ pki_intermediate_password }}"
+        common_name: "{{ pki_ca_name }} Intermediate CA"
+        organization_name: "{{ pki_ca_org }}"
+        use_common_name_for_san: false
+        basic_constraints: ["CA:TRUE", "pathlen:0"]
+        basic_constraints_critical: true
+        key_usage: [keyCertSign, cRLSign, digitalSignature]
+        key_usage_critical: true
+        name_constraints_permitted: "{{ pki_name_constraints_permitted | default(omit, true) }}"
+        name_constraints_critical: "{{ pki_name_constraints_permitted | length > 0 }}"
+      register: pki_int_csr
+      no_log: true
+
+    - name: Sign it with the root (on the controller)
+      community.crypto.x509_certificate_pipe:
+        provider: ownca
+        csr_content: "{{ pki_int_csr.csr }}"
+        ownca_content: "{{ pki_root_ca_pem }}"
+        ownca_privatekey_content: "{{ pki_root_key_fixed.stdout }}"
+        ownca_privatekey_passphrase: "{{ pki_root_key_passphrase }}"
+        ownca_not_after: "+{{ pki_intermediate_days }}d"
+        ownca_digest: sha384
+        ownca_create_subject_key_identifier: create_if_not_provided
+        ownca_create_authority_key_identifier: true
+      delegate_to: localhost
+      become: false
+      register: pki_int_cert
+      no_log: true
+
+    - name: Install the new certificate
+      ansible.builtin.copy:
+        dest: "{{ pki_data }}/certs/intermediate_ca.crt"
+        content: "{{ pki_int_cert.certificate }}"
+        owner: "{{ pki_owner }}"
+        group: "{{ pki_owner }}"
+        mode: "0644"
+
+    - name: Install the new key
+      ansible.builtin.command: mv -f {{ pki_data }}/secrets/intermediate_ca_key.new {{ pki_data }}/secrets/intermediate_ca_key
+      changed_when: true
+
+    - name: Remember that step-ca must restart
+      ansible.builtin.set_fact:
+        pki_intermediate_changed: true

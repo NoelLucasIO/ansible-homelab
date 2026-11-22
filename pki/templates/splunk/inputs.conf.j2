@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Lab CA logs (rootless pod, user journal) -> Splunk. Local app, outside any deployment
+# server class, so the deployment server leaves it alone. step-ca logs one JSON object per line.
+[journald://{{ pki_name }}]
+journalctl-filter = CONTAINER_NAME={{ pki_name }}-ca + CONTAINER_NAME={{ pki_name }}-web
+journalctl-include-fields = PRIORITY,CONTAINER_NAME,_SYSTEMD_USER_UNIT,_HOSTNAME
+interval = 30
+index = {{ pki_splunk_index }}
+sourcetype = {{ pki_splunk_sourcetype }}
+disabled = false

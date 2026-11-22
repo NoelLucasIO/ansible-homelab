@@ -1,0 +1,8 @@
+- question_name: CA host
+  question_description: Inventory host that runs the pod (keys, certificates and database are kept)
+  variable: pki_host
+  type: text
+  required: true
+  default: fedora.{{ pki_domain }}
+  min: 1
+  max: 253

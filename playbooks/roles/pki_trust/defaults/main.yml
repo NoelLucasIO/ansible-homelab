@@ -1,0 +1,5 @@
+---
+# Defaults only (lowest precedence): set pki_root_ca_pem in the inventory, once, for all hosts.
+pki_root_ca_pem: ""                 # shared with pki/: PEM text of the lab root CA (pki/playbooks/ceremony.yml output)
+pki_trust_name: lab-root-ca         # anchor file name, without extension
+pki_trust_state: present            # absent removes the anchor

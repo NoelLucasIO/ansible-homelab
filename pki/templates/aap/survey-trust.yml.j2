@@ -1,0 +1,15 @@
+- question_name: Hosts
+  question_description: Inventory pattern (host, group, "all", "web*:!db1")
+  variable: pki_trust_hosts
+  type: text
+  required: true
+  default: all
+  min: 1
+  max: 512
+- question_name: Action
+  question_description: present adds the lab root CA to the OS trust store; absent removes it
+  variable: pki_trust_state
+  type: multiplechoice
+  choices: [present, absent]
+  required: true
+  default: present

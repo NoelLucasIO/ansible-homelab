@@ -1,0 +1,37 @@
+# {{ ansible_managed }}
+# Replaces the image's default.conf (whose listen 80 would collide with NPM on the host network).
+# NPM proxies https://{{ pki_web_fqdn }} and http://{{ pki_ca_fqdn }} (CRL, AIA) to this server.
+server {
+    listen 127.0.0.1:{{ pki_web_port }};
+    server_name _;
+    root /usr/share/nginx/html;
+    index index.html;
+    server_tokens off;
+
+    types {
+        text/html                       html;
+        application/x-pem-file          crt pem;
+        application/pkix-cert           der cer;
+        application/x-apple-aspen-config mobileconfig;
+    }
+
+    # CRL (DER) from step-ca, over plain HTTP as relying parties expect.
+    location = /crl {
+        proxy_pass https://127.0.0.1:{{ pki_ca_port }}/crl;
+        proxy_ssl_verify off;            # loopback to our own CA
+        default_type application/pkix-crl;
+        add_header Cache-Control "public, max-age=300";
+    }
+
+    # Expiry gauges for Prometheus (written by pki-metrics.timer). Local scrapes only:
+    # anything that came through NPM carries X-Forwarded-For.
+    location = /metrics {
+        if ($http_x_forwarded_for) { return 403; }
+        default_type text/plain;
+        alias /srv/metrics/pki.prom;
+    }
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}

@@ -1,0 +1,22 @@
+---
+# CLI only: copy to vault.yml (git-ignored), fill in, then ansible-vault encrypt vault.yml
+# In AAP these come from custom credentials instead (see README.md).
+# Generate random values with: python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+
+# Shared with ipam-vm / vigil
+nios_api_password: CHANGE_ME
+npm_identity: CHANGE_ME                    # NPM login email
+npm_secret: CHANGE_ME
+
+# PKI secrets (credential "PKI secrets")
+pki_intermediate_password: CHANGE_ME       # encrypts the intermediate key on the CA host
+pki_admin_password: CHANGE_ME              # "admin" JWK provisioner (step ca certificate / revoke)
+pki_db_password: CHANGE_ME                 # stepca role on the existing Postgres
+
+# Root CA (credential "PKI root CA"): only needed to issue/renew the intermediate.
+# The whole root_ca.key.enc.pem from ceremony.yml, BEGIN and END lines included.
+# pki_root_key_pem: |
+#   -----BEGIN ENCRYPTED PRIVATE KEY-----
+#   ...
+#   -----END ENCRYPTED PRIVATE KEY-----
+# pki_root_key_passphrase: CHANGE_ME

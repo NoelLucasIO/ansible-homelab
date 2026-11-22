@@ -5,3 +5,5 @@ playbooks/roles/observability_agents_defaults/defaults/main.yml var-naming[no-ro
 vigil/playbooks/roles/vigil_defaults/defaults/main.yml var-naming[no-role-prefix]
 hcp-vm/playbooks/roles/hcp_vm_defaults/defaults/main.yml var-naming[no-role-prefix]
 vtm-vm/playbooks/roles/vtm_vm_defaults/defaults/main.yml var-naming[no-role-prefix]
+pki/playbooks/roles/pki_defaults/defaults/main.yml var-naming[no-role-prefix]
+playbooks/roles/pki_trust/defaults/main.yml var-naming[no-role-prefix]

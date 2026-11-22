@@ -1,0 +1,78 @@
+{% raw %}{
+  "title": "PKI (step-ca)",
+  "uid": "pki-overview",
+  "tags": ["pki", "security"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      { "name": "prom", "label": "Prometheus", "type": "datasource", "query": "prometheus" },
+      { "name": "loki", "label": "Loki", "type": "datasource", "query": "loki" },
+      { "name": "pod", "type": "constant", "hide": 2, "query": "{% endraw %}{{ pki_name }}{% raw %}" }
+    ]
+  },
+  "panels": [
+    { "type": "stat", "title": "step-ca", "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "up{job=\"pki-stepca\"}", "refId": "A" } ],
+      "fieldConfig": { "defaults": {
+        "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ],
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "Intermediate expires in", "gridPos": { "x": 4, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "(pki_cert_not_after_seconds{cert=\"intermediate\"} - time()) / 86400", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "d", "decimals": 0,
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 30 }, { "color": "green", "value": 335 } ] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "Root expires in", "gridPos": { "x": 9, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "(pki_cert_not_after_seconds{cert=\"root\"} - time()) / 86400 / 365.25", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "y", "decimals": 1,
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "orange", "value": 2 }, { "color": "green", "value": 5 } ] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "CRL next update", "gridPos": { "x": 14, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "pki_crl_next_update_seconds - time()", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "s",
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 3600 } ] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "Revoked (on CRL)", "gridPos": { "x": 19, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "pki_crl_revoked_certificates", "refId": "A" } ],
+      "options": { "colorMode": "none", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "timeseries", "title": "Certificates signed (per provisioner)", "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "sum by (provisioner, success) (increase(step_ca_x509_signed_total[$__rate_interval]))",
+                     "legendFormat": "{{provisioner}} success={{success}}", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 }, "decimals": 0 } } },
+
+    { "type": "timeseries", "title": "Renewals and rekeys", "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [
+        { "expr": "sum by (provisioner, success) (increase(step_ca_x509_renewed_total[$__rate_interval]))",
+          "legendFormat": "renew {{provisioner}} success={{success}}", "refId": "A" },
+        { "expr": "sum by (provisioner, success) (increase(step_ca_x509_rekeyed_total[$__rate_interval]))",
+          "legendFormat": "rekey {{provisioner}} success={{success}}", "refId": "B" } ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 }, "decimals": 0 } } },
+
+    { "type": "timeseries", "title": "Log lines by level", "gridPos": { "x": 0, "y": 12, "w": 24, "h": 6 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [ { "expr": "sum by (level) (count_over_time({container=~\"${pod}-.*\"}[$__interval]))",
+                     "legendFormat": "{{level}}", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "bars", "fillOpacity": 60 } } } },
+
+    { "type": "logs", "title": "step-ca log", "gridPos": { "x": 0, "y": 18, "w": 24, "h": 12 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [ { "expr": "{container=\"${pod}-ca\"}", "refId": "A" } ],
+      "options": { "showTime": true, "wrapLogMessage": true, "prettifyLogMessage": true, "sortOrder": "Descending" } }
+  ]
+}
+{% endraw %}

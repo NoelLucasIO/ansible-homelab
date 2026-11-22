@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Lab CA: write certificate/CRL expiry gauges for Prometheus
+After={{ pki_name }}-web.service
+
+[Service]
+Type=oneshot
+ExecStart={{ pki_data }}/bin/pki-metrics.sh {{ pki_data }}/certs {{ pki_data }}/metrics/pki.prom {{ pki_ca_port }} {{ pki_web_port }}

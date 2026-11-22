@@ -1,0 +1,45 @@
+{%- set der_b64 = pki_root_ca_pem | regex_replace('-----(BEGIN|END) CERTIFICATE-----', '') | regex_replace('\\s+', '') -%}
+{%- set seed = pki_root_info.fingerprints.sha256 -%}
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadCertificateFileName</key>
+      <string>root_ca.cer</string>
+      <key>PayloadContent</key>
+      <data>{{ der_b64 }}</data>
+      <key>PayloadDescription</key>
+      <string>Adds the {{ pki_ca_name }} Root CA</string>
+      <key>PayloadDisplayName</key>
+      <string>{{ pki_ca_name }} Root CA</string>
+      <key>PayloadIdentifier</key>
+      <string>{{ pki_domain }}.pki.root.cert</string>
+      <key>PayloadType</key>
+      <string>com.apple.security.root</string>
+      <key>PayloadUUID</key>
+      <string>{{ ('cert' ~ seed) | to_uuid | upper }}</string>
+      <key>PayloadVersion</key>
+      <integer>1</integer>
+    </dict>
+  </array>
+  <key>PayloadDescription</key>
+  <string>Trust certificates issued by the {{ pki_ca_name }} lab CA ({{ pki_ca_fqdn }}).</string>
+  <key>PayloadDisplayName</key>
+  <string>{{ pki_ca_name }} Root CA</string>
+  <key>PayloadIdentifier</key>
+  <string>{{ pki_domain }}.pki.root</string>
+  <key>PayloadOrganization</key>
+  <string>{{ pki_ca_org }}</string>
+  <key>PayloadRemovalDisallowed</key>
+  <false/>
+  <key>PayloadType</key>
+  <string>Configuration</string>
+  <key>PayloadUUID</key>
+  <string>{{ ('profile' ~ seed) | to_uuid | upper }}</string>
+  <key>PayloadVersion</key>
+  <integer>1</integer>
+</dict>
+</plist>

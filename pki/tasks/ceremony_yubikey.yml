@@ -1,0 +1,52 @@
+---
+# Import the root key + certificate into one YubiKey's PIV slot and prove it took.
+# The PIN goes on ykman's command line (it has no stdin option): no_log keeps it out of
+# output, and this runs on a single-user workstation for a few seconds.
+- name: PIV state, {{ pki_yk_serial }}
+  ansible.builtin.command: ykman --device {{ pki_yk_serial }} piv info
+  register: pki_yk_state
+  changed_when: false
+
+- name: YubiKey is ready, {{ pki_yk_serial }}
+  ansible.builtin.assert:
+    that:
+      - pki_yk_state.stdout is search('protected by PIN')
+      - pki_yk_state.stdout is not search('(?i)slot 9c') or pki_ceremony_force | bool
+    fail_msg: >-
+      YubiKey {{ pki_yk_serial }}: needs a PIN-protected management key
+      (ykman --device {{ pki_yk_serial }} piv access change-management-key --generate --protect),
+      and slot {{ pki_yubikey_slot }} must be empty (or pass -e pki_ceremony_force=true to overwrite it).
+    quiet: true
+
+- name: Import the key into slot {{ pki_yubikey_slot }}
+  ansible.builtin.command:
+    argv: [ykman, --device, "{{ pki_yk_serial }}", piv, keys, import,
+           --pin-policy, "{{ pki_yubikey_pin_policy }}", --touch-policy, "{{ pki_yubikey_touch }}",
+           -P, "{{ pki_yk_pin }}", "{{ pki_yubikey_slot }}", "{{ pki_ceremony_work }}/root_ca.key"]
+  changed_when: true
+  no_log: true
+
+- name: Import the certificate into slot {{ pki_yubikey_slot }}
+  ansible.builtin.command:
+    argv: [ykman, --device, "{{ pki_yk_serial }}", piv, certificates, import,
+           -P, "{{ pki_yk_pin }}", "{{ pki_yubikey_slot }}", "{{ pki_ceremony_out }}/root_ca.crt"]
+  changed_when: true
+  no_log: true
+
+- name: Read the public key back from the slot
+  ansible.builtin.command: ykman --device {{ pki_yk_serial }} piv keys export {{ pki_yubikey_slot }} -
+  register: pki_yk_pub
+  changed_when: false
+
+- name: Read the certificate back from the slot
+  ansible.builtin.command: ykman --device {{ pki_yk_serial }} piv certificates export {{ pki_yubikey_slot }} -
+  register: pki_yk_cert
+  changed_when: false
+
+- name: YubiKey holds the root, {{ pki_yk_serial }}
+  ansible.builtin.assert:
+    that:
+      - pki_yk_pub.stdout | trim == pki_root_pub.public_key | trim
+      - pki_yk_cert.stdout | trim == lookup('ansible.builtin.file', pki_ceremony_out ~ '/root_ca.crt') | trim
+    fail_msg: "YubiKey {{ pki_yk_serial }}: what's in slot {{ pki_yubikey_slot }} does not match the root."
+    quiet: true

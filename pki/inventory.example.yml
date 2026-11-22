@@ -1,0 +1,24 @@
+---
+# Copy to inventory.yml (git-ignored) for CLI runs. In AAP, use your inventory and
+# pass -e pki_host=<name> if the Podman host isn't called "fedora".
+all:
+  hosts:
+    fedora:
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3
+  vars:
+    pki_owner: CHANGE_ME
+    pki_ca_name: Example Lab
+    pki_ca_org: Example Lab
+    pki_domain: example.com
+    pki_ca_ip: 192.0.2.45
+    pki_data_mount: /srv
+    pki_prom_config: /srv/prometheus/config
+    pki_grafana_provisioning: /srv/grafana-provisioning
+    pki_yubikey_primary: "12345678"
+    pki_yubikey_backup: "87654321"
+    # From ceremony.yml (public; pki_trust uses it on every host too):
+    pki_root_ca_pem: |
+      -----BEGIN CERTIFICATE-----
+      ...
+      -----END CERTIFICATE-----

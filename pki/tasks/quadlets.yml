@@ -1,0 +1,72 @@
+---
+- name: Quadlet and user unit directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0755"
+  loop: ["{{ pki_quadlet_dir }}", "{{ pki_user_unit_dir }}"]
+
+- name: Pod and containers
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/quadlet/{{ item.src }}"
+    dest: "{{ pki_quadlet_dir }}/{{ item.dest }}"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  loop:
+    - { src: pki.pod.j2, dest: "{{ pki_name }}.pod" }
+    - { src: pki-ca.container.j2, dest: "{{ pki_name }}-ca.container" }
+    - { src: pki-web.container.j2, dest: "{{ pki_name }}-web.container" }
+  loop_control: { label: "{{ item.dest }}" }
+  register: pki_units
+
+- name: Expiry-check service and timer
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/systemd/{{ item }}.j2"
+    dest: "{{ pki_user_unit_dir }}/{{ item | replace('pki-', pki_name ~ '-') }}"
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "0644"
+  loop: [pki-metrics.service, pki-metrics.timer]
+  register: pki_timer_units
+
+# The dry run prints every Quadlet of the user, including other services' settings and
+# secrets: keep it out of the job log and report only the error lines.
+- name: Quadlet dry run (user)
+  ansible.builtin.command: /usr/libexec/podman/quadlet -dryrun -user
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  register: pki_dryrun
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Quadlet generator accepts every unit
+  ansible.builtin.assert:
+    that:
+      - pki_dryrun.rc == 0
+      - pki_dryrun.stderr is not search('rror')
+    fail_msg: "Quadlet dry run failed (rc {{ pki_dryrun.rc }}): {{ pki_dryrun.stderr_lines | select('search', 'rror') | list }}"
+    quiet: true
+
+- name: Reload the user's systemd (runs the Quadlet generator)
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    scope: user
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  when: pki_units is changed or pki_timer_units is changed
+
+- name: Expiry-check timer on
+  ansible.builtin.systemd_service:
+    name: "{{ pki_name }}-metrics.timer"
+    scope: user
+    enabled: true
+    state: started
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"

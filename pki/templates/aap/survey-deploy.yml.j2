@@ -1,0 +1,17 @@
+- question_name: Issue a new intermediate CA
+  question_description: >-
+    Force a new intermediate key and certificate (needs the PKI root CA credential).
+    It is renewed automatically once less than {{ pki_intermediate_renew_days }} days are left.
+  variable: pki_reissue_intermediate
+  type: multiplechoice
+  choices: ["false", "true"]
+  required: true
+  default: "false"
+- question_name: CA host
+  question_description: Inventory host that runs the pod
+  variable: pki_host
+  type: text
+  required: true
+  default: fedora.{{ pki_domain }}
+  min: 1
+  max: 253

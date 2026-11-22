@@ -1,0 +1,75 @@
+---
+# Owned by the Quadlet owner: keep-id maps it to uid 1000 ("step") inside the pod.
+- name: Data directories
+  ansible.builtin.file:
+    path: "{{ pki_data }}/{{ item.dir }}"
+    state: directory
+    owner: "{{ pki_owner }}"
+    group: "{{ pki_owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { dir: "", mode: "0750" }
+    - { dir: config, mode: "0750" }
+    - { dir: certs, mode: "0755" }
+    - { dir: secrets, mode: "0700" }
+    - { dir: templates, mode: "0750" }
+    - { dir: web, mode: "0755" }
+    - { dir: metrics, mode: "0755" }
+    - { dir: bin, mode: "0755" }
+  loop_control: { label: "{{ pki_data }}/{{ item.dir }}" }
+
+- name: Images
+  containers.podman.podman_image:
+    name: "{{ item }}"
+  loop: ["{{ pki_stepca_image }}", "{{ pki_web_image }}"]
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+
+# Rootless Podman secrets: mounted read-only into the containers, never in a unit file.
+- name: Podman secrets
+  containers.podman.podman_secret:
+    name: "{{ item.name }}"
+    data: "{{ item.value }}"
+    state: present
+  loop:
+    - { name: "{{ pki_name }}-intermediate-password", value: "{{ pki_intermediate_password }}" }
+    - { name: "{{ pki_name }}-admin-password", value: "{{ pki_admin_password }}" }
+    - { name: "{{ pki_name }}-db-password", value: "{{ pki_db_password }}" }
+  loop_control: { label: "{{ item.name }}" }
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  register: pki_secrets
+  no_log: true
+
+# The "admin" JWK provisioner (step CLI: issue certs by hand, revoke by serial). Its private
+# key is stored encrypted with pki_admin_password inside ca.json, as step ca init does it.
+- name: Admin provisioner key exists?
+  ansible.builtin.stat:
+    path: "{{ pki_data }}/config/admin.jwe"
+  register: pki_admin_jwe
+
+- name: Create the admin provisioner key (first deploy only)
+  ansible.builtin.command:
+    argv:
+      - podman
+      - run
+      - --rm
+      - --userns=keep-id:uid=1000,gid=1000
+      - --entrypoint=/bin/sh
+      - --secret={{ pki_name }}-admin-password,uid=1000,mode=0400
+      - --volume={{ pki_data }}/config:/w:z
+      - "{{ pki_stepca_image }}"
+      - -c
+      - >-
+        step crypto jwk create /w/admin.pub.json /w/admin.key.json --kty EC --crv P-256
+        --password-file /run/secrets/{{ pki_name }}-admin-password --force
+        && step crypto jose format < /w/admin.key.json > /w/admin.jwe
+        && rm -f /w/admin.key.json
+    chdir: /
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  when: not pki_admin_jwe.stat.exists
+  changed_when: true

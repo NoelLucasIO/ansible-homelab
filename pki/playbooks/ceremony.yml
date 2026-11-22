@@ -1,0 +1,205 @@
+---
+# Root CA ceremony: run ONCE, by hand, on the workstation the YubiKeys plug into.
+# Not an AAP job: it needs both keys physically, one after the other.
+#
+#   cd pki && ansible-playbook playbooks/ceremony.yml -e @../site-vars.yml
+#
+# 1. Makes the root key (ECDSA P-384) and a self-signed root certificate in RAM (/dev/shm).
+# 2. Writes a passphrase-encrypted copy of the key (PKCS#8, AES-256) for the AAP credential.
+# 3. Imports the key + certificate into PIV slot 9c of the primary YubiKey, then the backup.
+#    Each import is checked: the public key read back from the slot must match.
+# 4. Shreds the plaintext key, whatever happened.
+#
+# Output, in pki_ceremony_out (default ~/pki-ceremony, mode 0700):
+#   root_ca.crt          public: becomes the pki_root_ca_pem inventory variable
+#   root_ca.key.enc.pem  secret: paste into the AAP credential "PKI root CA", then move offline
+- name: Root CA ceremony
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - pki_defaults
+  vars_prompt:
+    - name: pki_root_key_passphrase
+      prompt: "Passphrase for the encrypted root key copy (20+ chars; goes into the AAP credential)"
+      private: true
+      confirm: true
+    - name: pki_yubikey_pin
+      prompt: "PIV PIN of the PRIMARY YubiKey"
+      private: true
+  vars:
+    pki_ceremony_out: "{{ lookup('env', 'HOME') }}/pki-ceremony"
+    pki_ceremony_force: false
+    pki_yubikey_slot: 9c                    # PIV "Digital Signature"
+    pki_yubikey_touch: cached               # touch to sign (cached 15 s); "always" or "never"
+    pki_yubikey_pin_policy: always          # PIN for every signature
+    # serials: inventory/site-vars (pki_yubikey_primary / pki_yubikey_backup); blank = skip that key
+  tasks:
+    # Set once: a lookup in vars: would be re-run (new timestamp) at every use.
+    - name: Work directory name (RAM)
+      ansible.builtin.set_fact:
+        pki_ceremony_work: "/dev/shm/pki-ceremony-{{ lookup('ansible.builtin.pipe', 'date +%s') }}"
+
+    - name: Inputs
+      ansible.builtin.assert:
+        that:
+          - pki_root_key_passphrase | length >= 20
+          - pki_ca_name != 'Example Lab'
+          - pki_yubikey_primary | default('') | string | length > 0
+        fail_msg: >-
+          Passphrase must be 20+ characters; set pki_ca_name and pki_ca_org, and
+          pki_yubikey_primary (and pki_yubikey_backup) serials, in site-vars.yml.
+        quiet: true
+      no_log: true
+
+    - name: No earlier ceremony output
+      ansible.builtin.stat:
+        path: "{{ pki_ceremony_out }}/root_ca.crt"
+      register: pki_prior
+
+    - name: Refuse to overwrite an existing root
+      ansible.builtin.assert:
+        that: not pki_prior.stat.exists or pki_ceremony_force | bool
+        fail_msg: >-
+          {{ pki_ceremony_out }}/root_ca.crt exists. A new root means re-trusting every host and
+          re-issuing the intermediate. Move it away, or pass -e pki_ceremony_force=true.
+        quiet: true
+
+    - name: Tools
+      ansible.builtin.command: "{{ item }}"
+      loop: [ykman --version, openssl version, shred --version]
+      changed_when: false
+
+    - name: Primary YubiKey is plugged in
+      ansible.builtin.command: ykman --device {{ pki_yubikey_primary }} piv info
+      register: pki_yk_info
+      changed_when: false
+
+    - name: Its PIV management key is PIN-protected (the PIN is all the import needs)
+      ansible.builtin.assert:
+        that: pki_yk_info.stdout is search('protected by PIN')
+        fail_msg: >-
+          YubiKey {{ pki_yubikey_primary }}: set a PIN-protected management key first:
+          ykman --device {{ pki_yubikey_primary }} piv access change-management-key --generate --protect
+        quiet: true
+
+    - name: Ceremony
+      block:
+        - name: Work directory in RAM
+          ansible.builtin.file:
+            path: "{{ pki_ceremony_work }}"
+            state: directory
+            mode: "0700"
+
+        - name: Output directory
+          ansible.builtin.file:
+            path: "{{ pki_ceremony_out }}"
+            state: directory
+            mode: "0700"
+
+        - name: Root key (plaintext, RAM only)
+          community.crypto.openssl_privatekey:
+            path: "{{ pki_ceremony_work }}/root_ca.key"
+            type: ECC
+            curve: "{{ pki_root_curve }}"
+            mode: "0600"
+
+        - name: Root CSR
+          community.crypto.openssl_csr_pipe:
+            privatekey_path: "{{ pki_ceremony_work }}/root_ca.key"
+            common_name: "{{ pki_ca_name }} Root CA"
+            organization_name: "{{ pki_ca_org }}"
+            use_common_name_for_san: false
+            basic_constraints: ["CA:TRUE", "pathlen:1"]
+            basic_constraints_critical: true
+            key_usage: [keyCertSign, cRLSign]
+            key_usage_critical: true
+          register: pki_root_csr
+
+        - name: Self-signed root certificate
+          community.crypto.x509_certificate:
+            path: "{{ pki_ceremony_out }}/root_ca.crt"
+            privatekey_path: "{{ pki_ceremony_work }}/root_ca.key"
+            csr_content: "{{ pki_root_csr.csr }}"
+            provider: selfsigned
+            selfsigned_not_after: "+{{ pki_root_days }}d"
+            selfsigned_digest: sha384
+            selfsigned_create_subject_key_identifier: create_if_not_provided
+            mode: "0644"
+            force: true
+
+        - name: Encrypted copy of the key, for the AAP credential
+          community.crypto.openssl_privatekey_convert:
+            src_path: "{{ pki_ceremony_work }}/root_ca.key"
+            dest_path: "{{ pki_ceremony_out }}/root_ca.key.enc.pem"
+            dest_passphrase: "{{ pki_root_key_passphrase }}"
+            format: pkcs8
+            mode: "0600"
+          no_log: true
+
+        - name: The encrypted copy opens with the passphrase
+          community.crypto.openssl_privatekey_info:
+            path: "{{ pki_ceremony_out }}/root_ca.key.enc.pem"
+            passphrase: "{{ pki_root_key_passphrase }}"
+          register: pki_enc_check
+          no_log: true
+
+        - name: Root public key
+          community.crypto.openssl_privatekey_info:
+            path: "{{ pki_ceremony_work }}/root_ca.key"
+          register: pki_root_pub
+          no_log: true
+
+        - name: Encrypted copy is the same key
+          ansible.builtin.assert:
+            that: pki_enc_check.public_key == pki_root_pub.public_key
+            quiet: true
+
+        - name: Primary YubiKey
+          ansible.builtin.include_tasks: ../tasks/ceremony_yubikey.yml
+          vars:
+            pki_yk_serial: "{{ pki_yubikey_primary }}"
+            pki_yk_pin: "{{ pki_yubikey_pin }}"
+
+        - name: Backup YubiKey
+          when: pki_yubikey_backup | default('') | string | length > 0
+          block:
+            - name: Swap keys
+              ansible.builtin.pause:
+                prompt: "Unplug YubiKey {{ pki_yubikey_primary }}, plug in the BACKUP ({{ pki_yubikey_backup }}), then type its PIV PIN"
+                echo: false
+              register: pki_backup_pin
+
+            - name: Backup YubiKey import
+              ansible.builtin.include_tasks: ../tasks/ceremony_yubikey.yml
+              vars:
+                pki_yk_serial: "{{ pki_yubikey_backup }}"
+                pki_yk_pin: "{{ pki_backup_pin.user_input }}"
+
+      always:
+        - name: Shred the plaintext key
+          ansible.builtin.shell: |
+            set -e
+            if [ -d '{{ pki_ceremony_work }}' ]; then
+              find '{{ pki_ceremony_work }}' -type f -exec shred -u -z {} +
+              rmdir '{{ pki_ceremony_work }}'
+            fi
+          changed_when: true
+
+    - name: Root certificate details
+      community.crypto.x509_certificate_info:
+        path: "{{ pki_ceremony_out }}/root_ca.crt"
+      register: pki_root_info
+
+    - name: Next steps
+      vars:
+        pki_keys_done: "{{ [pki_yubikey_primary, pki_yubikey_backup | default('')] | map('string') | select | list }}"
+      ansible.builtin.debug:
+        msg:
+          - "Root CA: {{ pki_root_info.subject.commonName }}, valid until {{ pki_root_info.not_after }}"
+          - "SHA-256: {{ pki_root_info.fingerprints.sha256 | upper }}"
+          - "Imported into PIV slot {{ pki_yubikey_slot }} of: {{ pki_keys_done | join(', ') }}"
+          - "1. AAP inventory var pki_root_ca_pem = contents of {{ pki_ceremony_out }}/root_ca.crt"
+          - "2. AAP credential 'PKI root CA' = contents of {{ pki_ceremony_out }}/root_ca.key.enc.pem + the passphrase (playbooks/aap-setup.yml can create it)"
+          - "3. Then move root_ca.key.enc.pem off this machine (offline media) or shred it: the YubiKeys and AAP hold the key now."
+          - "4. Run the PKI deploy job (deploy.yml)."

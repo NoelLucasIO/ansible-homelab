@@ -1,0 +1,11 @@
+---
+# Trust the lab root CA on existing hosts (new ones get it from bootstrap-host.yml and
+# the ipam-vm baseline). Same role, playbooks/roles/pki_trust.
+#   ansible-playbook playbooks/trust.yml -e @../site-vars.yml -e pki_trust_hosts=all -K
+#   Remove it again:  -e pki_trust_state=absent
+- name: Trust the lab root CA
+  hosts: "{{ pki_trust_hosts | default('no_hosts_given') }}"
+  become: true
+  gather_facts: true
+  roles:
+    - pki_trust

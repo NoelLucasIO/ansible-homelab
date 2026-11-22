@@ -1,0 +1,35 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Lab CA: step-ca
+Wants=postgres.service
+After=postgres.service
+
+[Container]
+ContainerName={{ pki_name }}-ca
+Image={{ pki_stepca_image }}
+Pod={{ pki_name }}.pod
+LogDriver=journald
+Environment=TZ={{ pki_tz }}
+# libpq-style: the password stays out of ca.json
+Secret={{ pki_name }}-db-password,type=env,target=PGPASSWORD
+Secret={{ pki_name }}-intermediate-password,uid=1000,mode=0400
+Secret={{ pki_name }}-admin-password,uid=1000,mode=0400
+Volume={{ pki_data }}/config:/home/step/config:ro,z
+Volume={{ pki_data }}/certs:/home/step/certs:ro,z
+Volume={{ pki_data }}/secrets:/home/step/secrets:ro,z
+Volume={{ pki_data }}/templates:/home/step/templates:ro,z
+Exec=/usr/local/bin/step-ca --password-file /run/secrets/{{ pki_name }}-intermediate-password /home/step/config/ca.json
+HealthCmd=step ca health --ca-url https://127.0.0.1:{{ pki_ca_port }} --root /home/step/certs/root_ca.crt
+HealthInterval=30s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=30s
+Notify=healthy
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

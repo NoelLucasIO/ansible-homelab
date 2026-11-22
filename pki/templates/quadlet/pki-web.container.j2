@@ -1,0 +1,30 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Lab CA: landing page, CRL and AIA over HTTP, expiry metrics
+Requires={{ pki_name }}-ca.service
+After={{ pki_name }}-ca.service
+
+[Container]
+ContainerName={{ pki_name }}-web
+Image={{ pki_web_image }}
+Pod={{ pki_name }}.pod
+# The pod runs as {{ pki_owner }} (keep-id, uid 1000); nginx's master needs root inside the
+# user namespace to set up its cache dirs and drop to its own user. Still unprivileged on the host.
+User=0
+Group=0
+LogDriver=journald
+Environment=TZ={{ pki_tz }}
+Volume={{ pki_data }}/web:/usr/share/nginx/html:ro,z
+Volume={{ pki_data }}/metrics:/srv/metrics:ro,z
+Volume={{ pki_data }}/config/nginx.conf:/etc/nginx/conf.d/default.conf:ro,z
+HealthCmd=wget -q -O /dev/null http://127.0.0.1:{{ pki_web_port }}/
+HealthInterval=30s
+HealthRetries=3
+Notify=healthy
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

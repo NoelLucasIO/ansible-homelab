@@ -1,0 +1,69 @@
+---
+# Quadlet units are generated, so they can't be "enabled": [Install] WantedBy= does that.
+- name: What needs a restart
+  ansible.builtin.set_fact:
+    pki_restart_ca: >-
+      {{ pki_units.results[1] is changed
+         or pki_ca_files is changed
+         or pki_root_file is changed
+         or pki_intermediate_changed | default(false)
+         or pki_secrets is changed }}
+    pki_restart_web: "{{ pki_units.results[2] is changed or pki_web_files.results[2] is changed }}"
+
+- name: Start the pod (first deploy) or keep it running
+  ansible.builtin.systemd_service:
+    name: "{{ pki_name }}-pod.service"
+    scope: user
+    state: "{{ 'restarted' if pki_units.results[0] is changed and pki_pod_state.status.ActiveState | default('') == 'active' else 'started' }}"
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  register: pki_pod_started
+
+- name: Restart step-ca (config, certificates or secrets changed)
+  ansible.builtin.systemd_service:
+    name: "{{ pki_name }}-ca.service"
+    scope: user
+    state: restarted
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  when: pki_restart_ca | bool and pki_pod_state.status.ActiveState | default('') == 'active'
+
+- name: Restart the landing page
+  ansible.builtin.systemd_service:
+    name: "{{ pki_name }}-web.service"
+    scope: user
+    state: restarted
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  when: pki_restart_web | bool and pki_pod_state.status.ActiveState | default('') == 'active'
+
+- name: Step-ca answers /health
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ pki_ca_port }}/health"
+    ca_path: "{{ pki_data }}/certs/root_ca.crt"
+    return_content: true
+  register: pki_health
+  until: pki_health.status == 200 and pki_health.json.status | default('') == 'ok'
+  retries: 30
+  delay: 5
+
+- name: Landing page answers
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ pki_web_port }}/"
+  register: pki_web_up
+  until: pki_web_up.status == 200
+  retries: 12
+  delay: 5
+
+- name: First expiry check (fills /metrics before Prometheus scrapes it)
+  ansible.builtin.systemd_service:
+    name: "{{ pki_name }}-metrics.service"
+    scope: user
+    state: started
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  changed_when: false

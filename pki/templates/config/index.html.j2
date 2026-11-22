@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<!-- {{ ansible_managed }} -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ pki_ca_name }} PKI</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 52rem; margin: 2rem auto; padding: 0 1rem; color: #1b1f24; }
+  h1 { font-size: 1.5rem; margin-bottom: .25rem; } h2 { font-size: 1.1rem; margin-top: 2rem; border-bottom: 1px solid #ddd; }
+  code, pre { font-family: ui-monospace, monospace; font-size: 13px; background: #f4f5f7; border-radius: 4px; }
+  pre { padding: .75rem; overflow-x: auto; } code { padding: 0 .25rem; }
+  table { border-collapse: collapse; } td { padding: .2rem .8rem .2rem 0; vertical-align: top; }
+  .muted { color: #5b6470; }
+  @media (prefers-color-scheme: dark) { body { background: #16181c; color: #e6e8eb; } code, pre { background: #23262c; } .muted { color: #9aa3ad; } }
+</style>
+</head>
+<body>
+<h1>{{ pki_ca_name }} PKI</h1>
+<p class="muted">Private certificate authority for the lab (step-ca {{ pki_stepca_image.split(':')[-1] }}). Deployed by Ansible.</p>
+
+<h2>Certificates</h2>
+<table>
+  <tr><td>Root CA</td><td><a href="root_ca.crt">root_ca.crt</a> (PEM) · <a href="root_ca.der">root_ca.der</a> (DER) · <a href="root_ca.mobileconfig">Apple profile</a></td></tr>
+  <tr><td>Intermediate CA</td><td><a href="intermediate_ca.crt">intermediate_ca.crt</a> (PEM) · <a href="intermediate_ca.der">intermediate_ca.der</a> (DER)</td></tr>
+  <tr><td>Root SHA-256</td><td><code>{{ pki_root_info.fingerprints.sha256 | upper }}</code></td></tr>
+  <tr><td>Root valid until</td><td>{{ pki_root_info.not_after | regex_replace('^(\\d{4})(\\d{2})(\\d{2}).*$', '\\1-\\2-\\3') }}</td></tr>
+  <tr><td>CRL</td><td><a href="http://{{ pki_ca_fqdn }}/crl">http://{{ pki_ca_fqdn }}/crl</a></td></tr>
+  <tr><td>ACME directory</td><td><code>https://{{ pki_ca_fqdn }}:{{ pki_ca_port }}/acme/acme/directory</code></td></tr>
+</table>
+<p>Check the fingerprint before you trust the root: <code>openssl x509 -in root_ca.crt -noout -fingerprint -sha256</code></p>
+
+<h2>Trust the root</h2>
+<p>Lab hosts get it from Ansible (<code>pki_trust</code> role: bootstrap and the VM baseline). By hand:</p>
+<pre># Fedora / RHEL / CentOS Stream
+sudo curl -o /etc/pki/ca-trust/source/anchors/lab-root-ca.crt https://{{ pki_web_fqdn }}/root_ca.crt
+sudo update-ca-trust extract
+
+# Debian (the file must end in .crt)
+sudo curl -o /usr/local/share/ca-certificates/lab-root-ca.crt https://{{ pki_web_fqdn }}/root_ca.crt
+sudo update-ca-certificates
+
+# Arch / CachyOS
+sudo trust anchor --store root_ca.crt
+
+# Windows (elevated)
+certutil -addstore -f Root root_ca.der</pre>
+<p><b>iPhone / iPad:</b> open <a href="root_ca.mobileconfig">the profile</a> in Safari, install it in Settings › General › VPN &amp; Device Management,
+then turn it on in Settings › General › About › Certificate Trust Settings.<br>
+<b>macOS:</b> open the profile, approve it in System Settings › Privacy &amp; Security › Profiles.<br>
+<b>Firefox / LibreWolf</b> keep their own store: Settings › Privacy &amp; Security › Certificates › View Certificates › Authorities › Import.</p>
+
+<h2>Get a certificate</h2>
+<pre># certbot (http-01: port 80 on the host must be reachable from {{ pki_ca_fqdn }})
+sudo certbot certonly --standalone -d host.{{ pki_domain }} \
+  --server https://{{ pki_ca_fqdn }}:{{ pki_ca_port }}/acme/acme/directory
+
+# acme.sh
+acme.sh --issue --standalone -d host.{{ pki_domain }} \
+  --server https://{{ pki_ca_fqdn }}:{{ pki_ca_port }}/acme/acme/directory
+
+# Caddy: in the site block
+tls {
+  ca https://{{ pki_ca_fqdn }}:{{ pki_ca_port }}/acme/acme/directory
+}
+
+# step CLI, admin provisioner (password from the PKI secrets credential)
+step ca bootstrap --ca-url https://{{ pki_ca_fqdn }}:{{ pki_ca_port }} --fingerprint {{ pki_root_info.fingerprints.sha256 | replace(':', '') | lower }}
+step ca certificate host.{{ pki_domain }} host.crt host.key --provisioner admin
+step ca revoke &lt;serial&gt;          # picks the admin provisioner, asks its password</pre>
+<p class="muted">Default lifetime {{ pki_leaf_default }} (ACME clients renew automatically). Revocations reach the CRL immediately.</p>
+</body>
+</html>

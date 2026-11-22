@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Lab CA: expiry gauges every {{ pki_metrics_interval }}
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={{ pki_metrics_interval }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

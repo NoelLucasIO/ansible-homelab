@@ -1,0 +1,123 @@
+---
+# End to end: issue a 10-minute certificate with the admin provisioner, check its chain
+# and CRL pointer, revoke it, and find it on the CRL served over HTTP.
+- name: Self-test certificate name
+  ansible.builtin.set_fact:
+    pki_test_cn: "pki-selftest-{{ lookup('pipe', 'date +%s') }}.{{ pki_domain }}"
+    pki_step: >-
+      podman exec {{ pki_name }}-ca step
+    pki_step_ca: --ca-url https://127.0.0.1:{{ pki_ca_port }} --root /home/step/certs/root_ca.crt
+    pki_step_admin: --provisioner admin --provisioner-password-file /run/secrets/{{ pki_name }}-admin-password
+
+- name: Verify as {{ pki_owner }}
+  become: true
+  become_user: "{{ pki_owner }}"
+  environment: "{{ pki_user_env }}"
+  block:
+    - name: Issue a test certificate
+      ansible.builtin.command:
+        cmd: >-
+          {{ pki_step }} ca certificate {{ pki_test_cn }} /tmp/selftest.crt /tmp/selftest.key
+          {{ pki_step_ca }} {{ pki_step_admin }} --not-after 10m --force
+        chdir: /
+      changed_when: true
+
+    - name: Chain verifies against the root
+      ansible.builtin.command:
+        cmd: "{{ pki_step }} certificate verify /tmp/selftest.crt --roots /home/step/certs/root_ca.crt"
+        chdir: /
+      changed_when: false
+
+    - name: Inspect it
+      ansible.builtin.command:
+        cmd: "{{ pki_step }} certificate inspect /tmp/selftest.crt --format json"
+        chdir: /
+      register: pki_test_json
+      changed_when: false
+
+    - name: It carries the CRL and AIA URLs from the leaf template
+      ansible.builtin.assert:
+        that:
+          - pki_test_json.stdout is search('http://' ~ pki_ca_fqdn ~ '/crl')
+          - pki_test_json.stdout is search('http://' ~ pki_ca_fqdn ~ '/intermediate_ca.der')
+        fail_msg: "Leaf template not applied: no CRL/AIA URL in the test certificate."
+        quiet: true
+
+    # step ca revoke <serial> only takes a provisioner token: get a one-time revoke token first.
+    - name: One-time revocation token (admin provisioner)
+      ansible.builtin.command:
+        cmd: "{{ pki_step }} ca token {{ (pki_test_json.stdout | from_json).serial_number }} --revoke {{ pki_step_ca }} {{ pki_step_admin }}"
+        chdir: /
+      register: pki_revoke_token
+      changed_when: false
+      no_log: true
+
+    - name: Revoke it
+      ansible.builtin.command:
+        argv: "{{ pki_step.split() + ['ca', 'revoke', (pki_test_json.stdout | from_json).serial_number,
+                 '--token', pki_revoke_token.stdout | trim, '--reason', 'pki deploy self-test'] + pki_step_ca.split() }}"
+        chdir: /
+      changed_when: true
+      no_log: true
+
+    - name: The CRL served over HTTP lists it
+      ansible.builtin.command:
+        cmd: "{{ pki_step }} crl inspect --insecure --format json http://127.0.0.1:{{ pki_web_port }}/crl"
+        chdir: /
+      register: pki_crl
+      changed_when: false
+      until: pki_crl.stdout is search((pki_test_json.stdout | from_json).serial_number)
+      retries: 6
+      delay: 5
+
+  always:
+    - name: Remove the test files
+      ansible.builtin.command:
+        cmd: podman exec {{ pki_name }}-ca rm -f /tmp/selftest.crt /tmp/selftest.key
+        chdir: /
+      changed_when: false
+      failed_when: false
+
+- name: ACME directory
+  ansible.builtin.uri:
+    url: "https://127.0.0.1:{{ pki_ca_port }}/acme/acme/directory"
+    ca_path: "{{ pki_data }}/certs/root_ca.crt"
+    return_content: true
+  register: pki_acme_dir
+  failed_when: pki_acme_dir.json.newNonce is not defined
+
+- name: Step-ca metrics
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ pki_metrics_port }}/metrics"
+    return_content: true
+  register: pki_metrics
+  failed_when: pki_metrics.content is not search('step_ca_x509_signed_total')
+
+- name: Expiry gauges
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ pki_web_port }}/metrics"
+    return_content: true
+  register: pki_expiry
+  failed_when: pki_expiry.content is not search('pki_cert_not_after_seconds')
+  until: pki_expiry.status == 200
+  retries: 6
+  delay: 5
+
+- name: Logs reached Loki
+  ansible.builtin.uri:
+    url: "{{ pki_loki_url }}/loki/api/v1/query?query={{ ('sum(count_over_time({container=\"' ~ pki_name ~ '-ca\"}[30m]))') | urlencode }}"
+    return_content: true
+  register: pki_loki
+  failed_when: false
+
+- name: Summary
+  ansible.builtin.debug:
+    msg:
+      - "Landing page:   https://{{ pki_web_fqdn }}/"
+      - "ACME directory: https://{{ pki_ca_fqdn }}:{{ pki_ca_port }}/acme/acme/directory"
+      - "CRL:            http://{{ pki_ca_fqdn }}/crl"
+      - "Root SHA-256:   {{ pki_root_info.fingerprints.sha256 | upper }}"
+      - "Self-test:      issued, verified, revoked and found on the CRL ({{ pki_test_cn }})"
+      - "Loki:           {{ ((pki_loki.json.data.result | default([]) | first | default({})).value | default([0, '0']))[1] }} step-ca lines in the last 30 min"
+      - "Grafana:        dashboard 'PKI (step-ca)' in folder {{ pki_grafana_folder }}"
+      - "Splunk:         index={{ pki_splunk_index }} sourcetype={{ pki_splunk_sourcetype }}"

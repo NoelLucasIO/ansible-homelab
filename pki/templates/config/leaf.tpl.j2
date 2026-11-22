@@ -1,0 +1,13 @@
+{# step-ca X.509 leaf template (Go text/template). Ansible fills in only the two URLs. -#}
+{
+  "subject": {% raw %}{{ toJson .Subject }}{% endraw %},
+  "sans": {% raw %}{{ toJson .SANs }}{% endraw %},
+{% raw %}{{- if typeIs "*rsa.PublicKey" .Insecure.CR.PublicKey }}{% endraw %}
+  "keyUsage": ["keyEncipherment", "digitalSignature"],
+{% raw %}{{- else }}{% endraw %}
+  "keyUsage": ["digitalSignature"],
+{% raw %}{{- end }}{% endraw %}
+  "extKeyUsage": ["serverAuth", "clientAuth"],
+  "crlDistributionPoints": ["http://{{ pki_ca_fqdn }}/crl"],
+  "issuingCertificateURL": ["http://{{ pki_ca_fqdn }}/intermediate_ca.der"]
+}
