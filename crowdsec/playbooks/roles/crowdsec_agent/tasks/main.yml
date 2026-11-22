@@ -99,11 +99,24 @@
     mode: "0644"
   notify: Restart crowdsec-agent
 
-- name: Quadlet generator accepts it
+# The dry run prints every Quadlet on the host, including other services' settings and
+# secrets: keep it out of the job log and report only this unit's lines.
+- name: Quadlet dry run
   ansible.builtin.command: /usr/libexec/podman/quadlet -dryrun
   register: crowdsec_agent_dryrun
   changed_when: false
-  failed_when: crowdsec_agent_dryrun.rc != 0 or 'crowdsec-agent' in crowdsec_agent_dryrun.stderr
+  failed_when: false
+  no_log: true
+
+- name: Quadlet generator accepts the unit
+  ansible.builtin.assert:
+    that:
+      - crowdsec_agent_dryrun.rc == 0
+      - "'---crowdsec-agent.service---' in crowdsec_agent_dryrun.stdout"
+    fail_msg: >-
+      Quadlet rejected crowdsec-agent.container (rc {{ crowdsec_agent_dryrun.rc }}):
+      {{ crowdsec_agent_dryrun.stderr_lines | select('search', 'crowdsec-agent|rror') | reject('search', 'Loading source unit file') | list }}
+    quiet: true
 
 - name: Pull the image (a first pull shouldn't race the unit's start timeout)
   ansible.builtin.command: podman pull -q {{ crowdsec_agent_image }}

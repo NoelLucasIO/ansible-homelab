@@ -48,11 +48,22 @@
   loop_control: { loop_var: c, label: "{{ c.name }}.timer" }
   register: vigil_timers
 
-- name: Quadlet generator accepts every unit
+# The dry run prints every Quadlet on the host, including other services' settings and
+# secrets: keep it out of the job log and report only the error lines.
+- name: Quadlet dry run
   ansible.builtin.command: /usr/libexec/podman/quadlet -dryrun
   register: vigil_dryrun
   changed_when: false
-  failed_when: vigil_dryrun.rc != 0 or 'rror' in vigil_dryrun.stderr
+  failed_when: false
+  no_log: true
+
+- name: Quadlet generator accepts every unit
+  ansible.builtin.assert:
+    that:
+      - vigil_dryrun.rc == 0
+      - vigil_dryrun.stderr is not search('rror')
+    fail_msg: "Quadlet dry run failed (rc {{ vigil_dryrun.rc }}): {{ vigil_dryrun.stderr_lines | select('search', 'rror') | list }}"
+    quiet: true
 
 - name: Reload systemd (runs the Quadlet generator)
   ansible.builtin.systemd:
