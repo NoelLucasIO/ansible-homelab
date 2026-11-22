@@ -33,6 +33,10 @@ internet ─► OPNsense ─► Nginx Proxy Manager (Podman host)
    address (default `127.0.0.1`: the agent couldn't reach it) and keep port 8080.
    Enable the blocklist rules, and their logging if you want the blocks in your firewall
    log. **Apply**.
+
+   Check that the new address took: `sockstat -4l | grep 8080` should show the LAN
+   address. If it still shows `127.0.0.1:8080`, Apply didn't restart the LAPI; run
+   `service oscrowdsec restart` and check again.
 3. If your LAN rules don't already allow it, pass TCP from the Podman host to *This
    Firewall* port 8080.
 4. Create the agent's machine on the LAPI (console or SSH), named like the inventory host:
@@ -80,6 +84,11 @@ extra_vars:
   crowdsec_agent_password: '{{ crowdsec_agent_password }}'
 ```
 
+If the inventory names the host differently (an FQDN, say), set `crowdsec_agent_host` to
+that name and keep `crowdsec_agent_machine` as the machine name from step 4, in the job
+template's extra variables. A run that matches no host succeeds in seconds and changes
+nothing.
+
 The run checks that the LAPI answers, installs the Quadlet, waits until the agent has logged
 in (`cscli lapi status`), and prints the acquisition metrics. Remove with
 `-e crowdsec_agent_state=absent` (add `-e crowdsec_agent_purge=true` to delete its volumes).
@@ -109,5 +118,7 @@ Against CrowdSec v1.8.2 on Fedora with Podman 5.8: `cscli explain` on real NPM l
 don't, so they aren't acquired; scanner lines on the default host trigger
 `http-crawl-non_statics` and `http-probing`), and an agent container configured exactly like
 the Quadlet logging in to a separate LAPI container, tailing the logs, whitelisting LAN
-clients, and logging in again after a restart. The OPNsense side follows CrowdSec's and the
-plugin's documentation; it wasn't run from here.
+clients, and logging in again after a restart. Then deployed for real: OPNsense 26.x with
+the os-crowdsec plugin as the LAPI, the agent run from AAP, logged in to the LAPI and
+tailing 38 NPM access logs. The plugin's rules show up in `pfctl -sr` as `block drop in/out
+log quick` on `<crowdsec_blocklists>` / `<crowdsec6_blocklists>`.
