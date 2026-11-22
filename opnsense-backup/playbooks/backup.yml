@@ -45,9 +45,6 @@
       ansible.builtin.set_fact:
         opnsense_cfg_sha256: "{{ opnsense_dl.content | hash('sha256') }}"
         opnsense_cfg_bytes: "{{ opnsense_dl.content | length }}"
-        opnsense_cfg_revision: >-
-          {{ ((opnsense_dl.content | regex_findall('(?s)<revision>.*?<time>([0-9.]+)</time>')) + ['0'])
-             | first | float | int }}
         opnsense_cfg_ok: >-
           {{ opnsense_dl.content is match('\s*<\?xml')
              and '<opnsense>' in opnsense_dl.content
@@ -144,7 +141,7 @@
           ansible.builtin.set_fact:
             opnsense_expired: >-
               {{ (opnsense_files.files | sort(attribute='mtime', reverse=true))[opnsense_backup_min_keep | int:]
-                 | selectattr('mtime', 'lt', now(utc=true).timestamp() - (opnsense_backup_keep_days | int) * 86400) | list }}
+                 | selectattr('mtime', 'lt', now().timestamp() - (opnsense_backup_keep_days | int) * 86400) | list }}
 
         - name: Expire them
           ansible.builtin.file:
@@ -152,6 +149,14 @@
             state: absent
           loop: "{{ opnsense_expired }}"
           loop_control: { label: "{{ item.path | basename }}" }
+
+        # OPNsense's own <revision><time> only moves when a legacy page saves (API/MVC pages
+        # leave it alone), so the newest backup's time is the reliable "last change".
+        - name: Newest kept backup
+          ansible.builtin.set_fact:
+            opnsense_newest_mtime: >-
+              {{ ((opnsense_files.files | rejectattr('path', 'in', opnsense_expired | map(attribute='path') | list)
+                   | map(attribute='mtime') | list) + [0]) | max | int }}
 
         - name: Textfile collector directory
           ansible.builtin.file:
@@ -166,10 +171,10 @@
             content: |
               # HELP opnsense_backup_last_success_timestamp_seconds Last run that fetched and stored (or matched) a valid config.xml.
               # TYPE opnsense_backup_last_success_timestamp_seconds gauge
-              opnsense_backup_last_success_timestamp_seconds{firewall="{{ inventory_hostname }}"} {{ now(utc=true).timestamp() | int }}
-              # HELP opnsense_backup_config_revision_timestamp_seconds Revision time inside the latest config.xml (last change on the firewall).
-              # TYPE opnsense_backup_config_revision_timestamp_seconds gauge
-              opnsense_backup_config_revision_timestamp_seconds{firewall="{{ inventory_hostname }}"} {{ opnsense_cfg_revision }}
+              opnsense_backup_last_success_timestamp_seconds{firewall="{{ inventory_hostname }}"} {{ now().timestamp() | int }}
+              # HELP opnsense_backup_last_change_timestamp_seconds When the stored config last changed (newest backup; one is written only on change).
+              # TYPE opnsense_backup_last_change_timestamp_seconds gauge
+              opnsense_backup_last_change_timestamp_seconds{firewall="{{ inventory_hostname }}"} {{ opnsense_newest_mtime }}
               # HELP opnsense_backup_files Encrypted backups kept.
               # TYPE opnsense_backup_files gauge
               opnsense_backup_files{firewall="{{ inventory_hostname }}"} {{ opnsense_files.matched | int - opnsense_expired | length }}
@@ -180,8 +185,7 @@
     - name: Result
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }}: config revision {{ '%Y-%m-%d %H:%M:%S UTC' | strftime(opnsense_cfg_revision | int, utc=true) }},
-          {{ opnsense_cfg_bytes }} bytes,
+          {{ inventory_hostname }}: {{ opnsense_cfg_bytes }} bytes,
           {{ ('new backup config-' ~ opnsense_stamp ~ '.xml.age') if opnsense_changed | bool else 'unchanged since the last backup (nothing written)' }}.
 
 - name: Monitoring on the storage host
