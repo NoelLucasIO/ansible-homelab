@@ -4,7 +4,7 @@
 #     homelab-pki-root from the vault values when present
 #   * job templates "PKI deploy", "PKI trust" and "PKI remove"
 #
-#   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @$HOME/pki-ceremony/pki-secrets.yml
+#   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @$HOME/pki-ceremony/pki-secrets.yml -e @../site-vars.yml
 #   (aap.local.yml, git-ignored: aap_url and aap_token, or aap_user + aap_password; add
 #    --ask-vault-pass if it or a vault.yml is encrypted)
 # The root key is read from ~/pki-ceremony/root_ca.key.enc.pem (ceremony.yml output) unless
@@ -27,7 +27,8 @@
     aap_project: ansible-homelab
     aap_inventory: homelab
     aap_machine_credential: homelab-ssh
-    aap_secrets_credential: homelab-secrets      # nios_api_password, npm_identity, npm_secret
+    # Own name: hcp-vm/aap.local.yml sets aap_secrets_credential (HCP VM secrets) for its playbooks.
+    pki_aap_secrets_credential: homelab-secrets  # nios_api_password, npm_identity, npm_secret
     aap_ee: ""                                   # execution environment name; blank = default
     # Literal AAP injector templates (!unsafe: not rendered by Ansible here).
     aap_pki_types:
@@ -113,13 +114,13 @@
 
     - name: Secrets credential (for its organization)
       ansible.builtin.uri:
-        url: "{{ aap_api }}/credentials/?name={{ aap_secrets_credential | urlencode }}"
+        url: "{{ aap_api }}/credentials/?name={{ pki_aap_secrets_credential | urlencode }}"
       register: aap_sec
 
     - name: Secrets credential found
       ansible.builtin.assert:
         that: aap_sec.json.count == 1
-        fail_msg: "Credential '{{ aap_secrets_credential }}' not found; pass -e aap_secrets_credential=<name>."
+        fail_msg: "Credential '{{ pki_aap_secrets_credential }}' not found; pass -e pki_aap_secrets_credential=<name>."
         quiet: true
 
     - name: Root key from the ceremony output (when not given in a vault)
