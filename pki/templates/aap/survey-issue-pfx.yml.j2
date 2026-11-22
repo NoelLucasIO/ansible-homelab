@@ -23,10 +23,10 @@
   min: 1
   max: {{ (pki_leaf_max | regex_replace('h$', '') | int) // 24 }}
 - question_name: Key type
-  question_description: RSA-2048 works everywhere (Windows, Java, appliances)
+  question_description: RSA-2048 works everywhere (Windows, Java, appliances); RSA-4096 only if the consumer requires it
   variable: pki_pfx_key
   type: multiplechoice
-  choices: [RSA-2048, RSA-3072, EC-P256]
+  choices: [RSA-2048, RSA-3072, RSA-4096, EC-P256]
   required: true
   default: RSA-2048
 - question_name: Export password

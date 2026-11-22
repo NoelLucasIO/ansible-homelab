@@ -15,7 +15,7 @@
   vars:
     pki_pfx_sans: ""                 # comma, space or newline separated; the CN is always included
     pki_pfx_days: 365                # capped by pki_leaf_max
-    pki_pfx_key: RSA-2048            # RSA-2048 | RSA-3072 | EC-P256
+    pki_pfx_key: RSA-2048            # RSA-2048 | RSA-3072 | RSA-4096 | EC-P256
     pki_pfx_legacy: false            # 3DES/SHA1 bundle for Windows Server <= 2016, old Java
     pki_pfx_dest_host: ""            # optional: also copy the .pfx to this inventory host...
     pki_pfx_dest_path: ""            # ...at this path (0600, owner root unless pki_pfx_dest_owner)
@@ -23,6 +23,7 @@
     pki_pfx_keys:
       RSA-2048: [--kty, RSA, --size, "2048"]
       RSA-3072: [--kty, RSA, --size, "3072"]
+      RSA-4096: [--kty, RSA, --size, "4096"]
       EC-P256: [--kty, EC, --crv, P-256]
   tasks:
     - name: Inputs
