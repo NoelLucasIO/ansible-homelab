@@ -4,15 +4,25 @@
 #     homelab-pki-root from the vault values when present
 #   * job templates "PKI deploy", "PKI trust" and "PKI remove"
 #
-#   ansible-playbook playbooks/aap-setup.yml --ask-vault-pass -e @../hcp-vm/aap.local.yml
-#   (aap.local.yml, git-ignored: aap_url and aap_token, or aap_user + aap_password)
+#   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @$HOME/pki-ceremony/pki-secrets.yml
+#   (aap.local.yml, git-ignored: aap_url and aap_token, or aap_user + aap_password; add
+#    --ask-vault-pass if it or a vault.yml is encrypted)
+# The root key is read from ~/pki-ceremony/root_ca.key.enc.pem (ceremony.yml output) unless
+# pki_root_key_pem is already set; its passphrase is prompted for (Enter skips that credential).
 - name: AAP setup for pki
   hosts: localhost
   connection: local
   gather_facts: false
   roles:
     - pki_defaults
+  vars_prompt:
+    - name: pki_root_key_passphrase
+      prompt: "Root key passphrase from the ceremony (Enter to skip the 'PKI root CA' credential)"
+      private: true
+      default: ""
   vars:
+    pki_root_key_file: "{{ lookup('env', 'HOME') }}/pki-ceremony/root_ca.key.enc.pem"
+    aap_optional_credentials: [homelab-pki-root]   # attached when it exists, skipped otherwise
     aap_api: "{{ aap_url }}/api/controller/v2"
     aap_project: ansible-homelab
     aap_inventory: homelab
@@ -111,6 +121,15 @@
         that: aap_sec.json.count == 1
         fail_msg: "Credential '{{ aap_secrets_credential }}' not found; pass -e aap_secrets_credential=<name>."
         quiet: true
+
+    - name: Root key from the ceremony output (when not given in a vault)
+      ansible.builtin.set_fact:
+        pki_root_key_pem: "{{ lookup('ansible.builtin.file', pki_root_key_file) }}"
+      when:
+        - pki_root_key_pem | default('') | length == 0
+        - pki_root_key_passphrase | length > 0
+        - pki_root_key_file is file
+      no_log: true
 
     - name: PKI credential types and credentials
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_credential.yml"
