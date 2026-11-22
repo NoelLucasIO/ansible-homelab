@@ -80,10 +80,19 @@
             mode: "0700"
           loop: ["{{ opnsense_backup_dir }}", "{{ opnsense_host_dir }}"]
 
-        - name: Age is installed
-          ansible.builtin.package:
+        # Not ansible.builtin.package: with delegate_to it must detect the delegated host's
+        # package manager, which fails in ansible-core 2.20 ("TemplateContext not active").
+        - name: Is age installed?
+          ansible.builtin.command: age --version
+          register: opnsense_age
+          changed_when: false
+          failed_when: false
+
+        - name: Install age (Fedora/RHEL storage host)
+          ansible.builtin.dnf:
             name: age
             state: present
+          when: opnsense_age.rc != 0
 
         - name: Hash of the last stored config
           ansible.builtin.slurp:
