@@ -1,0 +1,6 @@
+---
+- name: Restart crowdsec-agent
+  ansible.builtin.systemd:
+    name: crowdsec-agent.service
+    state: restarted
+    daemon_reload: true

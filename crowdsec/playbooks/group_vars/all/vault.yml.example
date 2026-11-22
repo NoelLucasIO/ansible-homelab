@@ -1,0 +1,8 @@
+---
+# CLI only: copy to vault.yml (git-ignored), fill in, then ansible-vault encrypt vault.yml
+# In AAP this comes from a custom credential instead (see README.md).
+
+# Password of this agent's machine on the LAPI. On OPNsense:
+#   cscli machines add <crowdsec_agent_machine> --auto -f -
+# and copy the password it prints.
+crowdsec_agent_password: CHANGE_ME

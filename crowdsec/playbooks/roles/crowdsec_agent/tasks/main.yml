@@ -1,0 +1,145 @@
+---
+- name: Remove the agent
+  when: crowdsec_agent_state == 'absent'
+  block:
+    - name: Stop it
+      ansible.builtin.systemd:
+        name: crowdsec-agent.service
+        state: stopped
+      failed_when: false
+
+    - name: Remove its unit and settings (a Quadlet unit goes away with its file)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ crowdsec_agent_quadlet_dir }}/crowdsec-agent.container"
+        - "{{ crowdsec_agent_etc }}"
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Delete the volumes (hub content, agent credentials file)
+      ansible.builtin.command: podman volume rm -f crowdsec-agent-config crowdsec-agent-data
+      when: crowdsec_agent_purge | bool
+      changed_when: true
+
+    - name: Done
+      ansible.builtin.meta: end_host
+
+- name: Password is set
+  ansible.builtin.assert:
+    that:
+      - crowdsec_agent_password != 'CHANGE_ME'
+      - crowdsec_agent_password is regex('^[A-Za-z0-9._~+/=-]+$')
+    fail_msg: >-
+      crowdsec_agent_password is missing or has characters other than letters, digits and ._~+/=-
+      (podman reads it from an env file literally).
+      Create it on the LAPI with: cscli machines add {{ crowdsec_agent_machine }} --auto -f -
+    quiet: true
+  no_log: true
+
+- name: NPM log directory exists
+  ansible.builtin.stat:
+    path: "{{ crowdsec_agent_npm_logs }}"
+  register: crowdsec_agent_logdir
+
+- name: Check it
+  ansible.builtin.assert:
+    that: crowdsec_agent_logdir.stat.isdir | default(false)
+    fail_msg: "{{ crowdsec_agent_npm_logs }} isn't a directory: set crowdsec_agent_npm_logs to NPM's data/logs."
+    quiet: true
+
+- name: Podman version
+  ansible.builtin.command: podman version --format '{{ "{{" }}.Client.Version{{ "}}" }}'
+  register: crowdsec_agent_podman
+  changed_when: false
+
+- name: Podman is new enough for Quadlet
+  ansible.builtin.assert:
+    that: crowdsec_agent_podman.stdout is version(crowdsec_agent_min_podman, '>=')
+    fail_msg: "Podman {{ crowdsec_agent_podman.stdout }} < {{ crowdsec_agent_min_podman }}"
+    quiet: true
+
+- name: LAPI answers (any HTTP status means it's listening)
+  ansible.builtin.uri:
+    url: "{{ crowdsec_agent_lapi_url }}/health"
+    status_code: [200, 401, 403, 404]
+    timeout: 10
+  register: crowdsec_agent_lapi
+  failed_when: crowdsec_agent_lapi.status == -1
+  changed_when: false
+
+- name: Settings directory
+  ansible.builtin.file:
+    path: "{{ crowdsec_agent_etc }}"
+    state: directory
+    mode: "0750"
+
+- name: Agent password (podman reads env files literally, so no quotes)
+  ansible.builtin.copy:
+    dest: "{{ crowdsec_agent_etc }}/agent.env"
+    content: "AGENT_PASSWORD={{ crowdsec_agent_password }}\n"
+    mode: "0600"
+  no_log: true
+  notify: Restart crowdsec-agent
+
+- name: Log sources
+  ansible.builtin.template:
+    src: acquis.yaml.j2
+    dest: "{{ crowdsec_agent_etc }}/acquis.yaml"
+    mode: "0644"
+  notify: Restart crowdsec-agent
+
+- name: Quadlet
+  ansible.builtin.template:
+    src: crowdsec-agent.container.j2
+    dest: "{{ crowdsec_agent_quadlet_dir }}/crowdsec-agent.container"
+    mode: "0644"
+  notify: Restart crowdsec-agent
+
+- name: Quadlet generator accepts it
+  ansible.builtin.command: /usr/libexec/podman/quadlet -dryrun
+  register: crowdsec_agent_dryrun
+  changed_when: false
+  failed_when: crowdsec_agent_dryrun.rc != 0 or 'crowdsec-agent' in crowdsec_agent_dryrun.stderr
+
+- name: Pull the image (a first pull shouldn't race the unit's start timeout)
+  ansible.builtin.command: podman pull -q {{ crowdsec_agent_image }}
+  register: crowdsec_agent_pull
+  changed_when: false
+  retries: 3
+  delay: 10
+  until: crowdsec_agent_pull is succeeded
+
+- name: Apply changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Running
+  ansible.builtin.systemd:
+    name: crowdsec-agent.service
+    state: started
+    daemon_reload: true
+
+# First start installs the hub collections, then logs in to the LAPI.
+- name: Agent is logged in to the LAPI
+  ansible.builtin.command: podman exec crowdsec-agent cscli lapi status
+  register: crowdsec_agent_status
+  until: crowdsec_agent_status.rc == 0
+  retries: 30
+  delay: 10
+  changed_when: false
+
+- name: Lines read so far, per log file
+  ansible.builtin.command: podman exec crowdsec-agent cscli metrics show acquisition
+  register: crowdsec_agent_metrics
+  changed_when: false
+
+- name: Summary
+  ansible.builtin.debug:
+    msg:
+      - "LAPI: {{ crowdsec_agent_lapi_url }} as machine {{ crowdsec_agent_machine }}"
+      - "{{ (crowdsec_agent_status.stdout_lines + crowdsec_agent_status.stderr_lines) | reject('search', 'level=') | list }}"
+      - "{{ crowdsec_agent_metrics.stdout_lines }}"
+      - "On the LAPI: cscli alerts list   |   cscli decisions list"

@@ -1,0 +1,11 @@
+---
+# CrowdSec agent on the Nginx Proxy Manager host, reporting to the OPNsense LAPI.
+#   ansible-playbook playbooks/agent.yml -e @site-vars.yml --ask-vault-pass -K
+#   Remove: -e crowdsec_agent_state=absent  (add -e crowdsec_agent_purge=true for the volumes)
+# The LAPI side (os-crowdsec on OPNsense) and the machine registration are manual: see README.md.
+- name: CrowdSec agent
+  hosts: "{{ crowdsec_agent_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - crowdsec_agent

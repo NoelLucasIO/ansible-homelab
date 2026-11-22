@@ -1,0 +1,10 @@
+---
+# Copy to inventory.yml (git-ignored) for CLI runs. In AAP, use your inventory and
+# pass -e crowdsec_agent_host=<name> if the NPM host isn't called "fedora".
+all:
+  hosts:
+    fedora:
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3
+      crowdsec_agent_lapi_url: http://192.0.2.1:8080
+      crowdsec_agent_npm_logs: /srv/npm/data/logs

@@ -1,0 +1,32 @@
+# {{ ansible_managed }}
+# CrowdSec log processor (agent only, no local API): reads NPM's access logs and
+# reports to the LAPI at {{ crowdsec_agent_lapi_url }}, which decides and blocks.
+[Unit]
+Description=CrowdSec agent: NPM logs -> {{ crowdsec_agent_lapi_url }}
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=crowdsec-agent
+Image={{ crowdsec_agent_image }}
+# Host network: reaches the LAPI directly; its metrics stay on 127.0.0.1:6060.
+Network=host
+LogDriver=journald
+Environment=TZ={{ crowdsec_agent_tz }}
+Environment=DISABLE_LOCAL_API=true
+Environment=LOCAL_API_URL={{ crowdsec_agent_lapi_url }}
+Environment=AGENT_USERNAME={{ crowdsec_agent_machine }}
+Environment="COLLECTIONS={{ crowdsec_agent_collections | join(' ') }}"
+EnvironmentFile={{ crowdsec_agent_etc }}/agent.env
+Volume=crowdsec-agent-config:/etc/crowdsec
+Volume=crowdsec-agent-data:/var/lib/crowdsec/data
+Volume={{ crowdsec_agent_etc }}/acquis.yaml:/etc/crowdsec/acquis.d/ansible.yaml:ro
+Volume={{ crowdsec_agent_npm_logs }}:/var/log/npm:ro
+
+[Service]
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

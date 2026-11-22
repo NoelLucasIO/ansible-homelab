@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# Mounted as /etc/crowdsec/acquis.d/ansible.yaml (crowdsec_agent_acquisitions)
+{% for a in crowdsec_agent_acquisitions %}
+{% if not loop.first %}
+---
+{% endif %}
+source: file
+filenames: {{ a.filenames | to_json }}
+labels:
+  type: {{ a.type }}
+{% endfor %}

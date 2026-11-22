@@ -1,0 +1,37 @@
+---
+# Defaults only: inventory (AAP inventory variables included) and -e override them.
+# Addresses are RFC 5737 documentation values; set the real ones in your inventory.
+
+crowdsec_agent_state: present             # absent: stop and remove the unit (volumes kept)
+crowdsec_agent_purge: false               # with state absent: also delete the volumes
+crowdsec_agent_image: docker.io/crowdsecurity/crowdsec:v1.8.2
+crowdsec_agent_tz: America/New_York
+
+# The LAPI this agent reports to: the OPNsense os-crowdsec plugin, listening on its LAN address.
+crowdsec_agent_lapi_url: http://192.0.2.1:8080
+# Machine name and password registered on the LAPI (cscli machines add <name> --auto).
+crowdsec_agent_machine: "{{ inventory_hostname }}"
+crowdsec_agent_password: CHANGE_ME        # secret
+
+# Nginx Proxy Manager's log directory on the host (NPM's /data/logs), mounted read-only.
+crowdsec_agent_npm_logs: /srv/npm/data/logs
+# Access logs only: proxy hosts, redirection hosts, the default host and the fallback
+# (where scanners hitting the bare IP land). Not *_access.log: NPM can also write a JSON
+# access log (proxy-json_access.log) the parser can't read, and its error logs don't feed
+# the HTTP scenarios.
+crowdsec_agent_acquisitions:
+  - filenames:
+      - /var/log/npm/proxy-host-*_access.log
+      - /var/log/npm/redirection-host-*_access.log
+      - /var/log/npm/default-host_access.log
+      - /var/log/npm/fallback_http_access.log
+    type: nginx-proxy-manager
+
+# Hub collections installed at container start (parsers + scenarios).
+crowdsec_agent_collections:
+  - crowdsecurity/nginx-proxy-manager     # NPM parser + generic HTTP scenarios
+  - crowdsecurity/http-cve                # known-CVE probes
+
+crowdsec_agent_quadlet_dir: /etc/containers/systemd
+crowdsec_agent_etc: /etc/crowdsec-agent
+crowdsec_agent_min_podman: "4.4"          # Quadlet
