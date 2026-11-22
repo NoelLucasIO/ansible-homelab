@@ -1,9 +1,9 @@
 #!/bin/bash
 # pki-metrics: expiry gauges for the lab CA, as a Prometheus text file served by pki-web
 # at http://127.0.0.1:<web port>/metrics. Run by pki-metrics.timer (user unit).
-#   pki-metrics.sh <certs dir> <out file> <step-ca port> <web port>
+#   pki-metrics.sh <certs dir> <out file> <step-ca port> <web port> [issued dir]
 set -uo pipefail
-certs=$1 out=$2 ca_port=$3 web_port=$4
+certs=$1 out=$2 ca_port=$3 web_port=$4 issued=${5:-}
 tmp=$(mktemp "${out}.XXXXXX")
 trap 'rm -f "$tmp"' EXIT
 
@@ -39,6 +39,18 @@ enddate() { openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2; }
     echo 'pki_crl_fetch_success 0'
   fi
   rm -f "$crl"
+
+  if [ -n "$issued" ] && [ -d "$issued" ]; then
+    echo '# HELP pki_issued_cert_not_after_seconds Expiry of the newest certificate issued per name by issue-pfx.yml (unix time).'
+    echo '# TYPE pki_issued_cert_not_after_seconds gauge'
+    for d in "$issued"/*/; do
+      [ -d "$d" ] || continue
+      newest=$(ls -1t "$d"*.crt 2>/dev/null | head -1)
+      [ -n "$newest" ] || continue
+      name=$(basename "$d")
+      echo "pki_issued_cert_not_after_seconds{name=\"$name\"} $(epoch "$(enddate < "$newest")")"
+    done
+  fi
 
   echo '# HELP pki_metrics_last_run_seconds When this file was written (unix time).'
   echo '# TYPE pki_metrics_last_run_seconds gauge'

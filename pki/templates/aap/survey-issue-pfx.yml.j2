@@ -1,0 +1,70 @@
+- question_name: Host name (CN)
+  question_description: DNS name the certificate is for, e.g. sql01.{{ pki_domain }} (also added as a SAN)
+  variable: pki_pfx_cn
+  type: text
+  required: true
+  default: ""
+  min: 3
+  max: 253
+- question_name: Extra SANs
+  question_description: Other DNS names or IP addresses, comma or newline separated (optional)
+  variable: pki_pfx_sans
+  type: textarea
+  required: false
+  default: ""
+  min: 0
+  max: 4096
+- question_name: Lifetime (days)
+  question_description: 1 to {{ (pki_leaf_max | regex_replace('h$', '') | int) // 24 }}; not renewed automatically
+  variable: pki_pfx_days
+  type: integer
+  required: true
+  default: 365
+  min: 1
+  max: {{ (pki_leaf_max | regex_replace('h$', '') | int) // 24 }}
+- question_name: Key type
+  question_description: RSA-2048 works everywhere (Windows, Java, appliances)
+  variable: pki_pfx_key
+  type: multiplechoice
+  choices: [RSA-2048, RSA-3072, EC-P256]
+  required: true
+  default: RSA-2048
+- question_name: Export password
+  question_description: Protects the .pfx; you'll need it to import it (8+ characters)
+  variable: pki_pfx_password
+  type: password
+  required: true
+  default: ""
+  min: 8
+  max: 128
+- question_name: Legacy PKCS#12 format
+  question_description: "true for Windows Server 2016 and older, old Java keystores, some appliances (3DES/SHA1)"
+  variable: pki_pfx_legacy
+  type: multiplechoice
+  choices: ["false", "true"]
+  required: true
+  default: "false"
+- question_name: Copy to host (optional)
+  question_description: Inventory host to also receive the .pfx (Linux, over SSH); leave empty to keep it on the CA host only
+  variable: pki_pfx_dest_host
+  type: text
+  required: false
+  default: ""
+  min: 0
+  max: 253
+- question_name: Path on that host
+  question_description: Full path for the .pfx on the destination host, e.g. /etc/pki/tls/private/sql01.pfx
+  variable: pki_pfx_dest_path
+  type: text
+  required: false
+  default: ""
+  min: 0
+  max: 1024
+- question_name: CA host
+  question_description: Inventory host that runs the pod
+  variable: pki_host
+  type: text
+  required: true
+  default: fedora.{{ pki_domain }}
+  min: 1
+  max: 253

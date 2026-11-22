@@ -148,6 +148,11 @@
           timeout: 1800
           extra_credentials: [homelab-pki, homelab-pki-root]
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-deploy.yml.j2') | from_yaml }}"
+        - name: PKI issue PFX
+          playbook: pki/playbooks/issue-pfx.yml
+          description: Certificate from the lab CA as a password-protected PKCS#12 (.pfx) for Windows, Java, appliances
+          timeout: 600
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-issue-pfx.yml.j2') | from_yaml }}"
         - name: PKI trust
           playbook: pki/playbooks/trust.yml
           description: Add (or remove) the lab root CA in the OS trust store of existing hosts

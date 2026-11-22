@@ -60,6 +60,13 @@ groups:
         annotations:
           summary: "CRL nextUpdate is less than an hour away and hasn't been regenerated"
 
+      - alert: PKIIssuedCertExpiring
+        expr: (pki_issued_cert_not_after_seconds - time()) / 86400 < 30
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "Certificate {% raw %}{{ $labels.name }}{% endraw %} (issued as PKCS#12) expires in {% raw %}{{ $value | humanize }}{% endraw %} days: rerun the PKI issue PFX job"
+
       - alert: PKIIssuanceFailures
         expr: sum by (provisioner) (increase(step_ca_x509_signed_total{success="false"}[30m])) > 3
         labels: { severity: warning }

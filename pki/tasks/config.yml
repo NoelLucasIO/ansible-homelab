@@ -16,6 +16,7 @@
     - { dir: web, mode: "0755" }
     - { dir: metrics, mode: "0755" }
     - { dir: bin, mode: "0755" }
+    - { dir: issued, mode: "0700" }       # PKCS#12 bundles from issue-pfx.yml
   loop_control: { label: "{{ pki_data }}/{{ item.dir }}" }
 
 - name: Images

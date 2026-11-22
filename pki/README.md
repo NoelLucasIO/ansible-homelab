@@ -70,6 +70,7 @@ Every leaf certificate carries `http://ca.<domain>/crl` (CRL distribution point)
 | Task | How |
 |---|---|
 | Certificate for a host | ACME client against `https://ca.<domain>:9443/acme/acme/directory` (certbot, acme.sh, Caddy, Traefik, NPM's custom ACME is not supported), or `step ca certificate` with the admin provisioner. |
+| PKCS#12 (.pfx) for Windows/Java/appliances | Job template *PKI issue PFX* (`playbooks/issue-pfx.yml`): name, SANs, lifetime, key type (RSA-2048 default), export password, optional legacy (3DES) format and destination host. Issued inside the pki-ca container; the `.pfx` lands in `<pki_data>/issued/<name>/` (0600) with an `index.csv`. Not renewed automatically: `PKIIssuedCertExpiring` fires 30 days before expiry. |
 | Revoke | `step ca revoke <serial>` (admin provisioner). The CRL is regenerated at once. |
 | Intermediate renewal | Automatic on any deploy within `pki_intermediate_renew_days` (365) of expiry; alerts start before that. Needs the *PKI root CA* credential. Force with `pki_reissue_intermediate=true`. |
 | Upgrade step-ca | Change `pki_stepca_image`, rerun deploy. |

@@ -1,0 +1,193 @@
+---
+# Issue a certificate from the lab CA and package it as PKCS#12 (.pfx) for consumers that
+# can't do ACME (Windows/IIS, Java, appliances). Runs inside the pki-ca container with the
+# admin provisioner (its password is already a Podman secret). Key, certificate and bundle
+# exist only in the container's /tmp until the .pfx is copied out; the export password goes
+# in on stdin. Output: <pki_data>/issued/<name>/<name>-<UTC stamp>.pfx (+ .crt), 0600.
+#   ansible-playbook playbooks/issue-pfx.yml -e @../site-vars.yml -K \
+#     -e pki_pfx_cn=host.example.com -e pki_pfx_password=... [-e pki_pfx_sans=a.example.com,192.0.2.10]
+- name: Issue a PKCS#12 certificate
+  hosts: "{{ pki_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - pki_defaults
+  vars:
+    pki_pfx_sans: ""                 # comma, space or newline separated; the CN is always included
+    pki_pfx_days: 365                # capped by pki_leaf_max
+    pki_pfx_key: RSA-2048            # RSA-2048 | RSA-3072 | EC-P256
+    pki_pfx_legacy: false            # 3DES/SHA1 bundle for Windows Server <= 2016, old Java
+    pki_pfx_dest_host: ""            # optional: also copy the .pfx to this inventory host...
+    pki_pfx_dest_path: ""            # ...at this path (0600, owner root unless pki_pfx_dest_owner)
+    pki_pfx_dest_owner: root
+    pki_pfx_keys:
+      RSA-2048: [--kty, RSA, --size, "2048"]
+      RSA-3072: [--kty, RSA, --size, "3072"]
+      EC-P256: [--kty, EC, --crv, P-256]
+  tasks:
+    - name: Inputs
+      ansible.builtin.assert:
+        that:
+          - pki_pfx_cn is defined
+          - pki_pfx_cn is match('^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)+$')
+          - pki_pfx_password | default('') | length >= 8
+          - pki_pfx_key in pki_pfx_keys
+          - pki_pfx_days | int >= 1
+          - (pki_pfx_days | int) * 24 <= (pki_leaf_max | regex_replace('h$', '') | int)
+          - (pki_pfx_dest_host | length > 0) == (pki_pfx_dest_path | length > 0)
+        fail_msg: >-
+          Needs pki_pfx_cn (a DNS name), pki_pfx_password (8+ chars), pki_pfx_key in
+          {{ pki_pfx_keys.keys() | list }}, 1 to {{ (pki_leaf_max | regex_replace('h$', '') | int) // 24 }} days,
+          and both or neither of pki_pfx_dest_host / pki_pfx_dest_path.
+        quiet: true
+      no_log: true
+
+    - name: Owner of the rootless pod
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ pki_owner }}"
+
+    - name: Names, SANs, environment
+      ansible.builtin.set_fact:
+        pki_pfx_name: "{{ pki_pfx_cn | regex_replace('^\\*', 'wildcard') }}"
+        pki_pfx_stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+        pki_pfx_san_list: >-
+          {{ ([pki_pfx_cn] + (pki_pfx_sans | regex_findall('[^,\s]+'))) | unique }}
+        pki_user_env:
+          XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[pki_owner][1] }}"
+
+    - name: Work in the container as {{ pki_owner }}
+      become: true
+      become_user: "{{ pki_owner }}"
+      environment: "{{ pki_user_env }}"
+      block:
+        - name: Scratch directory in the container
+          ansible.builtin.command:
+            cmd: podman exec {{ pki_name }}-ca mktemp -d /tmp/pfx.XXXXXX
+            chdir: /
+          register: pki_pfx_tmp
+          changed_when: false
+
+        - name: Export password into it (stdin, mode 0600)
+          ansible.builtin.command:
+            argv: [podman, exec, -i, "{{ pki_name }}-ca", sh, -c, "umask 077; cat > {{ pki_pfx_tmp.stdout }}/pw"]
+            stdin: "{{ pki_pfx_password }}"
+            stdin_add_newline: false
+            chdir: /
+          changed_when: false
+          no_log: true
+
+        - name: Issue the certificate (admin provisioner)
+          ansible.builtin.command:
+            argv: >-
+              {{ ['podman', 'exec', pki_name ~ '-ca', 'step', 'ca', 'certificate', pki_pfx_cn,
+                  pki_pfx_tmp.stdout ~ '/c.crt', pki_pfx_tmp.stdout ~ '/c.key',
+                  '--ca-url', 'https://127.0.0.1:' ~ pki_ca_port, '--root', '/home/step/certs/root_ca.crt',
+                  '--provisioner', 'admin', '--provisioner-password-file', '/run/secrets/' ~ pki_name ~ '-admin-password',
+                  '--not-after', ((pki_pfx_days | int) * 24) ~ 'h', '--force']
+                 + (pki_pfx_san_list | map('regex_replace', '^', '--san=') | list)
+                 + pki_pfx_keys[pki_pfx_key] }}
+            chdir: /
+          changed_when: true
+
+        - name: Package as PKCS#12 (key + c.crt, which already holds leaf and intermediate)
+          ansible.builtin.command:
+            argv: >-
+              {{ ['podman', 'exec', pki_name ~ '-ca', 'step', 'certificate', 'p12',
+                  pki_pfx_tmp.stdout ~ '/c.p12', pki_pfx_tmp.stdout ~ '/c.crt', pki_pfx_tmp.stdout ~ '/c.key',
+                  '--password-file', pki_pfx_tmp.stdout ~ '/pw', '--force']
+                 + (['--legacy'] if pki_pfx_legacy | bool else []) }}
+            chdir: /
+          changed_when: true
+
+        - name: Certificate details
+          ansible.builtin.command:
+            cmd: podman exec {{ pki_name }}-ca step certificate inspect {{ pki_pfx_tmp.stdout }}/c.crt --format json
+            chdir: /
+          register: pki_pfx_inspect
+          changed_when: false
+
+        - name: Output directory
+          ansible.builtin.file:
+            path: "{{ pki_data }}/issued/{{ pki_pfx_name }}"
+            state: directory
+            mode: "0700"
+
+        - name: Copy the .pfx and the public certificate out of the container
+          ansible.builtin.command:
+            cmd: >-
+              podman cp {{ pki_name }}-ca:{{ pki_pfx_tmp.stdout }}/{{ item.src }}
+              {{ pki_data }}/issued/{{ pki_pfx_name }}/{{ pki_pfx_name }}-{{ pki_pfx_stamp }}.{{ item.ext }}
+            chdir: /
+          loop:
+            - { src: c.p12, ext: pfx }
+            - { src: c.crt, ext: crt }
+          changed_when: true
+
+        - name: Permissions (the .pfx holds the private key)
+          ansible.builtin.file:
+            path: "{{ pki_data }}/issued/{{ pki_pfx_name }}/{{ pki_pfx_name }}-{{ pki_pfx_stamp }}.{{ item }}"
+            mode: "0600"
+          loop: [pfx, crt]
+
+      always:
+        - name: Remove the scratch directory (key, password, bundle)
+          ansible.builtin.command:
+            cmd: podman exec {{ pki_name }}-ca rm -rf {{ pki_pfx_tmp.stdout }}
+            chdir: /
+          when: pki_pfx_tmp.stdout | default('') is match('^/tmp/pfx\\.')
+          changed_when: false
+
+    - name: What was issued
+      ansible.builtin.set_fact:
+        pki_pfx_info: "{{ pki_pfx_inspect.stdout | from_json }}"
+        pki_pfx_file: "{{ pki_data }}/issued/{{ pki_pfx_name }}/{{ pki_pfx_name }}-{{ pki_pfx_stamp }}.pfx"
+
+    - name: Index of issued certificates
+      ansible.builtin.lineinfile:
+        path: "{{ pki_data }}/issued/index.csv"
+        create: true
+        owner: "{{ pki_owner }}"
+        group: "{{ pki_owner }}"
+        mode: "0600"
+        insertbefore: BOF
+        line: "{{ pki_pfx_stamp }},{{ pki_pfx_cn }},{{ pki_pfx_info.serial_number }},{{ pki_pfx_info.validity.end }},{{ pki_pfx_key }},{{ pki_pfx_file }}"
+
+    - name: Optional copy to the destination host
+      when: pki_pfx_dest_host | length > 0
+      block:
+        - name: Fetch to the controller
+          ansible.builtin.fetch:
+            src: "{{ pki_pfx_file }}"
+            dest: "/tmp/pki-pfx-{{ pki_pfx_stamp }}/"
+            flat: true
+          no_log: true
+
+        - name: Copy to {{ pki_pfx_dest_host }}
+          ansible.builtin.copy:
+            src: "/tmp/pki-pfx-{{ pki_pfx_stamp }}/{{ pki_pfx_file | basename }}"
+            dest: "{{ pki_pfx_dest_path }}"
+            owner: "{{ pki_pfx_dest_owner }}"
+            mode: "0600"
+          # templated before the when: on the block, so it must never be empty
+          delegate_to: "{{ pki_pfx_dest_host | default(inventory_hostname, true) }}"
+
+      always:
+        - name: Remove the controller copy
+          ansible.builtin.file:
+            path: "/tmp/pki-pfx-{{ pki_pfx_stamp }}"
+            state: absent
+          delegate_to: localhost
+          become: false
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Subject:   {{ pki_pfx_cn }}  ({{ pki_pfx_key }}{{ ', legacy PKCS#12' if pki_pfx_legacy | bool else '' }})"
+          - "SANs:      {{ pki_pfx_san_list | join(', ') }}"
+          - "Serial:    {{ pki_pfx_info.serial_number }}"
+          - "Valid to:  {{ pki_pfx_info.validity.end }}"
+          - "File:      {{ inventory_hostname }}:{{ pki_pfx_file }}"
+          - "Fetch:     scp {{ pki_owner }}@{{ inventory_hostname }}:{{ pki_pfx_file }} ."
+          - "{{ ('Copied to: ' ~ pki_pfx_dest_host ~ ':' ~ pki_pfx_dest_path) if pki_pfx_dest_host | length > 0 else 'Copied to: (no destination given)' }}"
+          - "Renewal:   not automatic; PKIIssuedCertExpiring fires 30 days before it ends. Revoke: step ca revoke {{ pki_pfx_info.serial_number }}"
