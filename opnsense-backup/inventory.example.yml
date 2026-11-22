@@ -1,0 +1,17 @@
+---
+# Copy to inventory.yml (git-ignored) for CLI runs. In AAP: inventory "network" (aap-setup.yml).
+# The firewall is reached only through its API, from the controller: connection local.
+all:
+  children:
+    opnsense:
+      hosts:
+        gw.example.com:
+          ansible_connection: local
+  vars:
+    opnsense_backup_store: fedora.example.com
+    opnsense_backup_dir: /srv/backups/opnsense
+    opnsense_backup_prom_rules_dir: /srv/prometheus/config/rules.d
+    opnsense_backup_prom_owner: CHANGE_ME
+    opnsense_backup_prom_url: http://127.0.0.1:9090
+    opnsense_backup_age_recipients:
+      - age1CHANGE_ME

@@ -1,0 +1,30 @@
+---
+# Defaults only (lowest precedence): inventory values, AAP's included, override them.
+# Addresses use RFC 5737 documentation ranges and example.com.
+
+# --- Firewall (the play's host; API calls run on the controller / execution environment)
+opnsense_api_url: "https://{{ inventory_hostname }}"
+opnsense_validate_certs: false            # true once the GUI certificate is trusted (e.g. lab CA)
+opnsense_api_timeout: 60
+# API key + secret: opnsense_api_key / opnsense_api_secret (AAP credential "OPNsense API")
+# The API user needs only the privilege "Diagnostics: Configuration History".
+
+# --- Where backups land (encrypted; the plaintext never touches disk)
+opnsense_backup_store: fedora             # inventory name or FQDN of the storage host
+opnsense_backup_dir: /srv/backups/opnsense
+opnsense_backup_keep_days: 90
+opnsense_backup_min_keep: 10              # newest N are kept whatever their age
+opnsense_backup_min_bytes: 4096           # smaller than this is not a real config.xml
+
+# age recipients (public keys); any one matching identity decrypts. e.g. one per YubiKey
+# (age-plugin-yubikey) plus an offline software key. Required.
+opnsense_backup_age_recipients: []
+
+# --- Monitoring: node_exporter textfile collector on the storage host
+opnsense_backup_textfile_dir: /var/lib/node_exporter/textfile_collector
+opnsense_backup_manage_textfile_collector: true   # add the collector to node-exporter.service via a drop-in
+opnsense_backup_node_exporter_unit: node-exporter.service
+opnsense_backup_prom_rules_dir: /srv/prometheus/config/rules.d   # set "" to skip the alert rules
+opnsense_backup_prom_owner: root
+opnsense_backup_prom_url: http://127.0.0.1:9090
+opnsense_backup_stale_hours: 36

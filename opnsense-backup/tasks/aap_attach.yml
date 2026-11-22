@@ -1,0 +1,20 @@
+---
+# Attach one credential to the job template (ob_jt); a missing one is reported, not fatal.
+- name: Credential id, {{ ob_cred_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/credentials/?name={{ ob_cred_name | urlencode }}"
+  register: ob_c
+
+- name: Not there yet, {{ ob_cred_name }}
+  ansible.builtin.debug:
+    msg: "No credential '{{ ob_cred_name }}' yet; rerun aap-setup.yml with the API key to create and attach it."
+  when: ob_c.json.count == 0
+
+- name: Attach, {{ ob_cred_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ ob_jt.json.id }}/credentials/"
+    method: POST
+    body: { id: "{{ ob_c.json.results[0].id }}" }
+    status_code: [204, 400]           # 400: already attached
+  when: ob_c.json.count > 0
+  changed_when: false

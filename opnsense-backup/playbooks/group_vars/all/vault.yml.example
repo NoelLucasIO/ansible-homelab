@@ -1,0 +1,7 @@
+---
+# CLI only: copy to vault.yml (git-ignored), fill in, then ansible-vault encrypt vault.yml.
+# In AAP these come from the credential "OPNsense API" (aap-setup.yml creates it).
+# OPNsense: System > Access > Users > (backup user, privilege "Diagnostics: Configuration History")
+#           > API keys > +  (downloads a file with key= and secret=)
+opnsense_api_key: CHANGE_ME
+opnsense_api_secret: CHANGE_ME

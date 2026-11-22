@@ -1,0 +1,81 @@
+---
+# node_exporter on the storage host gains the textfile collector (a drop-in restating its
+# ExecStart with one more flag; the unit file itself is untouched), and Prometheus gets
+# the "backup is stale" alerts. Both are skipped when already in place.
+- name: Textfile collector for node_exporter
+  when: opnsense_backup_manage_textfile_collector | bool
+  block:
+    - name: Current node_exporter command line
+      ansible.builtin.command: systemctl show -p ExecStart --value {{ opnsense_backup_node_exporter_unit }}  # noqa: command-instead-of-module
+      register: opnsense_ne_exec
+      changed_when: false
+
+    - name: Its argv
+      ansible.builtin.set_fact:
+        opnsense_ne_argv: "{{ ((opnsense_ne_exec.stdout | regex_findall('argv\\[\\]=([^;]+);')) + ['']) | first | trim }}"
+
+    - name: Found it
+      ansible.builtin.assert:
+        that: opnsense_ne_argv is search('node_exporter')
+        fail_msg: "Couldn't read ExecStart of {{ opnsense_backup_node_exporter_unit }}: {{ opnsense_ne_exec.stdout }}"
+        quiet: true
+
+    - name: Drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/{{ opnsense_backup_node_exporter_unit }}.d
+        state: directory
+        mode: "0755"
+      when: "'--collector.textfile.directory' not in opnsense_ne_argv"
+
+    - name: Drop-in with --collector.textfile.directory
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/{{ opnsense_backup_node_exporter_unit }}.d/textfile.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (opnsense-backup): adds the textfile collector, keeps every other flag.
+          [Service]
+          ExecStart=
+          ExecStart={{ opnsense_ne_argv }} --collector.textfile.directory={{ opnsense_backup_textfile_dir }}
+      when: "'--collector.textfile.directory' not in opnsense_ne_argv"
+      register: opnsense_ne_dropin
+
+    - name: Restart node_exporter
+      ansible.builtin.systemd_service:
+        name: "{{ opnsense_backup_node_exporter_unit }}"
+        state: restarted
+        daemon_reload: true
+      when: opnsense_ne_dropin is changed  # noqa: no-handler
+
+- name: Alert rules
+  ansible.builtin.copy:
+    dest: "{{ opnsense_backup_prom_rules_dir }}/opnsense-backup.yml"
+    owner: "{{ opnsense_backup_prom_owner }}"
+    group: "{{ opnsense_backup_prom_owner }}"
+    mode: "0644"
+    content: |
+      # Managed by Ansible (opnsense-backup)
+      groups:
+        - name: opnsense-backup
+          rules:
+            - alert: OPNsenseBackupStale
+              expr: time() - opnsense_backup_last_success_timestamp_seconds > {{ opnsense_backup_stale_hours | int }} * 3600
+              for: 15m
+              labels: { severity: warning }
+              annotations:
+                summary: "No good OPNsense config backup of {% raw %}{{ $labels.firewall }}{% endraw %} for over {{ opnsense_backup_stale_hours }} hours"
+                description: "Check the AAP job \"OPNsense backup\" (API key, firewall reachability, storage host)."
+            - alert: OPNsenseBackupMissing
+              expr: absent(opnsense_backup_last_success_timestamp_seconds)
+              for: 2h
+              labels: { severity: warning }
+              annotations:
+                summary: "No OPNsense backup metrics at all (textfile collector or the job never ran)"
+  when: opnsense_backup_prom_rules_dir | length > 0
+  register: opnsense_rules
+
+- name: Reload Prometheus
+  ansible.builtin.uri:
+    url: "{{ opnsense_backup_prom_url }}/-/reload"
+    method: POST
+    status_code: [200]
+  when: opnsense_rules is changed  # noqa: no-handler

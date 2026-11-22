@@ -1,0 +1,239 @@
+---
+# Brings AAP in line with opnsense-backup (controller API, built-in modules only). Idempotent.
+#   * inventory "network" with group "opnsense" and the firewall host (API only: connection local);
+#     its variables come from the opnsense_backup_* values you pass (site-vars.yml)
+#   * credential type "OPNsense API" and credential "<host>-opnsense-api" (prompted; Enter skips)
+#   * job template "OPNsense backup" and a nightly schedule
+#
+#   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @../site-vars.yml
+- name: AAP setup for opnsense-backup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - opnsense_backup_defaults
+  vars_prompt:
+    - name: opnsense_api_key
+      prompt: "OPNsense API key (Enter to skip creating/updating the credential)"
+      private: true
+      default: ""
+    - name: opnsense_api_secret
+      prompt: "OPNsense API secret"
+      private: true
+      default: ""
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    ob_inventory: network
+    ob_group: opnsense
+    ob_firewall: "{{ opnsense_firewall | default('gw.example.com') }}"
+    ob_credential: "{{ ob_firewall.split('.')[0] }}-opnsense-api"
+    ob_machine_credential: homelab-ssh             # SSH to the storage host
+    ob_type: OPNsense API
+    ob_template: OPNsense backup
+    ob_schedule: "DTSTART;TZID=America/New_York:20261123T021700 RRULE:FREQ=DAILY;INTERVAL=1"   # 02:17 nightly
+    ob_inventory_vars:
+      opnsense_backup_store: "{{ opnsense_backup_store }}"
+      opnsense_backup_dir: "{{ opnsense_backup_dir }}"
+      opnsense_backup_keep_days: "{{ opnsense_backup_keep_days }}"
+      opnsense_backup_min_keep: "{{ opnsense_backup_min_keep }}"
+      opnsense_backup_age_recipients: "{{ opnsense_backup_age_recipients }}"
+      opnsense_backup_prom_rules_dir: "{{ opnsense_backup_prom_rules_dir }}"
+      opnsense_backup_prom_owner: "{{ opnsense_backup_prom_owner }}"
+      opnsense_backup_prom_url: "{{ opnsense_backup_prom_url }}"
+      opnsense_validate_certs: "{{ opnsense_validate_certs }}"
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 202, 204]
+  tasks:
+    - name: Settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+          - opnsense_firewall is defined
+          - opnsense_backup_age_recipients | length > 0
+        fail_msg: "Pass -e @../hcp-vm/aap.local.yml -e @../site-vars.yml (opnsense_firewall, opnsense_backup_* values)."
+        quiet: true
+
+    - name: Project and organization
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/?name={{ aap_project | urlencode }}"
+      register: ob_project
+
+    - name: Sync the project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ ob_project.json.results[0].id }}/update/"
+        method: POST
+      register: ob_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ ob_sync.json.id }}/"
+      register: ob_sync_job
+      until: ob_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+      failed_when: ob_sync_job.json.status != 'successful'
+
+    - name: Shortcuts
+      ansible.builtin.set_fact:
+        ob_org: "{{ ob_project.json.results[0].organization }}"
+        ob_project_id: "{{ ob_project.json.results[0].id }}"
+
+    # --- Inventory, group, host ---------------------------------------------------------
+    - name: Inventory exists? {{ ob_inventory }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/?name={{ ob_inventory | urlencode }}"
+      register: ob_inv_q
+
+    - name: Create or update inventory {{ ob_inventory }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ (ob_inv_q.json.results[0].id ~ '/') if ob_inv_q.json.count else '' }}"
+        method: "{{ 'PATCH' if ob_inv_q.json.count else 'POST' }}"
+        body:
+          name: "{{ ob_inventory }}"
+          organization: "{{ ob_org | int }}"
+          description: Network appliances, reached through their APIs (not part of the Linux "all")
+          variables: "{{ ob_inventory_vars | to_nice_yaml }}"
+      register: ob_inv
+      changed_when: true
+
+    - name: Group exists? {{ ob_group }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ ob_inv.json.id }}/groups/?name={{ ob_group | urlencode }}"
+      register: ob_grp_q
+
+    - name: Create group {{ ob_group }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ ob_inv.json.id }}/groups/"
+        method: POST
+        body: { name: "{{ ob_group }}", description: OPNsense firewalls }
+      register: ob_grp_new
+      when: ob_grp_q.json.count == 0
+      changed_when: true
+
+    - name: Host exists? {{ ob_firewall }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ ob_inv.json.id }}/hosts/?name={{ ob_firewall | urlencode }}"
+      register: ob_host_q
+
+    - name: Create or update host {{ ob_firewall }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/hosts/{{ (ob_host_q.json.results[0].id ~ '/') if ob_host_q.json.count else '' }}"
+        method: "{{ 'PATCH' if ob_host_q.json.count else 'POST' }}"
+        body:
+          name: "{{ ob_firewall }}"
+          inventory: "{{ ob_inv.json.id }}"
+          description: OPNsense (API only)
+          variables: "{{ {'ansible_connection': 'local'} | to_nice_yaml }}"
+      register: ob_host
+      changed_when: true
+
+    - name: Host in the group
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/groups/{{ ob_grp_new.json.id if ob_grp_q.json.count == 0 else ob_grp_q.json.results[0].id }}/hosts/"
+        method: POST
+        body: { id: "{{ ob_host.json.id }}" }
+      changed_when: true
+
+    # --- Credential type and credential -------------------------------------------------
+    - name: Credential type exists? {{ ob_type }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ ob_type | urlencode }}"
+      register: ob_ct_q
+
+    - name: Create credential type {{ ob_type }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/"
+        method: POST
+        body:
+          name: "{{ ob_type }}"
+          description: OPNsense API key and secret
+          kind: cloud
+          inputs:
+            fields:
+              - {id: opnsense_api_key, label: API key, type: string, secret: true}
+              - {id: opnsense_api_secret, label: API secret, type: string, secret: true}
+            required: [opnsense_api_key, opnsense_api_secret]
+          injectors:
+            extra_vars:
+              opnsense_api_key: !unsafe "{{ opnsense_api_key }}"
+              opnsense_api_secret: !unsafe "{{ opnsense_api_secret }}"
+      register: ob_ct_new
+      when: ob_ct_q.json.count == 0
+      changed_when: true
+
+    - name: Credential exists? {{ ob_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ ob_credential | urlencode }}"
+      register: ob_cred_q
+
+    - name: Create or update {{ ob_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/{{ (ob_cred_q.json.results[0].id ~ '/') if ob_cred_q.json.count else '' }}"
+        method: "{{ 'PATCH' if ob_cred_q.json.count else 'POST' }}"
+        body:
+          name: "{{ ob_credential }}"
+          credential_type: "{{ (ob_ct_new.json.id if ob_ct_q.json.count == 0 else ob_ct_q.json.results[0].id) | int }}"
+          organization: "{{ ob_org | int }}"
+          inputs: { opnsense_api_key: "{{ opnsense_api_key }}", opnsense_api_secret: "{{ opnsense_api_secret }}" }
+      register: ob_cred_set
+      when: opnsense_api_key | length > 0 and opnsense_api_secret | length > 0
+      changed_when: true
+      no_log: true
+
+    # --- Job template, credentials, schedule ----------------------------------------------
+    - name: Job template exists? {{ ob_template }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/?name={{ ob_template | urlencode }}"
+      register: ob_jt_q
+
+    # become off at template level: the API tasks run locally in the execution environment;
+    # only the storage tasks become root on the storage host (become: true in the play).
+    - name: Create or update {{ ob_template }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ (ob_jt_q.json.results[0].id ~ '/') if ob_jt_q.json.count else '' }}"
+        method: "{{ 'PATCH' if ob_jt_q.json.count else 'POST' }}"
+        body:
+          name: "{{ ob_template }}"
+          description: Encrypted (age) full config.xml backup of the OPNsense firewall(s) to the storage host
+          job_type: run
+          project: "{{ ob_project_id | int }}"
+          inventory: "{{ ob_inv.json.id }}"
+          playbook: opnsense-backup/playbooks/backup.yml
+          become_enabled: false
+          ask_variables_on_launch: false
+          timeout: 900
+      register: ob_jt
+      changed_when: true
+
+    - name: Credentials on the template
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_attach.yml"
+      loop: "{{ [ob_machine_credential, ob_credential] }}"
+      loop_control: { loop_var: ob_cred_name }
+
+    - name: Schedule exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ ob_jt.json.id }}/schedules/?name={{ (ob_template ~ ' nightly') | urlencode }}"
+      register: ob_sched_q
+
+    - name: Nightly schedule
+      ansible.builtin.uri:
+        url: >-
+          {{ aap_api }}/{{ ('schedules/' ~ ob_sched_q.json.results[0].id ~ '/') if ob_sched_q.json.count
+             else ('job_templates/' ~ ob_jt.json.id ~ '/schedules/') }}
+        method: "{{ 'PATCH' if ob_sched_q.json.count else 'POST' }}"
+        body:
+          name: "{{ ob_template }} nightly"
+          rrule: "{{ ob_schedule }}"
+          enabled: true
+      changed_when: true

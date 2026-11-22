@@ -1,0 +1,188 @@
+---
+# Full OPNsense configuration backup: config.xml from the API, validated, encrypted with age
+# straight from memory onto the storage host (the plaintext never touches a disk), with
+# retention and a "last good backup" metric for Prometheus. Safe to rerun; an unchanged
+# config writes nothing new.
+#   ansible-playbook playbooks/backup.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass -K
+- name: Back up OPNsense configuration
+  hosts: "{{ opnsense_hosts | default('opnsense') }}"
+  gather_facts: false
+  roles:
+    - opnsense_backup_defaults
+  tasks:
+    - name: Inputs
+      ansible.builtin.assert:
+        that:
+          - opnsense_api_key | default('') | length > 0
+          - opnsense_api_secret | default('') | length > 0
+          - opnsense_backup_age_recipients | length > 0
+          - opnsense_backup_age_recipients | select('match', '^age1') | list | length == opnsense_backup_age_recipients | length
+        fail_msg: >-
+          Needs opnsense_api_key/opnsense_api_secret (AAP credential "OPNsense API") and
+          opnsense_backup_age_recipients (age1... public keys) in the inventory.
+        quiet: true
+      no_log: true
+
+    - name: Download config.xml
+      ansible.builtin.uri:
+        url: "{{ opnsense_api_url }}/api/core/backup/download/this"
+        user: "{{ opnsense_api_key }}"
+        password: "{{ opnsense_api_secret }}"
+        force_basic_auth: true
+        validate_certs: "{{ opnsense_validate_certs | bool }}"
+        timeout: "{{ opnsense_api_timeout | int }}"
+        return_content: true
+      register: opnsense_dl
+      failed_when: false                    # reported below without the body
+      no_log: true                          # the body holds password hashes and keys
+
+    - name: Download failed (status only)
+      ansible.builtin.fail:
+        msg: "HTTP {{ opnsense_dl.status | default('?') }} from {{ opnsense_api_url }}: {{ opnsense_dl.msg | default('') }}"
+      when: opnsense_dl.failed | default(false) or opnsense_dl.status | default(0) != 200
+
+    - name: What came back
+      ansible.builtin.set_fact:
+        opnsense_cfg_sha256: "{{ opnsense_dl.content | hash('sha256') }}"
+        opnsense_cfg_bytes: "{{ opnsense_dl.content | length }}"
+        opnsense_cfg_revision: >-
+          {{ ((opnsense_dl.content | regex_findall('(?s)<revision>.*?<time>([0-9.]+)</time>')) + ['0'])
+             | first | float | int }}
+        opnsense_cfg_ok: >-
+          {{ opnsense_dl.content is match('\s*<\?xml')
+             and '<opnsense>' in opnsense_dl.content
+             and '</opnsense>' in opnsense_dl.content
+             and (opnsense_dl.content | length) >= opnsense_backup_min_bytes | int }}
+        opnsense_stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+      no_log: true
+
+    - name: It is a complete OPNsense config.xml
+      ansible.builtin.assert:
+        that: opnsense_cfg_ok | bool
+        fail_msg: >-
+          {{ inventory_hostname }}: the API answered, but not with a complete config.xml
+          ({{ opnsense_cfg_bytes }} bytes). Check the API user's privilege
+          "Diagnostics: Configuration History".
+        quiet: true
+
+    - name: Store it on {{ opnsense_backup_store }}
+      delegate_to: "{{ opnsense_backup_store }}"
+      become: true
+      vars:
+        opnsense_host_dir: "{{ opnsense_backup_dir }}/{{ inventory_hostname }}"
+      block:
+        - name: Backup directories (root only)
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0700"
+          loop: ["{{ opnsense_backup_dir }}", "{{ opnsense_host_dir }}"]
+
+        - name: Age is installed
+          ansible.builtin.package:
+            name: age
+            state: present
+
+        - name: Hash of the last stored config
+          ansible.builtin.slurp:
+            src: "{{ opnsense_host_dir }}/latest.sha256"
+          register: opnsense_last
+          failed_when: false
+
+        - name: Changed since the last backup?
+          ansible.builtin.set_fact:
+            opnsense_changed: "{{ (opnsense_last.content | default('') | b64decode | trim) != opnsense_cfg_sha256 }}"
+
+        - name: Encrypt and write (plaintext only on stdin)
+          ansible.builtin.command:
+            argv: "{{ ['age'] + (opnsense_backup_age_recipients | map('regex_replace', '^', '-r ') | map('split', ' ') | flatten)
+                      + ['-o', opnsense_host_dir ~ '/config-' ~ opnsense_stamp ~ '.xml.age'] }}"
+            stdin: "{{ opnsense_dl.content }}"
+            stdin_add_newline: false
+          when: opnsense_changed | bool
+          changed_when: true
+          no_log: true
+
+        - name: The new file is an age file
+          ansible.builtin.command: head -c 21 {{ opnsense_host_dir }}/config-{{ opnsense_stamp }}.xml.age
+          register: opnsense_hdr
+          changed_when: false
+          failed_when: opnsense_hdr.stdout != 'age-encryption.org/v1'
+          when: opnsense_changed | bool
+
+        - name: Lock it down and remember its hash
+          ansible.builtin.file:
+            path: "{{ opnsense_host_dir }}/config-{{ opnsense_stamp }}.xml.age"
+            mode: "0400"
+          when: opnsense_changed | bool
+
+        - name: Record the hash
+          ansible.builtin.copy:
+            dest: "{{ opnsense_host_dir }}/latest.sha256"
+            content: "{{ opnsense_cfg_sha256 }}\n"
+            mode: "0600"
+          when: opnsense_changed | bool
+
+        - name: Stored backups
+          ansible.builtin.find:
+            paths: "{{ opnsense_host_dir }}"
+            patterns: "config-*.xml.age"
+          register: opnsense_files
+
+        - name: Which ones have expired (the newest opnsense_backup_min_keep never do)
+          ansible.builtin.set_fact:
+            opnsense_expired: >-
+              {{ (opnsense_files.files | sort(attribute='mtime', reverse=true))[opnsense_backup_min_keep | int:]
+                 | selectattr('mtime', 'lt', now(utc=true).timestamp() - (opnsense_backup_keep_days | int) * 86400) | list }}
+
+        - name: Expire them
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ opnsense_expired }}"
+          loop_control: { label: "{{ item.path | basename }}" }
+
+        - name: Textfile collector directory
+          ansible.builtin.file:
+            path: "{{ opnsense_backup_textfile_dir }}"
+            state: directory
+            mode: "0755"
+
+        - name: Metrics for Prometheus (node_exporter textfile collector)
+          ansible.builtin.copy:
+            dest: "{{ opnsense_backup_textfile_dir }}/opnsense_backup_{{ inventory_hostname | regex_replace('[^A-Za-z0-9]', '_') }}.prom"
+            mode: "0644"
+            content: |
+              # HELP opnsense_backup_last_success_timestamp_seconds Last run that fetched and stored (or matched) a valid config.xml.
+              # TYPE opnsense_backup_last_success_timestamp_seconds gauge
+              opnsense_backup_last_success_timestamp_seconds{firewall="{{ inventory_hostname }}"} {{ now(utc=true).timestamp() | int }}
+              # HELP opnsense_backup_config_revision_timestamp_seconds Revision time inside the latest config.xml (last change on the firewall).
+              # TYPE opnsense_backup_config_revision_timestamp_seconds gauge
+              opnsense_backup_config_revision_timestamp_seconds{firewall="{{ inventory_hostname }}"} {{ opnsense_cfg_revision }}
+              # HELP opnsense_backup_files Encrypted backups kept.
+              # TYPE opnsense_backup_files gauge
+              opnsense_backup_files{firewall="{{ inventory_hostname }}"} {{ opnsense_files.matched | int - opnsense_expired | length }}
+              # HELP opnsense_backup_config_bytes Size of the latest config.xml.
+              # TYPE opnsense_backup_config_bytes gauge
+              opnsense_backup_config_bytes{firewall="{{ inventory_hostname }}"} {{ opnsense_cfg_bytes }}
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: config revision {{ '%Y-%m-%d %H:%M:%S UTC' | strftime(opnsense_cfg_revision | int, utc=true) }},
+          {{ opnsense_cfg_bytes }} bytes,
+          {{ ('new backup config-' ~ opnsense_stamp ~ '.xml.age') if opnsense_changed | bool else 'unchanged since the last backup (nothing written)' }}.
+
+- name: Monitoring on the storage host
+  hosts: "{{ opnsense_hosts | default('opnsense') }}"
+  gather_facts: false
+  roles:
+    - opnsense_backup_defaults
+  tasks:
+    - name: Textfile collector and alert rules
+      ansible.builtin.import_tasks: ../tasks/monitoring.yml
+      run_once: true
+      delegate_to: "{{ opnsense_backup_store }}"
+      become: true
