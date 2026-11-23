@@ -8,3 +8,5 @@ vtm-vm/playbooks/roles/vtm_vm_defaults/defaults/main.yml var-naming[no-role-pref
 pki/playbooks/roles/pki_defaults/defaults/main.yml var-naming[no-role-prefix]
 playbooks/roles/pki_trust/defaults/main.yml var-naming[no-role-prefix]
 opnsense-backup/playbooks/roles/opnsense_backup_defaults/defaults/main.yml var-naming[no-role-prefix]
+backup/playbooks/roles/backup_defaults/defaults/main.yml var-naming[no-role-prefix]
+backup/playbooks/roles/backup_defaults/defaults/main.yml jinja[spacing]
