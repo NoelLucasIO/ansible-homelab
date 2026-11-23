@@ -1,0 +1,15 @@
+# Managed by hcp-vm (node_exporter.yml)
+[Unit]
+Description=Prometheus node_exporter
+Documentation=https://prometheus.io/docs/guides/node-exporter/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=root
+ExecStartPre={{ hcp_node_exporter_dir }}/firewall.sh
+ExecStart={{ hcp_node_exporter_dir }}/node_exporter --collector.systemd --collector.processes --web.disable-exporter-metrics --web.listen-address=:{{ hcp_node_exporter_port }}
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

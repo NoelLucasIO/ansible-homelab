@@ -1,0 +1,11 @@
+---
+# Undo backend_open.yml: the key copy and the temporary back-end address.
+- name: Remove the root key from the hypervisor
+  ansible.builtin.file:
+    path: "{{ hcp_log_dir }}/.hcp-root-key"
+    state: absent
+
+- name: Remove the temporary back-end address
+  ansible.builtin.command: ip addr del {{ hcp_bridge_ip }}/24 dev {{ hcp_br.stdout }}
+  when: hcp_br_added is defined and hcp_br_added is not skipped
+  changed_when: true

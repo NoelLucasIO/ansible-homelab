@@ -1,0 +1,26 @@
+# Survey questions for node_exporter.yml ("HCP node_exporter"). With chain=true the step is
+# optional: a blank allow list skips it.
+{% set opt = chain | default(false) %}
+- question_name: node_exporter allowed scrapers
+  question_description: "IPv4 addresses or CIDRs allowed to reach :{{ hcp_node_exporter_port }}, comma-separated; everything else is dropped.{{ ' Blank = no node_exporter.' if opt else '' }}"
+  variable: hcp_node_exporter_allow
+  type: text
+  required: {{ (not opt) | lower }}
+  default: {{ (hcp_node_exporter_allow if hcp_node_exporter_allow is string else hcp_node_exporter_allow | join(', ')) | to_json }}
+  min: {{ 0 if opt else 7 }}
+  max: 400
+- question_name: node_exporter version
+  variable: hcp_node_exporter_version
+  type: text
+  required: true
+  default: {{ hcp_node_exporter_version | to_json }}
+  min: 5
+  max: 16
+- question_name: Prometheus server (inventory host)
+  question_description: Gets a file_sd target for the node in {{ hcp_prometheus_targets_dir }}. Blank = don't register.
+  variable: hcp_prometheus_host
+  type: text
+  required: false
+  default: {{ hcp_prometheus_host | to_json }}
+  min: 0
+  max: 200

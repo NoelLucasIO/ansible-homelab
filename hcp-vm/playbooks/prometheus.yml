@@ -1,0 +1,65 @@
+---
+# HCP's built-in Prometheus: System Management Console > Monitoring > Prometheus >
+# "Enable Prometheus". The checkbox is the cluster setting prometheus.server.enabled; HCP then
+# runs its own Prometheus server (:9097 on the node, console at https://admin.<system>:9094).
+#   ansible-playbook playbooks/prometheus.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 \
+#     -e hcp_backend_ip=198.51.100.101            # -e hcp_prometheus=false turns it off
+# Runs over the back-end like first_login.yml, so it doesn't need front-end SSH. Rerun-safe.
+- name: HCP Prometheus
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - hcp_vm_defaults
+  tasks:
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - hcp_backend_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+          - hcp_root_key_file is defined
+        fail_msg: Need hcp_cluster, hcp_backend_ip and the HCP secrets credential (root key).
+
+    - name: Wanted state
+      ansible.builtin.set_fact:
+        hcp_prom_want: "{{ hcp_prometheus | bool | string | lower }}"
+
+    - name: Set Prometheus over the back-end
+      block:
+        - name: Open a back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_open.yml"
+
+        - name: Prometheus, current setting (waits for HCP to be up)
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' config get cluster prometheus.server.enabled'] }}"
+          register: hcp_prom_cfg
+          until: hcp_prom_cfg.rc == 0 and hcp_prom_cfg.stdout is search('configValue')
+          retries: 30
+          delay: 20
+          changed_when: false
+
+        - name: Prometheus {{ 'on' if hcp_prom_want == 'true' else 'off' }}
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' config set cluster prometheus.server.enabled ' ~ hcp_prom_want] }}"
+          when: hcp_prom_cfg.stdout is not search("'configValue'\s*:\s*'" ~ hcp_prom_want ~ "'")
+          changed_when: true
+
+        - name: Prometheus server listening on the node
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + ['ss -ltn | grep -q \":9097 \"'] }}"
+          register: hcp_prom_up
+          until: hcp_prom_up.rc == 0
+          retries: 24
+          delay: 10
+          changed_when: false
+          when: hcp_prom_want == 'true'
+
+      always:
+        - name: Close the back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_close.yml"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          {{ hcp_clname }}: Prometheus {{ 'on, console https://admin.' ~ hcp_clname ~ ':9094'
+          if hcp_prom_want == 'true' else 'off' }}.

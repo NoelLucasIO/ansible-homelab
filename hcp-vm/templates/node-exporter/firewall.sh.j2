@@ -1,0 +1,16 @@
+#!/bin/bash
+# Managed by hcp-vm (node_exporter.yml). Lets only the listed sources reach node_exporter on
+# tcp/{{ hcp_node_exporter_port }}; everything else is dropped. Safe to rerun: the chain is rebuilt
+# and the INPUT jump is added once. Run before node_exporter starts and every few minutes by
+# node-exporter-firewall.timer, in case HCP rebuilds its own rules (chain "block").
+set -e
+chain=node-exporter
+port={{ hcp_node_exporter_port }}
+iptables -N "$chain" 2>/dev/null || true
+iptables -F "$chain"
+{% for src in hcp_ne_allow %}
+iptables -A "$chain" -s {{ src }} -j ACCEPT
+{% endfor %}
+iptables -A "$chain" -j DROP
+iptables -C INPUT -p tcp -m tcp --dport "$port" -j "$chain" 2>/dev/null \
+  || iptables -I INPUT 1 -p tcp -m tcp --dport "$port" -j "$chain"

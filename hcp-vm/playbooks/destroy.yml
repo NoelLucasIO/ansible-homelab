@@ -132,3 +132,21 @@
           loop_control:
             label: "{{ item.ipv4addr }}"
           changed_when: true
+
+    - name: Prometheus targets written by node_exporter.yml
+      ansible.builtin.find:
+        paths: "{{ hcp_prometheus_targets_dir }}"
+        patterns: "{{ hcp_cluster }}-*.yml"
+        contains: "Managed by hcp-vm"
+      register: hcp_prom_targets
+      delegate_to: "{{ hcp_prometheus_host }}"
+      when: hcp_prometheus_host | length > 0
+
+    - name: Stop scraping it
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      loop: "{{ hcp_prom_targets.files | default([]) }}"
+      loop_control:
+        label: "{{ item.path }}"
+      delegate_to: "{{ hcp_prometheus_host }}"

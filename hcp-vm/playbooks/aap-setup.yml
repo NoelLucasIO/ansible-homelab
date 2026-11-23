@@ -1,8 +1,10 @@
 ---
 # Creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
-#   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (each with a survey)
-#   * workflow "HCP VM deploy + post-install" (deploy, then first-login setup on success)
+#   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (all post-install
+#     steps), and one per step: "HCP first-login", "HCP Prometheus", "HCP tenant",
+#     "HCP node_exporter" (each with a survey)
+#   * workflow "HCP VM deploy + post-install" (deploy, then all post-install steps on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
 #
 #   ansible-playbook hcp-vm/playbooks/aap-setup.yml -e @site-vars.yml -e @aap.local.yml
@@ -11,7 +13,7 @@
 #
 # Survey defaults come from the hcp_vm_defaults role overlaid with your site values, so the
 # launch page opens pre-filled with your lab's addresses. Afterwards, create one credential of
-# type "HCP VM secrets" and attach it (with the machine credential) to both templates.
+# type "HCP VM secrets" and attach it (with the machine credential) to the templates.
 - name: AAP job templates for hcp-vm
   hosts: localhost
   connection: local
@@ -26,6 +28,7 @@
     aap_secrets_credential: ""            # name of the "HCP VM secrets" credential, if it exists already
     aap_machine_credential: ""            # name of the machine credential for the KVM hosts
     aap_ee: ""                            # execution environment name; blank = project/org default
+    aap_sv: "{{ playbook_dir }}/../templates/aap"
   module_defaults:
     ansible.builtin.uri:
       # Token if given (AAP 2.5+ gateways may refuse Basic auth on the API), else Basic.
@@ -135,6 +138,33 @@
       register: aap_ee_q
       when: aap_ee | length > 0
 
+    # --- surveys -----------------------------------------------------------------------
+    # Fragments per playbook; chain=true makes the optional steps (tenant, node_exporter)
+    # skippable. Combined surveys drop repeated variables (the later question wins, in the
+    # earlier one's place).
+    - name: Survey fragments
+      ansible.builtin.set_fact:
+        aap_s: >-
+          {{ {'deploy': lookup('ansible.builtin.template', aap_sv ~ '/survey-deploy.yml.j2') | from_yaml,
+              'destroy': lookup('ansible.builtin.template', aap_sv ~ '/survey-destroy.yml.j2') | from_yaml,
+              'target': lookup('ansible.builtin.template', aap_sv ~ '/survey-target.yml.j2') | from_yaml,
+              'first_login': lookup('ansible.builtin.template', aap_sv ~ '/survey-first-login.yml.j2') | from_yaml,
+              'prometheus': lookup('ansible.builtin.template', aap_sv ~ '/survey-prometheus.yml.j2') | from_yaml,
+              'tenant': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2') | from_yaml,
+              'tenant_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2',
+                                   template_vars={'chain': true}) | from_yaml,
+              'node_exporter': lookup('ansible.builtin.template', aap_sv ~ '/survey-node-exporter.yml.j2') | from_yaml,
+              'node_exporter_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-node-exporter.yml.j2',
+                                          template_vars={'chain': true}) | from_yaml} }}
+
+    - name: Combined surveys
+      ansible.builtin.set_fact:
+        aap_s_chain: "{{ dict(aap_chain | map(attribute='variable') | zip(aap_chain)).values() | list }}"
+        aap_s_workflow: "{{ dict(aap_wf | map(attribute='variable') | zip(aap_wf)).values() | list }}"
+      vars:
+        aap_chain: "{{ aap_s.target + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt }}"
+        aap_wf: "{{ aap_s.deploy + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt }}"
+
     # --- job templates ---------------------------------------------------------------
     - name: Create or update the job templates
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_job_template.yml"
@@ -142,15 +172,31 @@
         - name: HCP VM deploy
           playbook: hcp-vm/playbooks/deploy.yml
           description: Single-node HCP VM on KVM from the HCP ISO, NIOS IPAM + delegation, unattended install
-          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-deploy.yml.j2') | from_yaml }}"
+          survey: "{{ aap_s.deploy }}"
         - name: HCP VM destroy
           playbook: hcp-vm/playbooks/destroy.yml
-          description: Remove an hcp-vm VM, its disks and its NIOS objects
-          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-destroy.yml.j2') | from_yaml }}"
+          description: Remove an hcp-vm VM, its disks, its NIOS objects and its Prometheus targets
+          survey: "{{ aap_s.destroy }}"
         - name: HCP post-install
           playbook: hcp-vm/playbooks/post_install.yml
+          description: All post-install steps in order (first-login, Prometheus, tenant, node_exporter)
+          survey: "{{ aap_s_chain }}"
+        - name: HCP first-login
+          playbook: hcp-vm/playbooks/first_login.yml
           description: First-login setup of a new HCP system (security account, SSH, MAPI)
-          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-post-install.yml.j2') | from_yaml }}"
+          survey: "{{ aap_s.target + aap_s.first_login }}"
+        - name: HCP Prometheus
+          playbook: hcp-vm/playbooks/prometheus.yml
+          description: Turn HCP's built-in Prometheus on (or off)
+          survey: "{{ aap_s.target + aap_s.prometheus }}"
+        - name: HCP tenant
+          playbook: hcp-vm/playbooks/tenant.yml
+          description: Create a tenant (quota, no namespace quota) and set its namespace defaults
+          survey: "{{ aap_s.target + aap_s.tenant }}"
+        - name: HCP node_exporter
+          playbook: hcp-vm/playbooks/node_exporter.yml
+          description: node_exporter on the HCP node, firewalled to the listed scrapers, registered with Prometheus
+          survey: "{{ aap_s.target + aap_s.node_exporter }}"
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"
@@ -160,7 +206,4 @@
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_workflow.yml"
       vars:
         aap_wf_name: HCP VM deploy + post-install
-        aap_wf_survey: >-
-          {{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-deploy.yml.j2') | from_yaml
-             + lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-post-install.yml.j2',
-                      template_vars={'post_install_only': true}) | from_yaml }}
+        aap_wf_survey: "{{ aap_s_workflow }}"

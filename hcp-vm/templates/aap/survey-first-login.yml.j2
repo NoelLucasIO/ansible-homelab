@@ -1,28 +1,4 @@
-# Survey for "HCP post-install". Defaults are rendered from hcp_vm_defaults + your site values.
-{% if not post_install_only | default(false) %}
-- question_name: Hypervisor
-  variable: hcp_kvm_host
-  type: multiplechoice
-  required: true
-  default: {{ (hcp_kvm_host if hcp_kvm_host in aap_kvm_hosts else aap_kvm_hosts[0]) | to_json }}
-  choices: {{ aap_kvm_hosts | to_json }}
-- question_name: System short name
-  question_description: "The system is <short>.{{ hcp_domain }}"
-  variable: hcp_cluster
-  type: text
-  required: true
-  default: {{ hcp_cluster | to_json }}
-  min: 1
-  max: 31
-- question_name: Back-end IP
-  question_description: Reached from the hypervisor over the isolated back-end network
-  variable: hcp_backend_ip
-  type: text
-  required: true
-  default: {{ hcp_backend_ip | to_json }}
-  min: 7
-  max: 15
-{% endif %}
+# Survey questions for first_login.yml ("HCP first-login"). Defaults are rendered from hcp_vm_defaults + your site values.
 - question_name: Security account password
   question_description: Replaces the default password of the initial 'security' account; 14+ characters
   variable: hcp_security_password

@@ -12,7 +12,7 @@
     method: "{{ 'PATCH' if aap_wf_q.json.count else 'POST' }}"
     body:
       name: "{{ aap_wf_name }}"
-      description: Deploy an HCP VM, then do its first-login setup
+      description: Deploy an HCP VM, then run all post-install steps
       inventory: "{{ aap_ids.results[1].json.results[0].id }}"
       organization: "{{ aap_ids.results[0].json.results[0].organization }}"
       survey_enabled: true

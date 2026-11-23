@@ -43,9 +43,29 @@ installed" marker and the install stages are skipped (a rerun on an installed sy
 `changed=0`). A VM left off part-way resumes from the right stage. `hcp_replace=true` destroys and
 rebuilds the VM, but only one whose libvirt description carries the hcp-vm marker.
 
-The first-login setup is `post_install.yml` (below). Tenants and namespaces are not automated yet.
+Everything after the install is `post_install.yml` (below).
 
-## post_install.yml
+## post_install.yml and its steps
+
+`post_install.yml` runs four playbooks in order. Each is also a playbook (and an AAP job
+template) of its own, so any step can be rerun alone:
+
+| Playbook | Does | Skipped in post_install.yml when |
+|---|---|---|
+| `first_login.yml` | security account password and roles, SSH, MAPI | never |
+| `prometheus.yml` | Monitoring > Prometheus > *Enable Prometheus* | never (`hcp_prometheus=false` turns it off) |
+| `tenant.yml` | initial tenant, its quotas and namespace defaults | `hcp_tenant_name` is blank |
+| `node_exporter.yml` | node_exporter, firewalled, registered with Prometheus | `hcp_node_exporter_allow` is empty |
+
+All of them reach the node the same way (`tasks/backend_open.yml` / `backend_close.yml`): a new
+system has front-end SSH off, so they run from the hypervisor over the back-end. The hypervisor
+gets a temporary address on `hcp-backend` (`<back-end /24>.1`, or `hcp_backend_host_ip`), and the
+HCP root key (in root's `authorized_keys_be`) reaches `root` on the node's back-end address. The
+key is copied to the hypervisor for the run and removed after, as is the address. HCP's Python
+(3.6) is too old for Ansible modules, so the node is driven with `ssh`/`scp` and HCP's own
+`admin jvm` commands. Every step is rerun-safe.
+
+### first_login.yml
 
 The steps the System Management Console asks for at first login, without the console:
 
@@ -56,20 +76,53 @@ The steps the System Management Console asks for at first login, without the con
 | SSH on the front-end | `admin jvm config set cluster ssh.enabled true` |
 | Management API | `admin jvm gateway mapi start <cluster-uuid>` |
 
-A new system has front-end SSH off, so this runs from the hypervisor over the back-end: the
-hypervisor gets a temporary address on `hcp-backend` (`<back-end /24>.1`, or
-`hcp_backend_host_ip`), and the HCP root key (in root's `authorized_keys_be`) reaches `root` on
-the node's back-end address. The key is copied to the hypervisor for the run and removed after,
-as is the address. Checks: port 22 answers on the front-end, and a MAPI call
+Checks: port 22 answers on the front-end, and a MAPI call
 (`/mapi/tenants`) as the security account returns 200, which proves the password and MAPI together.
 Reruns change nothing in HCP.
+
+### prometheus.yml
+
+The console checkbox is the cluster setting `prometheus.server.enabled`
+(`admin jvm config set cluster prometheus.server.enabled true`). HCP then runs its own Prometheus
+server on the node (`:9097`); the play waits for it to listen. Console:
+`https://admin.<system>:9094`.
+
+### tenant.yml
+
+Creates the tenant through MAPI as the security account (MAPI is the documented way to say
+*namespace quota: none*): name, description, hard quota (`hcp_tenant_quota` in GB or TB), soft
+quota (85%), namespace quota none, and its first user (`hcp_tenant_admin_user`, administrator and
+security roles). An existing tenant keeps its user and password; only its quotas are brought in
+line. Then its namespace defaults, with `admin jvm namespaceDefaults update`:
+
+| Console setting | Value | Variable |
+|---|---|---|
+| Protocol optimization | cloud protocols only (`CLOUD`) | `hcp_ns_cloud_optimized` |
+| Directory usage | balanced (`BALANCED`) | `hcp_ns_directory_usage` |
+
+### node_exporter.yml
+
+The hypervisor downloads the node_exporter release (`hcp_node_exporter_version`, checked against
+the release's `sha256sums.txt`) into `/var/cache/hcp-vm` and copies to the node only what differs:
+
+| On the node | What |
+|---|---|
+| `/var/node-exporter/node_exporter` | the binary, `--collector.systemd --collector.processes --web.disable-exporter-metrics` |
+| `/var/node-exporter/firewall.sh` | own iptables chain `node-exporter`: ACCEPT each source in `hcp_node_exporter_allow`, DROP the rest; one `INPUT` jump ahead of HCP's `block` chain |
+| `node-exporter.service` | runs `firewall.sh` first (`ExecStartPre`), then node_exporter |
+| `node-exporter-firewall.timer` | reapplies the chain every 5 minutes, in case HCP rebuilds its firewall |
+
+Then the node is added to Prometheus's file_sd targets on `hcp_prometheus_host`
+(`/etc/prometheus/targets/nodes/<system>-<node>.yml`, like the other lab VMs); `destroy.yml`
+removes it again. An HCP upgrade or node rebuild may drop the files: rerun the playbook.
 
 ## destroy.yml
 
 Survey: hypervisor, short name, back-end IP, and the VM name typed again as `confirm`.
 Removes the domain and its disks (never the ISO), this node from the delegation (the zone when it
 was the last node; NIOS removes its auto-created PTR with it), the IPAM host record, and any plain
-PTR left at one of its addresses. Refuses anything without the hcp-vm marker.
+PTR left at one of its addresses, and the node's Prometheus targets. Refuses anything without
+the hcp-vm marker.
 
 ## Setup
 
@@ -88,9 +141,11 @@ PTR left at one of its addresses. Refuses anything without the hcp-vm marker.
    ```
 
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
-   key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy** and
-   **HCP post-install** with their surveys, and the workflow **HCP VM deploy + post-install**
-   (post-install runs when deploy succeeds; its survey asks both sets of questions). Create a
+   key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
+   **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**,
+   **HCP tenant**, **HCP node_exporter**) with their surveys, and the workflow
+   **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
+   every question once). Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
    AAP 2.5+ gateways may refuse Basic auth on the API ("Authentication credentials were not
    provided"): use `aap_token` (user menu, API tokens, write scope) instead of user/password.
@@ -109,8 +164,19 @@ PTR left at one of its addresses. Refuses anything without the hcp-vm marker.
 | Options | replication, encryption, minimum TLS |
 | Secret | new `install` password (14+) |
 
-**HCP post-install** asks: hypervisor, short name, back-end IP, security account password (14+),
-roles, SSH on/off, MAPI on/off.
+The post-install templates all start with hypervisor, short name and back-end IP, then:
+
+| Template | Asks |
+|---|---|
+| HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
+| HCP Prometheus | enable on/off |
+| HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user and password, security account password (for MAPI) |
+| HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server to register with |
+| HCP post-install | all of the above once; a blank tenant name or allow list skips that step |
+
+Defaults come from your site values: put `hcp_node_exporter_allow` and `hcp_prometheus_host` (your
+Prometheus server's address and inventory name) and,
+if you like, `hcp_tenant_name` in `site-vars.yml` so the workflow opens pre-filled.
 
 Everything else (MTUs, lockdown, MDPL, filesystem, timeouts, installer kernel arguments) is a role
 default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from inventory.
@@ -133,4 +199,7 @@ default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from
 - An installed HCP closes front-end SSH, but the back-end sshd stays up for the cluster's own
   use, which is what post-install goes through.
 - The console's first-login settings map to `admin jvm` commands; the web actions in
-  `/var/ris/logs/admin_request.log` show which page did what.
+  `/var/ris/logs/admin_request.log` show which page did what. Console checkboxes are cluster
+  settings (`admin jvm config get|set cluster <name>`), named in
+  `/opt/arc/config/configObjectNames.properties`.
+- HCP 10.1's Python is 3.6: current Ansible can't run modules on the node.

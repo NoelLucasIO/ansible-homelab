@@ -1,0 +1,50 @@
+# Survey questions for tenant.yml ("HCP tenant"). With chain=true (post-install and the
+# workflow) the tenant is optional: a blank name skips the step.
+{% set opt = chain | default(false) %}
+- question_name: Initial tenant name
+  question_description: "{{ 'Blank = no tenant. ' if opt else '' }}Letters, digits, hyphens. New namespaces default to cloud protocols only, balanced directory usage; namespace quota: none."
+  variable: hcp_tenant_name
+  type: text
+  required: {{ (not opt) | lower }}
+  default: {{ hcp_tenant_name | to_json }}
+  min: {{ 0 if opt else 1 }}
+  max: 63
+- question_name: Initial tenant hard quota
+  variable: hcp_tenant_quota
+  type: integer
+  required: true
+  default: {{ hcp_tenant_quota | int }}
+  min: 1
+  max: 1000000
+- question_name: Hard quota unit
+  variable: hcp_tenant_quota_unit
+  type: multiplechoice
+  required: true
+  default: {{ hcp_tenant_quota_unit | upper | to_json }}
+  choices: ["GB", "TB"]
+- question_name: Tenant admin user
+  question_description: The tenant's first user (administrator and security roles)
+  variable: hcp_tenant_admin_user
+  type: text
+  required: true
+  default: {{ hcp_tenant_admin_user | to_json }}
+  min: 1
+  max: 64
+- question_name: Tenant admin password
+  question_description: "Ignored when the tenant already exists{{ '; needed only with a tenant name' if opt else '' }}"
+  variable: hcp_tenant_admin_password
+  type: password
+  required: {{ (not opt) | lower }}
+  default: ""
+  min: 0
+  max: 64
+{% if not opt %}
+- question_name: Security account password
+  question_description: The 'security' account creates the tenant through MAPI
+  variable: hcp_security_password
+  type: password
+  required: true
+  default: ""
+  min: 1
+  max: 64
+{% endif %}

@@ -1,0 +1,8 @@
+# Survey questions for prometheus.yml ("HCP Prometheus").
+- question_name: Enable Prometheus
+  question_description: Monitoring > Prometheus > Enable Prometheus (HCP's built-in Prometheus server)
+  variable: hcp_prometheus
+  type: multiplechoice
+  required: true
+  default: {{ hcp_prometheus | string | lower | to_json }}
+  choices: ["true", "false"]

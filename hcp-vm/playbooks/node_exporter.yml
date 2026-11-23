@@ -1,0 +1,196 @@
+---
+# Prometheus node_exporter on the HCP node, reachable only from the listed scrapers.
+#   ansible-playbook playbooks/node_exporter.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 \
+#     -e hcp_backend_ip=198.51.100.101 -e '{"hcp_node_exporter_allow": ["192.0.2.45"]}'
+# The hypervisor downloads the release (checksum-verified), then copies it to the node over the
+# back-end (tasks/backend_open.yml): HCP's own Python is too old for Ansible modules, so the
+# node is driven with ssh/scp only.
+# On the node: <hcp_node_exporter_dir>/node_exporter, firewall.sh (own iptables chain, sources in
+# hcp_node_exporter_allow, everything else dropped), node-exporter.service, and a timer that
+# reapplies the chain every 5 minutes in case HCP rebuilds its firewall. Finally the node is
+# added to Prometheus's file_sd targets on hcp_prometheus_host.
+# Note: an HCP upgrade or node rebuild may drop these files; rerun this playbook afterwards.
+- name: HCP node_exporter
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - hcp_vm_defaults
+  vars:
+    hcp_ne_name: "node_exporter-{{ hcp_node_exporter_version }}.linux-amd64"
+    hcp_ne_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ hcp_node_exporter_version }}"
+    hcp_ne_stage: "{{ hcp_cache_dir }}/node-exporter-{{ hcp_cluster }}"
+  tasks:
+    # The allow list may come as a list, or comma/newline separated text (AAP survey).
+    - name: Normalise the allow list
+      ansible.builtin.set_fact:
+        hcp_ne_allow: >-
+          {{ (hcp_node_exporter_allow if hcp_node_exporter_allow is not string
+              else hcp_node_exporter_allow | regex_replace('[\s,]+', ',') | split(','))
+             | map('trim') | reject('equalto', '') | unique | list }}
+
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - hcp_backend_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+          - hcp_root_key_file is defined
+          - hcp_ne_allow | length > 0
+          - hcp_ne_allow | reject('match', '^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$') | list | length == 0
+          - hcp_node_exporter_version is match('^\d+\.\d+\.\d+$')
+        fail_msg: >-
+          Need hcp_cluster, hcp_backend_ip, the HCP secrets credential, and hcp_node_exporter_allow:
+          the IPv4 addresses or CIDRs allowed to scrape (got {{ hcp_ne_allow }}).
+
+    # --- On the hypervisor: release and the files for the node --------------------------
+    - name: Staging directory
+      ansible.builtin.file:
+        path: "{{ hcp_ne_stage }}"
+        state: directory
+        mode: "0700"
+
+    - name: Download node_exporter, checksum from the release, {{ hcp_node_exporter_version }}
+      ansible.builtin.get_url:
+        url: "{{ hcp_ne_url }}/{{ hcp_ne_name }}.tar.gz"
+        dest: "{{ hcp_cache_dir }}/{{ hcp_ne_name }}.tar.gz"
+        checksum: "sha256:{{ hcp_ne_url }}/sha256sums.txt"
+        mode: "0644"
+
+    - name: Unpack it
+      ansible.builtin.unarchive:
+        src: "{{ hcp_cache_dir }}/{{ hcp_ne_name }}.tar.gz"
+        dest: "{{ hcp_cache_dir }}"
+        remote_src: true
+        creates: "{{ hcp_cache_dir }}/{{ hcp_ne_name }}/node_exporter"
+
+    - name: Render the node's files
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/node-exporter/' ~ item ~ '.j2') }}"
+        dest: "{{ hcp_ne_stage }}/{{ item }}"
+        mode: "0644"
+      loop:
+        - firewall.sh
+        - node-exporter.service
+        - node-exporter-firewall.service
+        - node-exporter-firewall.timer
+
+    - name: What goes where
+      ansible.builtin.set_fact:
+        hcp_ne_files:
+          - {src: "{{ hcp_cache_dir }}/{{ hcp_ne_name }}/node_exporter", dest: "{{ hcp_node_exporter_dir }}/node_exporter", mode: "0755"}
+          - {src: "{{ hcp_ne_stage }}/firewall.sh", dest: "{{ hcp_node_exporter_dir }}/firewall.sh", mode: "0755"}
+          - {src: "{{ hcp_ne_stage }}/node-exporter.service", dest: /etc/systemd/system/node-exporter.service, mode: "0644"}
+          - {src: "{{ hcp_ne_stage }}/node-exporter-firewall.service", dest: /etc/systemd/system/node-exporter-firewall.service, mode: "0644"}
+          - {src: "{{ hcp_ne_stage }}/node-exporter-firewall.timer", dest: /etc/systemd/system/node-exporter-firewall.timer, mode: "0644"}
+
+    - name: Local checksums
+      ansible.builtin.stat:
+        path: "{{ item.src }}"
+        checksum_algorithm: sha256
+      loop: "{{ hcp_ne_files }}"
+      register: hcp_ne_local
+
+    # --- On the node ----------------------------------------------------------------------
+    - name: Install over the back-end
+      block:
+        - name: Open a back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_open.yml"
+
+        - name: Checksums on the node
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + ['sha256sum ' ~ hcp_ne_files | map(attribute='dest') | join(' ') ~ ' 2>/dev/null; true'] }}"
+          register: hcp_ne_remote
+          changed_when: false
+
+        - name: Files that differ
+          ansible.builtin.set_fact:
+            hcp_ne_copy: >-
+              {{ hcp_ne_local.results | selectattr('stat.checksum', 'defined')
+                 | rejectattr('stat.checksum', 'in', hcp_ne_remote.stdout_lines | map('split') | map('first') | list)
+                 | map(attribute='item') | list }}
+
+        - name: Directory on the node
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + ['mkdir -p -m 0755 ' ~ hcp_node_exporter_dir] }}"
+          changed_when: false
+          when: hcp_ne_copy | length > 0
+
+        - name: Copy the changed files to the node
+          ansible.builtin.command:
+            argv: "{{ hcp_bscp + [item.src, 'root@' ~ hcp_backend_ip ~ ':' ~ item.dest] }}"
+          loop: "{{ hcp_ne_copy }}"
+          loop_control:
+            label: "{{ item.dest }}"
+          changed_when: true
+
+        - name: File modes
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + ['chmod ' ~ item.mode ~ ' ' ~ item.dest] }}"
+          loop: "{{ hcp_ne_copy }}"
+          loop_control:
+            label: "{{ item.dest }}"
+          changed_when: false
+
+        # The restart also reapplies the firewall chain (ExecStartPre).
+        - name: Reload and restart
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + ['systemctl daemon-reload && systemctl enable node-exporter.service node-exporter-firewall.timer
+                 && systemctl restart node-exporter.service && systemctl restart node-exporter-firewall.timer'] }}
+          when: hcp_ne_copy | length > 0
+          changed_when: true
+
+        - name: Running, enabled, and the firewall jump in place?
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + ['systemctl is-active node-exporter.service node-exporter-firewall.timer
+                 && systemctl is-enabled node-exporter.service node-exporter-firewall.timer
+                 && iptables -C INPUT -p tcp -m tcp --dport ' ~ hcp_node_exporter_port ~ ' -j node-exporter
+                 && ss -ltn | grep -q ":' ~ hcp_node_exporter_port ~ ' "'] }}
+          register: hcp_ne_state
+          changed_when: false
+          failed_when: false
+
+        - name: Start what isn't running
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + ['systemctl enable --now node-exporter.service node-exporter-firewall.timer
+                 && systemctl restart node-exporter.service'] }}
+          when: hcp_ne_state.rc != 0
+          changed_when: true
+
+        - name: Listening
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + ['ss -ltn | grep -q \":' ~ hcp_node_exporter_port ~ ' \" && hostname'] }}"
+          register: hcp_ne_host
+          until: hcp_ne_host.rc == 0
+          retries: 6
+          delay: 5
+          changed_when: false
+
+      always:
+        - name: Close the back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_close.yml"
+
+    # --- Prometheus scrapes it (file_sd, like the other lab VMs) --------------------------
+    - name: Register with Prometheus on {{ hcp_prometheus_host }}
+      ansible.builtin.copy:
+        dest: "{{ hcp_prometheus_targets_dir }}/{{ hcp_cluster }}-{{ hcp_ne_host.stdout | trim }}.yml"
+        mode: "0644"
+        content: |
+          # Managed by hcp-vm (node_exporter.yml); removed by destroy.yml
+          - targets: ['{{ hcp_fe_ip }}:{{ hcp_node_exporter_port }}']
+            labels:
+              instance: {{ hcp_ne_host.stdout | trim }}.{{ hcp_clname }}
+              hcp_system: {{ hcp_clname }}
+      delegate_to: "{{ hcp_prometheus_host }}"
+      when: hcp_prometheus_host | length > 0
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "{{ hcp_clname }}: node_exporter {{ hcp_node_exporter_version }} on http://{{ hcp_fe_ip }}:{{ hcp_node_exporter_port }}/metrics"
+          - "Allowed to scrape: {{ hcp_ne_allow | join(', ') }} (everything else dropped)."
+          - >-
+            {{ 'Prometheus target: ' ~ hcp_prometheus_host ~ ':' ~ hcp_prometheus_targets_dir
+               if hcp_prometheus_host | length > 0 else 'Not registered with Prometheus (hcp_prometheus_host empty).' }}

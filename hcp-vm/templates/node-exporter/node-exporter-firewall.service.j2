@@ -1,0 +1,7 @@
+# Managed by hcp-vm (node_exporter.yml)
+[Unit]
+Description=Reapply the node_exporter firewall chain
+
+[Service]
+Type=oneshot
+ExecStart={{ hcp_node_exporter_dir }}/firewall.sh

@@ -68,13 +68,38 @@ hcp_replace: false                      # true = destroy an existing VM of the s
 hcp_os_install_timeout: 3600
 hcp_install_timeout: 3600
 
-# --- First-login setup (post_install.yml) -----------------------------------------
+# --- First-login setup (first_login.yml) ------------------------------------------
 hcp_security_user: security             # the initial security account
 hcp_security_role_choices: [MONITOR, SYSTEM, SERVICE, SECURITY, COMPLIANCE, SEARCH_USER]
 hcp_security_roles: "{{ hcp_security_role_choices }}"   # list or comma-separated string
 hcp_enable_ssh: true                    # SSH on the front-end (off on a new system)
 hcp_enable_mapi: true                   # Management API on :9090
 hcp_backend_host_ip: ""                 # hypervisor's temporary back-end address; blank = <back-end /24>.1
+
+# --- Prometheus (prometheus.yml): Monitoring > Prometheus > Enable Prometheus ----------
+hcp_prometheus: true                    # false = turn it off
+
+# --- Initial tenant (tenant.yml) -------------------------------------------------------
+hcp_tenant_name: ""                     # blank = no tenant (post_install.yml skips the step)
+hcp_tenant_description: "Created by hcp-vm"
+hcp_tenant_quota: 100                   # hard quota, in hcp_tenant_quota_unit
+hcp_tenant_quota_unit: GB               # GB | TB
+hcp_tenant_soft_quota: 85               # percent
+hcp_tenant_admin_user: admin            # the tenant's first user (administrator + security)
+# hcp_tenant_admin_password: survey or vault, never committed
+# Namespace defaults for the tenant. These are the console's "Protocol optimization" and
+# "Directory usage" choices.
+hcp_ns_cloud_optimized: CLOUD           # CLOUD = cloud protocols only | ALL = all protocols | DEFAULT
+hcp_ns_directory_usage: BALANCED        # BALANCED | UNBALANCED (non-flat) | DEFAULT
+
+# --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
+hcp_node_exporter_allow: []             # addresses/CIDRs allowed to scrape it, e.g. [192.0.2.45]; empty = skip
+hcp_node_exporter_version: "1.13.1"
+hcp_node_exporter_port: 9100
+hcp_node_exporter_dir: /var/node-exporter
+hcp_cache_dir: /var/cache/hcp-vm        # downloads kept on the hypervisor
+hcp_prometheus_host: fedora             # Prometheus server (inventory host); gets a file_sd target per node; "" = skip
+hcp_prometheus_targets_dir: /etc/prometheus/targets/nodes
 
 # --- NIOS (IPAM + delegation) ------------------------------------------------------
 hcp_use_nios: true                      # false = static front-end IP only, no NIOS calls
