@@ -80,7 +80,7 @@ vigil_scan_exclude: []                    # hosts/CIDRs no scanner touches
 vigil_web_product: Web apps
 vigil_web_from_npm: true
 vigil_web_extra: []                       # e.g. ["https://www.example.com"]
-vigil_web_exclude: []                     # NPM domain names to skip
+vigil_web_exclude: "{{ vigil_ui | map(attribute='fqdn') | list }}"   # NPM domain names to skip; default: vigil's own UIs (dojo, gvm)
 
 vigil_nuclei_severity: low,medium,high,critical   # "info" is mostly tech fingerprints
 vigil_nuclei_rate_limit: 100              # requests/second

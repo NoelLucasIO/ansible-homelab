@@ -40,7 +40,7 @@ Falco (host syscalls, modern eBPF) ─► Falcosidekick 127.0.0.1:2801 ─► Lo
 ```
 
 - Each **scope** in `vigil_scopes` becomes a Greenbone target + weekly task, a Nuclei target list, and a DefectDojo product. Web apps are a third product, `Web apps`.
-- **Web targets** are every enabled NPM proxy host, plus `vigil_web_extra`, minus `vigil_web_exclude`. They're re-read from NPM on every deploy.
+- **Web targets** are every enabled NPM proxy host, plus `vigil_web_extra`, minus `vigil_web_exclude` (defaults to vigil's own UIs, so it doesn't scan DefectDojo or Greenbone). They're re-read from NPM on every deploy.
 - The import uses `reimport-scan` with `auto_create_context` and `close_old_findings`. Each scanner+scope is one DefectDojo test that gets updated: fixed findings close, repeats dedupe. Imported files are archived under `reports/archive/<date>/` for `vigil_report_keep_days`.
 - **Code:** each entry in `vigil_code_repos` is a DefectDojo product (`product`, default the repo name) with a Semgrep test and a Checkov test. `vigil-code-fetch` keeps a shallow checkout of the default branch per repo and deletes checkouts of repos you remove from the list. Repos with `auth: true` use `vigil_git_token` (HTTP Basic, user `x-access-token`), passed to git through the environment, so it's never in the process list or a `.git/config`. One unreachable repo is logged and skipped; the others are still scanned.
 - **Feeds:** `vigil-feed-sync.timer` pulls the Greenbone feed images daily. If one changed, it re-runs that copy unit, and `Requires=` restarts gvmd/ospd so they pick it up. Nuclei updates its templates at the start of each run.
