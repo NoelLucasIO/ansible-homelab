@@ -189,7 +189,7 @@ Loki, OpenSearch, ClickHouse) are excluded by the lab inventory as replaceable.
 
 ## Status
 
-Run on 2026-11-22 against the lab (PBS 4.2-1 ISO, Fedora 44 KVM host, CachyOS workstation,
+Run on 2026-11-22 and 2026-11-23 against the lab (PBS 4.2-1 ISO, Fedora 44 KVM host, CachyOS workstation,
 CLI from the workstation):
 
 * **pbs-deploy.yml:** unattended install from the ISO (about 2 minutes to power-off), first boot,
@@ -201,6 +201,16 @@ CLI from the workstation):
 * **First file backup (fedora):** 30 s, exit 0, metrics written. The `/990` allow-list was checked
   in the snapshot's catalog: only the listed directories, the trimmed ones down to their config,
   569 Forgejo repository files, nothing from the excluded directories; Postgres dump present.
-* **Not yet run:** VM backups (virtnbdbackup; the Ansible VM has internal snapshots, which may
-  block checkpoints), the workstation's first backup, the restore test, `restore-vm.yml`,
-  offsite (no S3 provider set up yet), `aap-setup.yml`.
+* **2026-11-23, VM backups:** all four domains (Ansible, Splunk, Infoblox-9.1.0, vtm01), exit 0,
+  after removing `PrivateTmp` from the unit (virtnbdbackup needs qemu's NBD socket in `/var/tmp`).
+  The Ansible VM's internal snapshots did not block checkpoints.
+* **2026-11-23, workstation:** first file backup, 209 GiB read, 178 GiB uploaded, 43 min, exit 0.
+* **2026-11-23, offsite (Backblaze B2):** S3 endpoint capped at 100 Mbit/s, local pull sync with
+  encrypted-only; first sync of the fedora snapshot OK, full first copy (~374 GiB) running.
+* **2026-11-23, on-demand jobs:** from the CLI, file restores from `store1` and from `b2-offsite`
+  (single file, directory), in-place restore refused without the confirmation and a no-op when
+  identical, `restore-vm.yml` of vtm01 as a new domain (new UUID and MAC, link down) that booted,
+  `backup-now.yml` for one VM. In AAP: `aap-setup.yml` made the three templates and surveys; a
+  "Restore files" job ran successfully.
+* **Not yet run:** the weekly restore test (first run Sunday), an in-place restore that actually
+  replaces files, a Restore VM from `b2-offsite` (waits for the first full sync).
