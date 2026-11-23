@@ -78,6 +78,8 @@ hcp_backend_host_ip: ""                 # hypervisor's temporary back-end addres
 
 # --- Prometheus (prometheus.yml): Monitoring > Prometheus > Enable Prometheus ----------
 hcp_prometheus: true                    # false = turn it off
+hcp_prometheus_retention_days: 365      # TSDB retention time, 1-365 days (HCP default 15)
+hcp_prometheus_retention_gb: 300        # TSDB retention size, 1-1000 GB (HCP default 100)
 
 # --- Initial tenant (tenant.yml) -------------------------------------------------------
 hcp_tenant_name: ""                     # blank = no tenant (post_install.yml skips the step)

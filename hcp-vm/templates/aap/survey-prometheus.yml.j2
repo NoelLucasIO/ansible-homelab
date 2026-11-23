@@ -6,3 +6,19 @@
   required: true
   default: {{ hcp_prometheus | string | lower | to_json }}
   choices: ["true", "false"]
+- question_name: TSDB retention time (days)
+  question_description: How long HCP's Prometheus keeps metrics (HCP default 15)
+  variable: hcp_prometheus_retention_days
+  type: integer
+  required: true
+  default: {{ hcp_prometheus_retention_days | int }}
+  min: 1
+  max: 365
+- question_name: TSDB retention size (GB)
+  question_description: Most disk HCP's Prometheus may use for metrics (HCP default 100)
+  variable: hcp_prometheus_retention_gb
+  type: integer
+  required: true
+  default: {{ hcp_prometheus_retention_gb | int }}
+  min: 1
+  max: 1000

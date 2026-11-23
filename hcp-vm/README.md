@@ -85,7 +85,10 @@ Reruns change nothing in HCP.
 The console checkbox is the cluster setting `prometheus.server.enabled`
 (`admin jvm config set cluster prometheus.server.enabled true`). HCP then runs its own Prometheus
 server on the node (`:9097`); the play waits for it to listen. Console:
-`https://admin.<system>:9094`.
+`https://admin.<system>:9094`. TSDB retention (`hcp_prometheus_retention_days`, default 365;
+`hcp_prometheus_retention_gb`, default 300) is set first: HCP writes it into the server's command
+line when it starts it. If the running server still shows other values, the play turns it off and
+on again and checks the command line.
 
 ### tenant.yml
 
@@ -169,7 +172,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | Template | Asks |
 |---|---|
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
-| HCP Prometheus | enable on/off |
+| HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user and password, security account password (for MAPI) |
 | HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server to register with |
 | HCP post-install | all of the above once; a blank tenant name or allow list skips that step |
