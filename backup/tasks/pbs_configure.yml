@@ -87,6 +87,7 @@
   loop:
     - {id: "{{ pbs_client_user }}", comment: "Backup clients (one API token per host)"}
     - {id: "{{ pbs_monitor_user }}", comment: "Read-only, for the Prometheus exporter"}
+    - {id: "{{ pbs_restore_user }}", comment: "Restores (one read-only API token per host)"}
   loop_control: { loop_var: pbs_u, label: "{{ pbs_u.id }}" }
   vars:
     pbs_obj:
@@ -106,6 +107,17 @@
   loop:
     - {path: "/datastore/{{ pbs_datastore }}", role: DatastoreBackup, auth-id: "{{ pbs_client_user }}", propagate: true}
     - {path: /, role: Audit, auth-id: "{{ pbs_monitor_user }}", propagate: true}
+  changed_when: false
+
+- name: ACLs for the restore user (DatastoreReader on every store it restores from)
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/access/acl"
+    method: PUT
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    body_format: json
+    body: {path: "/datastore/{{ item }}", role: DatastoreReader, auth-id: "{{ pbs_restore_user }}", propagate: true}
+  loop: "{{ pbs_restore_stores }}"
   changed_when: false        # PUT is idempotent; the API doesn't say whether it changed anything
 
 # --- Exporter token (secret shown once: kept only in the exporter's env file) ------------

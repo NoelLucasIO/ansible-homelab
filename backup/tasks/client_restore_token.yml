@@ -1,0 +1,70 @@
+---
+# Restore token per host (restore@pbs!<host>): DatastoreReader on the local store and the offsite
+# store, so a host can restore any host's backups from either one. Kept apart from the backup token
+# (client.env), which can only see the host's own groups in the local store, and used only by the
+# restore playbooks. The secret is shown once by PBS and kept only in the host's restore.env.
+- name: Is restore.env present?
+  ansible.builtin.stat:
+    path: "{{ pbs_client_conf_dir }}/restore.env"
+  register: pbs_renv_st
+
+- name: New restore token for {{ inventory_hostname_short }}
+  when: not pbs_renv_st.stat.exists or pbs_rotate_tokens | default(false) | bool
+  block:
+    - name: Drop the old restore token (if any)
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/users/{{ pbs_restore_user | urlencode }}/token/{{ pbs_token_name }}"
+        method: DELETE
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        status_code: [200, 400, 404, 500]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Create the restore token, {{ pbs_restore_user ~ '!' ~ pbs_token_name }}
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/users/{{ pbs_restore_user | urlencode }}/token/{{ pbs_token_name }}"
+        method: POST
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body: {comment: "restores on {{ inventory_hostname }}"}
+        return_content: true
+      delegate_to: localhost
+      become: false
+      register: pbs_rtok
+      changed_when: true
+      no_log: true
+
+    - name: Restore token ACLs (DatastoreReader)
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/acl"
+        method: PUT
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body: {path: "/datastore/{{ item }}", role: DatastoreReader, auth-id: "{{ pbs_restore_user }}!{{ pbs_token_name }}", propagate: true}
+      loop: "{{ pbs_restore_stores }}"
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Write restore.env
+      ansible.builtin.copy:
+        dest: "{{ pbs_client_conf_dir }}/restore.env"
+        mode: "0600"
+        content: |
+          # Managed by Ansible (backup/clients). Read-only restore token; the restore playbooks add
+          # the datastore: PBS_REPOSITORY="$PBS_RESTORE_AUTH@$PBS_RESTORE_SERVER:<store>".
+          PBS_RESTORE_AUTH='{{ pbs_restore_user }}!{{ pbs_token_name }}'
+          PBS_RESTORE_SERVER='{{ pbs_server }}:{{ pbs_api_port }}'
+          PBS_PASSWORD='{{ pbs_rtok.json.data.value }}'
+          PBS_FINGERPRINT='{{ pbs_fingerprint }}'
+      no_log: true
+
+- name: Fingerprint in restore.env is current
+  ansible.builtin.lineinfile:
+    path: "{{ pbs_client_conf_dir }}/restore.env"
+    regexp: '^PBS_FINGERPRINT='
+    line: "PBS_FINGERPRINT='{{ pbs_fingerprint }}'"

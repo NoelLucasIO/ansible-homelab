@@ -41,7 +41,7 @@
   tasks:
     - name: Facts
       ansible.builtin.setup:
-        gather_subset: ['!all', '!min', distribution]
+        gather_subset: ['!all', '!min', distribution, platform]
 
     - name: API session from the first play
       ansible.builtin.set_fact:
@@ -121,6 +121,37 @@
 
     - name: API token and client.env
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/client_token.yml"
+
+    - name: Restore token and restore.env
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/client_restore_token.yml"
+
+    - name: Facts directory
+      ansible.builtin.file:
+        path: /etc/ansible/facts.d
+        state: directory
+        mode: "0755"
+
+    # Read back as ansible_local.pbs_backup by backup-now.yml, restore-files.yml and restore-vm.yml.
+    - name: Facts for the on-demand playbooks (pbs_backup.fact)
+      ansible.builtin.copy:
+        dest: /etc/ansible/facts.d/pbs_backup.fact
+        mode: "0644"
+        content: "{{ pbs_fact | to_nice_json }}\n"
+      vars:
+        pbs_fact:
+          backup_id: "{{ ansible_facts.hostname | default(inventory_hostname_short) }}"
+          server: "{{ pbs_server }}"
+          stores: "{{ pbs_restore_stores }}"
+          conf_dir: "{{ pbs_client_conf_dir }}"
+          lib_dir: "{{ pbs_client_lib_dir }}"
+          client_bin: "{{ pbs_client_bin }}"
+          archives: >-
+            {{ dict(pbs_host_backup_paths | map(attribute='name') | zip(pbs_host_backup_paths | map(attribute='path')))
+               | combine({'dumps': pbs_dump_dir} if pbs_pg_dumps | length > 0 else {}) }}
+          host_backup: "{{ pbs_host_backup_enabled | bool }}"
+          vm_backup: "{{ pbs_vm_backup_enabled | bool and pbs_vm_backup_domains | length > 0 }}"
+          vm_domains: "{{ pbs_vm_backup_domains }}"
+          vm_backup_dir: "{{ pbs_vm_backup_dir }}"
 
     # --- Jobs ------------------------------------------------------------------------
     - name: Job scripts

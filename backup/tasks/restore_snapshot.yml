@@ -1,0 +1,45 @@
+---
+# Resolve "latest", a date (YYYY-MM-DD, UTC) or an exact time (2026-11-23T16:06:08Z) to one
+# snapshot of group pbs_rs_group (e.g. host/fedora) in namespace pbs_rs_ns of store pbs_store,
+# using the host's read-only restore token. Sets pbs_snap (path) and pbs_snap_files.
+- name: Snapshots of {{ pbs_rs_group ~ ' in ' ~ pbs_store ~ '/' ~ pbs_rs_ns }}
+  ansible.builtin.shell: |
+    set -euo pipefail
+    set -a; . {{ pbs_f.conf_dir }}/restore.env; set +a
+    export PBS_REPOSITORY="$PBS_RESTORE_AUTH@$PBS_RESTORE_SERVER:{{ pbs_store }}"
+    {{ pbs_f.client_bin }} snapshot list --ns {{ pbs_rs_ns }} {{ pbs_rs_group }} --output-format json
+  args:
+    executable: /bin/bash
+  register: pbs_rs_list
+  changed_when: false
+
+- name: Snapshots, newest first, with their times (UTC)
+  ansible.builtin.set_fact:
+    pbs_rs_want: "{{ pbs_restore_snapshot | default('latest') | string | trim }}"
+    pbs_rs_times: >-
+      {%- set out = [] -%}
+      {%- for s in pbs_rs_list.stdout | from_json | sort(attribute='backup-time', reverse=true) -%}
+      {%- set _ = out.append({'t': '%Y-%m-%dT%H:%M:%SZ' | strftime(s['backup-time'], utc=true),
+                              'files': (s.files | map(attribute='filename') | list)
+                                       if (s.files | length > 0 and s.files[0] is mapping) else s.files}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Match
+  ansible.builtin.set_fact:
+    pbs_rs_match: >-
+      {{ pbs_rs_times[:1] if pbs_rs_want in ['', 'latest']
+         else (pbs_rs_times | selectattr('t', 'match', '^' ~ (pbs_rs_want | regex_escape)) | list)[:1] }}
+
+- name: Snapshot found
+  ansible.builtin.assert:
+    that: pbs_rs_match | length == 1
+    fail_msg: >-
+      No snapshot of {{ pbs_rs_group }} in {{ pbs_store }}/{{ pbs_rs_ns }} matches "{{ pbs_rs_want }}"
+      (use latest, a UTC date like 2026-11-23, or a time). Newest: {{ pbs_rs_times[:10] | map(attribute='t') | list }}
+    quiet: true
+
+- name: Chosen
+  ansible.builtin.set_fact:
+    pbs_snap: "{{ pbs_rs_group }}/{{ pbs_rs_match[0].t }}"
+    pbs_snap_files: "{{ pbs_rs_match[0].files }}"

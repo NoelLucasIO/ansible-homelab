@@ -1,0 +1,16 @@
+---
+# Shared start of backup-now / restore-files / restore-vm: read what clients.yml recorded on the
+# host (/etc/ansible/facts.d/pbs_backup.fact), so these playbooks need no inventory host vars.
+- name: Local facts
+  ansible.builtin.setup:
+    gather_subset: ['!all', '!min', local, platform]
+
+- name: Host is a backup client
+  ansible.builtin.assert:
+    that: ansible_local.pbs_backup is defined and ansible_local.pbs_backup.conf_dir is defined
+    fail_msg: "{{ inventory_hostname }} has no pbs_backup facts: run the \"Backup clients\" job (backup/playbooks/clients.yml) for it first."
+    quiet: true
+
+- name: Facts
+  ansible.builtin.set_fact:
+    pbs_f: "{{ ansible_local.pbs_backup }}"

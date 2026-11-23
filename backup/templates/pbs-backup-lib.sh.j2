@@ -13,6 +13,11 @@ KEYARGS=()
 HOST=$(hostname -s)
 mkdir -p "$STATE"
 
+# One run per job at a time: the nightly timer and an on-demand run (AAP "Backup now") share
+# the lock, so a second start waits up to PBS_LOCK_WAIT seconds, then gives up (exit 75).
+exec 9>"$STATE/$(basename "$0").lock"
+if ! flock -w "${PBS_LOCK_WAIT:-600}" 9; then echo "another $(basename "$0") is still running"; exit 75; fi
+
 log() { echo "$*"; }
 
 # metric <kind> <target> <rc> <start> <end>: one state file per target, merged into <kind>.prom

@@ -4,12 +4,13 @@
 # the month, then incrementals from libvirt dirty bitmaps) in {{ pbs_vm_backup_dir }}/<domain>/<YYYY-MM>;
 # the chain is then uploaded to PBS (namespace "kvm", type vm, id = domain). Each PBS snapshot
 # is a complete, restorable chain; unchanged chain files are skipped (metadata change detection).
-# Restore: proxmox-backup-client restore ... chain.pxar <dir>, then virtnbdrestore -i <dir> -o <out>.
+# Restore: playbooks/restore-vm.yml (AAP "Restore VM").
 # shellcheck disable=SC1091
 . {{ pbs_client_lib_dir }}/lib.sh
 ROOT={{ pbs_vm_backup_dir }}
 KEEP={{ pbs_vm_backup_local_months | int }}
 DOMAINS=({% for d in pbs_vm_backup_domains %}"{{ d }}" {% endfor %})
+[ "$#" -gt 0 ] && DOMAINS=("$@")     # on demand: pbs-backup-vm <domain>...
 opts=({{ '--compress' if pbs_vm_backup_compress | bool else '' }} {{ '--raw' if pbs_vm_backup_raw_disks | bool else '' }})
 overall=0
 

@@ -1,74 +1,220 @@
 ---
-# Restore a KVM domain's disks from PBS to a scratch directory on the hypervisor (never over the
-# running VM): the chain (newest, or pbs_restore_snapshot) is restored with proxmox-backup-client,
-# then virtnbdrestore rebuilds the qcow2 disks and the domain XML from it.
-#   ansible-playbook playbooks/restore-vm.yml -i inventory.yml -e pbs_restore_host=fedora \
-#     -e pbs_restore_domain=vm1 [-e pbs_restore_snapshot=2026-11-22T05:30:01Z] [-e pbs_restore_until=virtnbdbackup.3]
-# Then inspect the result, and define it under a new name, or swap disks by hand.
+# Restore a KVM domain from PBS (AAP "Restore VM"), from the local store or the offsite (B2) store,
+# as a NEW domain beside the original: own disks under <vm_backup_dir>/restore/<name>/, new name,
+# no UUID or MAC addresses carried over (libvirt makes new ones), network links DOWN, defined but
+# not started and not autostarted. The original domain is never touched.
+#   ansible-playbook playbooks/restore-vm.yml -i inventory.yml -e pbs_target=fedora \
+#     -e pbs_restore_domain=vtm01 [-e pbs_restore_source=b2-offsite] [-e pbs_restore_snapshot=2026-11-22] \
+#     [-e pbs_restore_name=vtm01-test] [-e pbs_restore_until=virtnbdbackup.3]
+# Survey answers:
+#   pbs_target            the hypervisor to restore onto
+#   pbs_restore_source    store1 (local PBS) | b2-offsite (Backblaze B2)
+#   pbs_restore_domain    the backed-up domain (backup id in namespace kvm)
+#   pbs_restore_snapshot  latest | a UTC date (newest that day) | a time (2026-11-23T16:15:08Z)
+#   pbs_restore_name      optional new domain name; default <domain>-restored-<UTC time>
+#   pbs_restore_until     optional: stop at this checkpoint of the monthly chain (point in time)
+# Then: start it (safe: its links are down), check it, and only then bring a link up with
+#   virsh domif-setlink <name> <mac> up
+# The original and the copy share hostname and IP inside the guest: don't put both on one LAN.
 - name: Restore a VM from PBS
-  hosts: "{{ pbs_restore_host | default('fedora') }}"
+  hosts: "{{ (pbs_target | default('none')) if pbs_target | default('none') is string else pbs_target | join(',') }}"
   become: true
   gather_facts: false
+  serial: 1
   roles:
     - backup_defaults
   vars:
-    pbs_restore_dir: "{{ pbs_vm_backup_dir }}/restore/{{ pbs_restore_domain }}-{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+    pbs_store: "{{ pbs_restore_source | default(pbs_datastore) }}"
+    pbs_dom: "{{ pbs_restore_domain | default('') | string | trim }}"
+    pbs_stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%d-%H%M') }}"
+    pbs_until: "{{ pbs_restore_until | default('', true) | string | trim }}"
   tasks:
+    - name: Facts
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/ondemand_facts.yml"
+
+    - name: New domain name
+      ansible.builtin.set_fact:
+        pbs_new: "{{ pbs_restore_name | default('', true) | string | trim or (pbs_dom ~ '-restored-' ~ pbs_stamp) }}"
+
     - name: Inputs
       ansible.builtin.assert:
-        that: pbs_restore_domain | default('') is match('^[A-Za-z0-9._-]+$')
-        fail_msg: "Set pbs_restore_domain (the backup id in namespace kvm, i.e. the libvirt name)."
+        that:
+          - ansible_play_hosts_all | length == 1
+          - pbs_store in pbs_f.stores
+          - pbs_dom is match('^[A-Za-z0-9._-]+$')
+          - pbs_new is match('^[A-Za-z0-9._-]+$')
+          - pbs_until == '' or pbs_until is match('^[A-Za-z0-9._-]+$')
+        fail_msg: "One hypervisor; source one of {{ pbs_f.stores }}; domain and new name are letters, digits and . _ -"
         quiet: true
 
+    - name: The new name is free
+      ansible.builtin.command: virsh -c qemu:///system dominfo {{ pbs_new | quote }}
+      register: pbs_rv_exists
+      changed_when: false
+      failed_when: pbs_rv_exists.rc == 0
+
+    - name: Snapshot
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/restore_snapshot.yml"
+      vars:
+        pbs_rs_ns: kvm
+        pbs_rs_group: "vm/{{ pbs_dom }}"
+
+    - name: Paths
+      ansible.builtin.set_fact:
+        pbs_rv_dir: "{{ pbs_restore_vm_dir | default(pbs_f.vm_backup_dir ~ '/restore') }}/{{ pbs_new }}"
+        pbs_rv_chain: "{{ pbs_restore_vm_dir | default(pbs_f.vm_backup_dir ~ '/restore') }}/{{ pbs_new }}/.work/chain"
+
+    # The decrypted chain stays in a root-only work directory (removed at the end); the disks are
+    # 0600 (libvirt hands them to qemu when the domain starts); qemu only needs to traverse the path.
     - name: Directories
       ansible.builtin.file:
-        path: "{{ pbs_restore_dir }}/{{ item }}"
+        path: "{{ item.p }}"
         state: directory
-        mode: "0700"
-      loop: [chain, disks]
+        mode: "{{ item.m }}"
+      loop:
+        - {p: "{{ pbs_rv_dir | dirname }}", m: "0711"}
+        - {p: "{{ pbs_rv_dir }}", m: "0711"}
+        - {p: "{{ pbs_rv_dir }}/.work", m: "0700"}
+      loop_control: { label: "{{ item.p }}" }
 
-    - name: Restore the chain from PBS (decrypts with the shared key)
+    # Top-down: a blocked parent makes every child look blocked, so fix each level before testing the next.
+    - name: Let qemu traverse the path to the disks (ACL u:qemu:x where it can't, nothing else)
       ansible.builtin.shell: |
         set -euo pipefail
-        set -a; . {{ pbs_client_conf_dir }}/client.env; set +a
-        snap="vm/{{ pbs_restore_domain }}{{ ('/' ~ pbs_restore_snapshot) if pbs_restore_snapshot | default('') | length > 0 else '' }}"
-        {{ pbs_client_bin }} restore --ns kvm "$snap" chain.pxar {{ pbs_restore_dir }}/chain \
-          --keyfile {{ pbs_client_conf_dir }}/encryption-key.json
-        ls -la {{ pbs_restore_dir }}/chain
+        p=
+        IFS=/ read -ra parts <<< {{ pbs_rv_dir | quote }}
+        for c in "${parts[@]}"; do
+          [ -n "$c" ] || continue
+          p="$p/$c"
+          if ! runuser -u qemu -- test -x "$p"; then setfacl -m u:qemu:x "$p"; echo "$p"; fi
+        done
       args:
         executable: /bin/bash
-      register: pbs_r_chain
-      changed_when: true
+      register: pbs_rv_acl
+      changed_when: pbs_rv_acl.stdout | length > 0
 
-    - name: What's in the chain
-      ansible.builtin.command: virtnbdrestore -i {{ pbs_restore_dir }}/chain -o dump
-      register: pbs_r_dump
+    - name: Restore the chain ({{ pbs_store ~ ':' ~ pbs_snap }})
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ pbs_f.conf_dir }}/restore.env; set +a
+        export PBS_REPOSITORY="$PBS_RESTORE_AUTH@$PBS_RESTORE_SERVER:{{ pbs_store }}"
+        {{ pbs_f.client_bin }} restore --ns kvm {{ pbs_snap | quote }} chain.pxar {{ pbs_rv_chain | quote }} \
+          --keyfile {{ pbs_f.conf_dir }}/encryption-key.json --allow-existing-dirs true
+        du -sh {{ pbs_rv_chain | quote }}
+      args:
+        executable: /bin/bash
+      register: pbs_rv_chain_out
+      changed_when: true
+      async: "{{ pbs_restore_timeout | default(14400) }}"
+      poll: 15
+
+    - name: Checkpoints in the chain
+      ansible.builtin.command: virtnbdrestore -i {{ pbs_rv_chain | quote }} -o dump -L /dev/null --nocolor
+      register: pbs_rv_dump
       changed_when: false
 
-    - name: Rebuild the disks (and domain XML)
+    # -c rewrites the domain XML for the new disk paths and name; the domain is defined below,
+    # after the UUID and MACs are taken out.
+    - name: Rebuild the disks
       ansible.builtin.command:
-        argv: "{{ ['virtnbdrestore', '-i', pbs_restore_dir ~ '/chain', '-o', pbs_restore_dir ~ '/disks']
-                  + (['--until', pbs_restore_until] if pbs_restore_until | default('') | length > 0 else []) }}"
-      register: pbs_r_restore
+        argv: "{{ ['virtnbdrestore', '-U', 'qemu:///system', '-i', pbs_rv_chain, '-o', pbs_rv_dir,
+                   '-c', '-N', pbs_new, '-n', '--nocolor', '-L', pbs_rv_dir ~ '/virtnbdrestore.log']
+                  + (['--until', pbs_until] if pbs_until | length > 0 else []) }}"
+      register: pbs_rv_restore
+      changed_when: true
+      async: "{{ pbs_restore_timeout | default(14400) }}"
+      poll: 15
+
+    - name: Restored domain XML
+      ansible.builtin.find:
+        paths: "{{ pbs_rv_dir }}"
+        patterns: ["vmconfig*.xml"]
+        depth: 1
+      register: pbs_rv_xmls
+
+    - name: XML found
+      ansible.builtin.assert:
+        that: pbs_rv_xmls.files | length > 0
+        fail_msg: "virtnbdrestore wrote no domain XML in {{ pbs_rv_dir }}; see {{ pbs_rv_dir }}/virtnbdrestore.log"
+        quiet: true
+
+    - name: New identity (name; no UUID, no MAC addresses)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - {{ pbs_rv_xmls.files[0].path | quote }} {{ (pbs_rv_dir ~ '/' ~ pbs_new ~ '.xml') | quote }} {{ pbs_new | quote }} <<'PY'
+        import sys, xml.etree.ElementTree as ET
+        src, dst, name = sys.argv[1:4]
+        t = ET.parse(src); r = t.getroot()
+        r.find("name").text = name
+        for e in r.findall("uuid"):
+            r.remove(e)
+        for i in r.iter("interface"):
+            for m in i.findall("mac"):
+                i.remove(m)
+            for l in i.findall("link"):
+                i.remove(l)
+            ET.SubElement(i, "link", state="down")
+        d = r.find("description")
+        if d is None:
+            d = ET.SubElement(r, "description")
+        d.text = ((d.text or "") + " Restored from PBS by backup/restore-vm.yml.").strip()
+        t.write(dst)
+        for s in r.iter("source"):
+            if s.get("file"):
+                print(s.get("file"))
+        PY
+      args:
+        executable: /bin/bash
+      register: pbs_rv_xml
       changed_when: true
 
-    - name: Restored files
-      ansible.builtin.find:
-        paths: "{{ pbs_restore_dir }}/disks"
-      register: pbs_r_files
+    - name: Disks root-only until libvirt hands them to qemu
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: "0600"
+      loop: "{{ pbs_rv_xml.stdout_lines | select('match', '^' ~ (pbs_rv_dir | regex_escape) ~ '/') | list }}"
 
-    - name: Images are readable qcow2
-      ansible.builtin.command: qemu-img check {{ item.path }}
-      loop: "{{ pbs_r_files.files | selectattr('path', 'search', '[.](qcow2|img|raw)$|vd[a-z]$|sd[a-z]$') | list }}"
-      loop_control: { label: "{{ item.path | basename }}" }
+    - name: Disks the domain points at exist and are readable qcow2/raw
+      ansible.builtin.command: qemu-img info {{ item | quote }}
+      loop: "{{ pbs_rv_xml.stdout_lines | select('match', '^' ~ (pbs_rv_dir | regex_escape) ~ '/') | list }}"
       changed_when: false
-      failed_when: false
-      register: pbs_r_check
+
+    - name: Every disk was restored into the restore directory
+      ansible.builtin.assert:
+        that: pbs_rv_xml.stdout_lines | reject('match', '^' ~ (pbs_rv_dir | regex_escape) ~ '/') | reject('search', '[.]iso$') | list | length == 0
+        fail_msg: >-
+          The XML still points outside {{ pbs_rv_dir }}:
+          {{ pbs_rv_xml.stdout_lines | reject('match', '^' ~ (pbs_rv_dir | regex_escape) ~ '/') | list }}
+        quiet: true
+
+    - name: Define the new domain, stopped, {{ pbs_new }}
+      ansible.builtin.command: virsh -c qemu:///system define {{ (pbs_rv_dir ~ '/' ~ pbs_new ~ '.xml') | quote }}
+      changed_when: true
+
+    - name: No autostart
+      ansible.builtin.command: virsh -c qemu:///system autostart --disable {{ pbs_new | quote }}
+      changed_when: false
+
+    - name: The chain copy is no longer needed
+      ansible.builtin.file:
+        path: "{{ pbs_rv_dir }}/.work"
+        state: absent
+      when: not pbs_restore_keep_chain | default(false) | bool
+
+    - name: State
+      ansible.builtin.command: virsh -c qemu:///system dominfo {{ pbs_new | quote }}
+      register: pbs_rv_info
+      changed_when: false
 
     - name: Result
       ansible.builtin.debug:
         msg:
-          - "Restored {{ pbs_restore_domain }} into {{ pbs_restore_dir }}/disks:"
-          - "{{ pbs_r_files.files | map(attribute='path') | map('basename') | list }}"
-          - "{{ pbs_r_check.results | map(attribute='stdout_lines') | flatten | select('search', 'No errors|errors|leaked') | list }}"
-          - "Chain dir {{ pbs_restore_dir }}/chain can be deleted once you're done."
+          - >-
+            Restored {{ pbs_dom }} ({{ pbs_store }}:{{ pbs_snap }}{{ (', until ' ~ pbs_until) if pbs_until | length > 0 else '' }})
+            as {{ pbs_new }}: defined, shut off, no autostart.
+          - "Disks: {{ pbs_rv_xml.stdout_lines | select('match', '^' ~ (pbs_rv_dir | regex_escape) ~ '/') | list }}"
+          - "{{ pbs_rv_info.stdout_lines | select('match', '^(State|Autostart|UUID)') | list }}"
+          - >-
+            Links are DOWN (new MACs): safe to start beside the original. On the LAN:
+            virsh domif-setlink {{ pbs_new }} <mac> up (not while the original runs: same guest IP).
+          - "Remove it: virsh undefine {{ pbs_new }} --nvram; rm -r {{ pbs_rv_dir }}"

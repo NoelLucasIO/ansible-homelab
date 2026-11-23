@@ -1,0 +1,99 @@
+---
+# On-demand backup of one or more hosts (AAP "Backup now"): runs the same jobs the nightly timers
+# run, through systemd, and waits for them. A job already running (timer or another run) is waited
+# for, not doubled: the scripts share a lock.
+#   ansible-playbook playbooks/backup-now.yml -i inventory.yml -e pbs_target=fedora \
+#     [-e pbs_backup_what=files|vms|both] [-e '{"pbs_backup_vms": ["vtm01"]}']
+# Survey answers: pbs_target (host names; several = several hosts), pbs_backup_what,
+# pbs_backup_vms (multi-select; empty = every VM the host backs up nightly).
+- name: Backup now
+  hosts: "{{ (pbs_target | default('none')) if pbs_target | default('none') is string else pbs_target | join(',') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - backup_defaults
+  vars:
+    pbs_what: "{{ pbs_backup_what | default('both') }}"
+    # A survey multi-select arrives as a list or as newline-separated text; -e may give a CSV.
+    pbs_vms_req: >-
+      {{ (pbs_backup_vms if pbs_backup_vms is not string else pbs_backup_vms | replace(',', ' ') | split())
+         | map('trim') | select | list if pbs_backup_vms | default('') | length > 0 else [] }}
+  tasks:
+    - name: Facts
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/ondemand_facts.yml"
+
+    - name: Inputs
+      ansible.builtin.assert:
+        that:
+          - pbs_what in ['files', 'vms', 'both']
+          - pbs_vms_req | reject('match', '^[A-Za-z0-9._-]+$') | list | length == 0
+        fail_msg: "pbs_backup_what is files, vms or both; VM names are letters, digits and . _ -"
+        quiet: true
+
+    - name: What runs here
+      ansible.builtin.set_fact:
+        pbs_do_files: "{{ pbs_what in ['files', 'both'] and pbs_f.host_backup | bool }}"
+        pbs_do_vms: "{{ pbs_what in ['vms', 'both'] and pbs_f.vm_backup | bool }}"
+        pbs_vms: "{{ pbs_vms_req | intersect(pbs_f.vm_domains) if pbs_vms_req | length > 0 else [] }}"
+
+    - name: Requested VMs this host doesn't back up
+      ansible.builtin.debug:
+        msg: "Skipped on {{ inventory_hostname }}: {{ pbs_vms_req | difference(pbs_f.vm_domains) }} (backs up {{ pbs_f.vm_domains }})"
+      when: pbs_do_vms and pbs_vms_req | difference(pbs_f.vm_domains) | length > 0
+
+    - name: Nothing to do here
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ pbs_what }} requested; this host has file backups
+          {{ 'on' if pbs_f.host_backup else 'off' }}, VM backups {{ 'on' if pbs_f.vm_backup else 'off' }}.
+      when: not pbs_do_files and not pbs_do_vms
+
+    - name: File backup (waits for it)
+      ansible.builtin.systemd_service:
+        name: pbs-backup-host.service
+        state: started
+      when: pbs_do_files
+      async: "{{ pbs_backup_timeout | default(14400) }}"
+      poll: 30
+
+    - name: None of the requested VMs is backed up here
+      ansible.builtin.set_fact:
+        pbs_do_vms: false
+      when: pbs_do_vms and pbs_vms_req | length > 0 and pbs_vms | length == 0
+
+    - name: VM backups, every configured VM (waits for them)
+      ansible.builtin.systemd_service:
+        name: pbs-backup-vm.service
+        state: started
+      when: pbs_do_vms and pbs_vms_req | length == 0
+      async: "{{ pbs_backup_timeout | default(14400) }}"
+      poll: 30
+
+    # Same settings as pbs-backup-vm.service, in a transient unit (its log is in the journal).
+    - name: VM backups, {{ pbs_vms | join(', ') }}
+      ansible.builtin.command:
+        argv: "{{ ['systemd-run', '--wait', '--collect', '--quiet', '--unit', 'pbs-backup-vm-ondemand',
+                   '--property=Nice=10', '--property=IOSchedulingClass=idle',
+                   '--property=After=libvirtd.service virtqemud.service',
+                   pbs_f.lib_dir ~ '/pbs-backup-vm'] + pbs_vms }}"
+      when: pbs_do_vms and pbs_vms | length > 0
+      async: "{{ pbs_backup_timeout | default(14400) }}"
+      poll: 30
+      changed_when: true
+
+    - name: Job results (exit code 0 = ok)
+      ansible.builtin.shell: |
+        set -o pipefail
+        cat {{ pbs_client_textfile_dir }}/pbs_backup_host.prom \
+            {{ pbs_client_textfile_dir }}/pbs_backup_vm.prom 2>/dev/null \
+          | awk '/^pbs_backup_last_exit_code/ {print}' || true
+      args:
+        executable: /bin/bash
+      register: pbs_bn_rc
+      changed_when: false
+      when: pbs_do_files or pbs_do_vms
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: "{{ pbs_bn_rc.stdout_lines | default([]) }}"
+      when: pbs_do_files or pbs_do_vms

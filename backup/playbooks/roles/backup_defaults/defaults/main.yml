@@ -64,6 +64,7 @@ pbs_verify_schedule: "05:30"
 pbs_verify_outdated_days: 30               # re-verify a snapshot this often
 pbs_client_user: backup@pbs                # owner of every client token (DatastoreBackup on the store)
 pbs_monitor_user: monitor@pbs              # read-only (Audit) user for the exporter
+pbs_restore_user: restore@pbs              # read-only (DatastoreReader) restore tokens, one per host
 
 # =====================================================================================
 # Offsite: S3-backed datastore (Backblaze B2 by default), fed by a local sync job
@@ -129,6 +130,10 @@ pbs_change_detection: metadata             # metadata = skip unchanged files (sp
 # Pre-backup database dumps (containers on the host), included as their own archive
 pbs_pg_dumps: []                           # [{container: postgres, user: postgres}]
 pbs_dump_dir: /var/lib/pbs-backup/dumps
+
+# Stores the restore tokens can read (restore-files.yml / restore-vm.yml choose one per run)
+pbs_restore_stores: "{{ [pbs_datastore] + ([pbs_offsite_store] if pbs_offsite_enabled | bool else []) }}"
+pbs_restore_staging_dir: /var/tmp/pbs-restore   # file restores land here (in place only on request)
 
 # Weekly restore test of the newest /etc archive (metric kind="restore")
 pbs_restore_test_enabled: true

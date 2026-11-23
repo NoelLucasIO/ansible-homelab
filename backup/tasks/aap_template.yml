@@ -19,6 +19,7 @@
       playbook: "{{ ab_t.playbook }}"
       become_enabled: false
       ask_variables_on_launch: true
+      survey_enabled: "{{ ab_t.survey is defined }}"
       timeout: 14400
   register: ab_jt
   changed_when: true
@@ -43,3 +44,15 @@
   loop: "{{ ab_c.results | selectattr('json.count', 'gt', 0) | list }}"
   loop_control: { label: "{{ item.item }}" }
   changed_when: false
+
+- name: Survey for {{ ab_t.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ ab_jt.json.id }}/survey_spec/"
+    method: POST
+    body:
+      name: "{{ ab_t.name }}"
+      description: "{{ ab_t.description }}"
+      spec: "{{ ab_t.survey }}"
+    status_code: [200, 201, 204]
+  when: ab_t.survey is defined
+  changed_when: true

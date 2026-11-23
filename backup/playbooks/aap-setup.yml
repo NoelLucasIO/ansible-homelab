@@ -4,6 +4,9 @@
 #     pbs_root_password is there; optional fields are injected only when set)
 #   * group "pbs_clients" in the inventory, with aap_pbs_clients as members
 #   * job templates "PBS deploy" and "Backup clients", with the machine, NIOS/NPM and PBS credentials
+#   * job templates "Backup now", "Restore files" and "Restore VM" with surveys (machine credential
+#     only: they use the token and key already on the host). Survey choices: aap_pbs_clients,
+#     aap_pbs_hypervisors, aap_pbs_backup_ids, aap_pbs_archives, aap_pbs_vms (site-vars).
 #
 #   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @../site-vars.yml \
 #     -e @playbooks/group_vars/all/vault.yml --ask-vault-pass
@@ -21,6 +24,11 @@
     aap_nios_credential: ipam-vm secrets          # nios_api_password, npm_identity, npm_secret
     aap_pbs_credential: homelab-pbs
     aap_pbs_clients: [fedora.example.com]         # inventory host names
+    aap_pbs_hypervisors: "{{ aap_pbs_clients[:1] }}"   # hosts with VM backups (Restore VM targets)
+    aap_pbs_backup_ids: [fedora]                  # backup ids in PBS (short hostnames, as `hostname -s`)
+    aap_pbs_archives: [etc, root, home]           # archive names across the clients
+    aap_pbs_vms: []                               # backed-up domains
+    aap_pbs_stores: "{{ [pbs_datastore] + ([pbs_offsite_store] if pbs_offsite_enabled | bool else []) }}"
     aap_templates:
       - name: PBS deploy
         playbook: backup/playbooks/pbs-deploy.yml
@@ -30,6 +38,57 @@
         playbook: backup/playbooks/clients.yml
         description: proxmox-backup-client, tokens, encryption key and nightly timers on the pbs_clients hosts
         credentials: ["{{ aap_machine_credential }}", "{{ aap_pbs_credential }}"]
+      - name: Backup now
+        playbook: backup/playbooks/backup-now.yml
+        description: Run the backup jobs now on the chosen hosts (files, VMs, or both) and wait for them
+        credentials: ["{{ aap_machine_credential }}"]
+        survey:
+          - {question_name: Hosts, variable: pbs_target, type: multiselect, required: true,
+             choices: "{{ aap_pbs_clients }}", default: "{{ aap_pbs_clients[0] }}"}
+          - {question_name: What, variable: pbs_backup_what, type: multiplechoice, required: true,
+             choices: [both, files, vms], default: both}
+          - {question_name: VMs (empty = all the host backs up), variable: pbs_backup_vms, type: multiselect,
+             required: false, choices: "{{ aap_pbs_vms if aap_pbs_vms | length > 0 else ['-'] }}", default: ""}
+      - name: Restore files
+        playbook: backup/playbooks/restore-files.yml
+        description: Restore files from a host backup (local PBS or B2) into a staging directory, or in place with confirmation
+        credentials: ["{{ aap_machine_credential }}"]
+        survey:
+          - {question_name: Restore onto host, variable: pbs_target, type: multiplechoice, required: true,
+             choices: "{{ aap_pbs_clients }}", default: "{{ aap_pbs_clients[0] }}"}
+          - {question_name: Source, question_description: "store1 = local PBS, b2-offsite = Backblaze B2 (counts as egress)",
+             variable: pbs_restore_source, type: multiplechoice, required: true, choices: "{{ aap_pbs_stores }}", default: "{{ aap_pbs_stores[0] }}"}
+          - {question_name: Whose backup, question_description: Backup id (short hostname); empty = the target host's own,
+             variable: pbs_restore_from, type: multiplechoice, required: false, choices: "{{ aap_pbs_backup_ids }}", default: ""}
+          - {question_name: Snapshot, question_description: "latest, a UTC date (2026-11-22 = newest that day), or a time (2026-11-22T06:15:04Z)",
+             variable: pbs_restore_snapshot, type: text, required: true, default: latest, min: 1, max: 40}
+          - {question_name: Archive, variable: pbs_restore_archive, type: multiplechoice, required: true,
+             choices: "{{ aap_pbs_archives }}", default: "{{ aap_pbs_archives[0] }}"}
+          - {question_name: Paths (optional),
+             question_description: "One per line, inside the archive (/nlucas/.bashrc) or full (/home/nlucas/.bashrc). Empty = whole archive.",
+             variable: pbs_restore_paths, type: textarea, required: false, default: "", min: 0, max: 4096}
+          - {question_name: Mode, question_description: staging = into /var/tmp/pbs-restore, live files untouched; in-place = over the live files,
+             variable: pbs_restore_mode, type: multiplechoice, required: true, choices: [staging, in-place], default: staging}
+          - {question_name: Confirm in-place, question_description: "In place only: type OVERWRITE <short host name>, e.g. OVERWRITE fedora",
+             variable: pbs_restore_confirm, type: text, required: false, default: "", min: 0, max: 64}
+      - name: Restore VM
+        playbook: backup/playbooks/restore-vm.yml
+        description: Restore a VM from PBS (local or B2) as a new domain beside the original, stopped, new name, no UUID/MAC carried over
+        credentials: ["{{ aap_machine_credential }}"]
+        survey:
+          - {question_name: Hypervisor, variable: pbs_target, type: multiplechoice, required: true,
+             choices: "{{ aap_pbs_hypervisors }}", default: "{{ aap_pbs_hypervisors[0] }}"}
+          - {question_name: Source, question_description: "store1 = local PBS, b2-offsite = Backblaze B2 (counts as egress)",
+             variable: pbs_restore_source, type: multiplechoice, required: true, choices: "{{ aap_pbs_stores }}", default: "{{ aap_pbs_stores[0] }}"}
+          - {question_name: VM, variable: pbs_restore_domain, type: multiplechoice, required: true,
+             choices: "{{ aap_pbs_vms if aap_pbs_vms | length > 0 else ['-'] }}", default: "{{ (aap_pbs_vms + ['-'])[0] }}"}
+          - {question_name: Snapshot, question_description: "latest, a UTC date (newest that day), or a time (2026-11-23T16:15:08Z)",
+             variable: pbs_restore_snapshot, type: text, required: true, default: latest, min: 1, max: 40}
+          - {question_name: New name (optional), question_description: "Default <VM>-restored-<UTC time>",
+             variable: pbs_restore_name, type: text, required: false, default: "", min: 0, max: 64}
+          - {question_name: Until checkpoint (optional),
+             question_description: "Point in time inside the monthly chain, e.g. virtnbdbackup.3; empty = the snapshot's newest",
+             variable: pbs_restore_until, type: text, required: false, default: "", min: 0, max: 64}
   module_defaults:
     ansible.builtin.uri:
       headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"

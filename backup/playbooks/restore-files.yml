@@ -1,0 +1,153 @@
+---
+# Restore files from a host backup (AAP "Restore files"), from the local store or the offsite (B2)
+# store, using the host's read-only restore token and the shared encryption key.
+# Default: into a staging directory, never over live files. In place only with pbs_restore_mode=in-place
+# AND pbs_restore_confirm="OVERWRITE <target short name>"; files it replaces are kept in the staging
+# directory (.replaced/), and nothing is deleted.
+#   ansible-playbook playbooks/restore-files.yml -i inventory.yml -e pbs_target=fedora \
+#     -e pbs_restore_archive=etc [-e pbs_restore_source=b2-offsite] [-e pbs_restore_from=p620AI] \
+#     [-e pbs_restore_snapshot=2026-11-22] [-e 'pbs_restore_paths=/etc/fstab']
+# Survey answers:
+#   pbs_target            host to restore onto (one)
+#   pbs_restore_source    store1 (local PBS) | b2-offsite (Backblaze B2)
+#   pbs_restore_from      whose backup (backup id = short hostname); empty = the target's own
+#   pbs_restore_snapshot  latest | a UTC date (2026-11-22, newest that day) | a time (2026-11-22T06:15:04Z)
+#   pbs_restore_archive   etc, root, home, appdata, 990, dumps, ...
+#   pbs_restore_paths     optional, one per line (a list also works): paths inside the archive (/nlucas/.bashrc) or full
+#                         paths (/home/nlucas/.bashrc); a directory brings its contents. Empty = whole archive.
+#   pbs_restore_mode      staging | in-place
+#   pbs_restore_confirm   for in-place: OVERWRITE <target short name>
+- name: Restore files
+  hosts: "{{ (pbs_target | default('none')) if pbs_target | default('none') is string else pbs_target | join(',') }}"
+  become: true
+  gather_facts: false
+  serial: 1
+  roles:
+    - backup_defaults
+  vars:
+    pbs_store: "{{ pbs_restore_source | default(pbs_datastore) }}"
+    pbs_mode: "{{ pbs_restore_mode | default('staging') }}"
+    pbs_archive: "{{ pbs_restore_archive | default('') | string | trim }}"
+    pbs_paths_in: >-
+      {{ ((pbs_restore_paths if pbs_restore_paths is not string else pbs_restore_paths.splitlines())
+          | map('trim') | select | list) if pbs_restore_paths | default('') | length > 0 else [] }}
+  tasks:
+    - name: Facts
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/ondemand_facts.yml"
+
+    - name: Whose backup
+      ansible.builtin.set_fact:
+        pbs_from: "{{ pbs_restore_from | default('', true) | string | trim or pbs_f.backup_id }}"
+
+    - name: Inputs
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - pbs_store in pbs_f.stores
+          - pbs_from is match('^[A-Za-z0-9._-]+$')
+          - pbs_archive is match('^[A-Za-z0-9._-]+$')
+          - pbs_mode in ['staging', 'in-place']
+          - pbs_paths_in | reject('match', '^[^\x00]+$') | list | length == 0
+          - pbs_paths_in | select('search', '(^|/)[.][.](/|$)') | list | length == 0
+        fail_msg: >-
+          One target host; source one of {{ pbs_f.stores }}; backup id and archive are names
+          (letters, digits, . _ -); mode staging or in-place; no '..' in paths.
+        quiet: true
+
+    - name: In place needs the typed confirmation, and the host's own backup
+      ansible.builtin.assert:
+        that:
+          - pbs_restore_confirm | default('') | trim == 'OVERWRITE ' ~ inventory_hostname_short
+          - pbs_from | lower == pbs_f.backup_id | lower
+          - pbs_archive in pbs_f.archives
+        fail_msg: >-
+          In-place restore overwrites live files: type exactly "OVERWRITE {{ inventory_hostname_short }}"
+          in pbs_restore_confirm. It only restores this host's own archives ({{ pbs_f.archives.keys() | list }});
+          for another host's backup use staging.
+        quiet: true
+      when: pbs_mode == 'in-place'
+
+    - name: Snapshot
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/restore_snapshot.yml"
+      vars:
+        pbs_rs_ns: hosts
+        pbs_rs_group: "host/{{ pbs_from }}"
+
+    - name: Archive is in that snapshot
+      ansible.builtin.assert:
+        that: pbs_snap_files | select('match', '^' ~ (pbs_archive | regex_escape) ~ '[.](m?pxar|ppxar)[.]didx$') | list | length > 0
+        fail_msg: >-
+          {{ pbs_snap }} has no archive {{ pbs_archive }}; it has
+          {{ pbs_snap_files | select('search', 'pxar') | map('regex_replace', '[.][mp]?pxar[.]didx$', '') | unique | list }}
+        quiet: true
+
+    # Paths may be given inside the archive (/nlucas/.bashrc) or as full paths (/home/nlucas/.bashrc):
+    # strip the archive's own mount path when it's this host's archive.
+    - name: Patterns inside the archive
+      ansible.builtin.set_fact:
+        pbs_patterns: >-
+          {%- set base = (pbs_f.archives[pbs_archive] if pbs_from | lower == pbs_f.backup_id | lower
+                          and pbs_archive in pbs_f.archives else '') | regex_replace('/+$', '') -%}
+          {%- set out = [] -%}
+          {%- for p in pbs_paths_in -%}
+          {%- set q = p[base | length:] if base | length > 0 and (p == base or p.startswith(base ~ '/')) else p -%}
+          {%- set q = ('/' ~ q.lstrip('/')) | regex_replace('/+$', '') -%}
+          {%- set _ = out.append(q if q | length > 0 else '/') -%}
+          {%- endfor -%}
+          {{ out | reject('equalto', '/') | list }}
+        pbs_dest: >-
+          {{ pbs_restore_staging | default(pbs_restore_staging_dir) }}/{{ pbs_from }}-{{ pbs_archive }}-{{
+             pbs_snap.split('/')[-1] | replace(':', '') }}-{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}
+
+    - name: Staging directory
+      ansible.builtin.file:
+        path: "{{ pbs_dest | dirname }}"
+        state: directory
+        mode: "0700"
+
+    - name: Restore {{ pbs_archive ~ ' from ' ~ pbs_store ~ ':' ~ pbs_snap }}
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ pbs_f.conf_dir }}/restore.env; set +a
+        export PBS_REPOSITORY="$PBS_RESTORE_AUTH@$PBS_RESTORE_SERVER:{{ pbs_store }}"
+        {{ pbs_f.client_bin }} restore --ns hosts {{ pbs_snap | quote }} {{ (pbs_archive ~ '.pxar') | quote }} {{ pbs_dest | quote }} \
+          --keyfile {{ pbs_f.conf_dir }}/encryption-key.json{% for p in pbs_patterns %} --pattern {{ p | quote }}{% endfor %}
+
+        echo "files: $(find {{ pbs_dest | quote }} -xdev \( -type f -o -type l \) | wc -l)  size: $(du -sh {{ pbs_dest | quote }} | cut -f1)"
+      args:
+        executable: /bin/bash
+      register: pbs_rf
+      changed_when: true
+      async: "{{ pbs_restore_timeout | default(14400) }}"
+      poll: 15
+
+    - name: Nothing matched
+      ansible.builtin.fail:
+        msg: "No files in {{ pbs_snap }} {{ pbs_archive }} matched {{ pbs_patterns }} (paths are inside the archive; see the archive list in the PBS UI)."
+      when: "pbs_rf.stdout is search('files: 0 ')"
+
+    # --- In place: copy the restored files over the live ones; replaced files go to .replaced/ -----
+    - name: Copy into place ({{ pbs_f.archives[pbs_archive] | default('') }})
+      ansible.builtin.command:
+        argv:
+          - rsync
+          - -aHAX
+          - --itemize-changes
+          - --omit-dir-times        # leave the live directories' times alone
+          - --backup
+          - --backup-dir={{ pbs_dest }}.replaced
+          - "{{ pbs_dest }}/"
+          - "{{ pbs_f.archives[pbs_archive] | regex_replace('/+$', '') }}/"
+      register: pbs_rsync
+      changed_when: pbs_rsync.stdout | length > 0
+      when: pbs_mode == 'in-place'
+
+    - name: Result
+      ansible.builtin.debug:
+        msg: >-
+          {{ ['Restored ' ~ pbs_archive ~ ' of ' ~ pbs_from ~ ' (' ~ pbs_snap ~ ', ' ~ pbs_store ~ ')'
+              ~ ((' paths ' ~ pbs_patterns | join(' ')) if pbs_patterns | length > 0 else ' (whole archive)'),
+              'Staging: ' ~ pbs_dest ~ '   ' ~ pbs_rf.stdout_lines[-1]]
+             + (['In place: ' ~ (pbs_rsync.stdout_lines | length) ~ ' entries updated in ' ~ pbs_f.archives[pbs_archive]
+                 ~ '; files it replaced are in ' ~ pbs_dest ~ '.replaced'] if pbs_mode == 'in-place' else
+                ['Live files untouched. Copy what you need from the staging directory, then delete it.']) }}

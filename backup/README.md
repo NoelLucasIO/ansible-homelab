@@ -112,19 +112,42 @@ textfile collector; `clients.yml` adds the collector to node_exporter with a dro
 missing. The job logs are in the journal (`journalctl -u pbs-backup-host -u pbs-backup-vm`),
 which Alloy already ships to Loki; the PBS VM's syslog goes to Alloy at first boot.
 
-## Restores
+## Restores and on-demand backups
 
-* **Files:** in the PBS UI (Datastore > Content > file browser; it needs the key: upload the key
-  file in the browser), or on any client:
+Three AAP job templates with surveys (made by `aap-setup.yml`; machine credential only, since they
+use the token and key already on each host). From the CLI, pass the same variables with `-e`.
+
+| Template | Playbook | Survey |
+|---|---|---|
+| **Backup now** | `backup-now.yml` | hosts; files / VMs / both; VMs (empty = all the host backs up). Waits for the jobs; shares a lock with the nightly timers, so it never doubles a run. |
+| **Restore files** | `restore-files.yml` | target host; source `store1` (local) or `b2-offsite` (B2); whose backup (empty = the target's own); snapshot `latest`, a UTC date (newest that day) or a time; archive; optional paths, one per line, inside the archive or as full paths (a directory brings its contents); mode; confirmation. |
+| **Restore VM** | `restore-vm.yml` | hypervisor; source; VM; snapshot; optional new name, optional checkpoint (`--until`). |
+
+* **Files** land in `/var/tmp/pbs-restore/<id>-<archive>-<snapshot>-<now>/`; live files are not
+  touched. **In place** needs mode `in-place` *and* the confirmation `OVERWRITE <short host name>`, and
+  only takes the host's own archives: it restores to staging first, then copies over the live path
+  (rsync, nothing deleted, directory times left alone); every file it replaces is kept in
+  `<staging>.replaced/`.
+* **VMs** come back as a **new** domain beside the original (`<VM>-restored-<UTC time>` by default)
+  in `<pbs_vm_backup_dir>/restore/<name>/`: new name, no UUID or MAC carried over, **network links
+  down**, defined but not started and not autostarted. Safe to start next to the original; put it on
+  the LAN with `virsh domif-setlink <name> <mac> up` only while the original is off (same guest IP).
+  qemu gets traverse-only ACLs (`u:qemu:x`) on the path to the disks; the decrypted chain is in a
+  root-only work directory and removed at the end; disks are 0600.
+* **Tokens:** restores use a separate read-only token per host (`restore@pbs!<host>`, DatastoreReader
+  on `store1` and `b2-offsite`, in `/etc/pbs-backup/restore.env`), so a host can restore any host's
+  backups from either store; the nightly backup token still sees only its own groups. Restores from
+  B2 count as egress (free up to 3x what's stored).
+* **Facts:** `clients.yml` writes `/etc/ansible/facts.d/pbs_backup.fact` (archives and their paths,
+  VM list, directories); these playbooks read it, so they need no inventory host vars (the AAP
+  inventory doesn't carry them). Rerun `clients.yml` after changing a host's backup settings.
+* By hand, on any client:
   ```bash
-  set -a; . /etc/pbs-backup/client.env; set +a
+  set -a; . /etc/pbs-backup/restore.env; set +a
+  export PBS_REPOSITORY="$PBS_RESTORE_AUTH@$PBS_RESTORE_SERVER:store1"   # or :b2-offsite
   proxmox-backup-client catalog shell --ns hosts host/fedora etc.pxar --keyfile /etc/pbs-backup/encryption-key.json
-  proxmox-backup-client restore --ns hosts host/fedora etc.pxar /var/tmp/etc --keyfile /etc/pbs-backup/encryption-key.json
   ```
-  A host's token sees only its own groups; restore another host's files with root@pam in the UI.
-* **VMs:** `restore-vm.yml -e pbs_restore_domain=<name>` restores the newest chain (or
-  `-e pbs_restore_snapshot=<time>`), rebuilds the disks and prints where they are. The local
-  chains in `pbs_vm_backup_dir` (current and previous month) restore faster still:
+  The local chains in `pbs_vm_backup_dir` (current and previous month) restore faster still:
   `virtnbdrestore -i <dir>/<domain>/<YYYY-MM> -o <out>`.
 * **PBS itself lost:** a new VM from `pbs-deploy.yml` with the datastore disk reattached reuses it
   (the play mounts nothing it didn't make; see the error message it prints). From B2 only: create
