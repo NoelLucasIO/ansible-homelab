@@ -214,7 +214,7 @@
           ansible.builtin.find:
             paths: "{{ hcp_prometheus_targets_dir }}"
             patterns: "{{ hcp_cluster }}-*.yml"
-            contains: "{{ hcp_fe_ip | regex_escape }}:{{ hcp_node_exporter_port }}"
+            contains: ".*{{ hcp_fe_ip | regex_escape }}:{{ hcp_node_exporter_port }}\\b"
           register: hcp_sd_old
 
         - name: Remove them
