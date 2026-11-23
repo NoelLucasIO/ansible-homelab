@@ -137,7 +137,7 @@
       ansible.builtin.find:
         paths: "{{ hcp_prometheus_targets_dir }}"
         patterns: "{{ hcp_cluster }}-*.yml"
-        contains: "Managed by hcp-vm"
+        contains: ".*Managed by hcp-vm"   # matched from the start of each line
       register: hcp_prom_targets
       delegate_to: "{{ hcp_prometheus_host }}"
       when: hcp_prometheus_host | length > 0 and hcp_prometheus_targets_dir | length > 0
