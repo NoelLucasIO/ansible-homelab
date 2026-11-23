@@ -4,11 +4,13 @@
 #     -e hcp_backend_ip=198.51.100.101 -e hcp_tenant_name=lab -e hcp_tenant_quota=100 \
 #     -e hcp_tenant_quota_unit=GB -e hcp_security_password=... -e hcp_tenant_admin_password=...
 # The tenant is made through MAPI as the system 'security' account (needs MAPI on, see
-# first_login.yml): MAPI is the documented way to say "namespace quota: none". Its first user
-# (hcp_tenant_admin_user) gets the administrator and security roles.
+# first_login.yml): MAPI is the documented way to say "namespace quota: none". HCP gives its
+# first user (hcp_tenant_admin_user) only the Security role; the play then sets that user's
+# roles to hcp_tenant_admin_roles (Monitor, Administrator, Security, Compliance by default).
 # Namespace defaults are set with HCP's `admin jvm namespaceDefaults` over the back-end:
 # protocol optimization (cloud protocols only) and directory usage (balanced).
-# Rerun-safe: an existing tenant keeps its admin user and password; only quotas are updated.
+# Rerun-safe: an existing tenant keeps its admin user's password; quotas and roles are brought
+# in line.
 - name: HCP initial tenant
   hosts: "{{ hcp_kvm_host | default('fedora') }}"
   become: true
@@ -18,9 +20,19 @@
   vars:
     hcp_quota_gb: "{{ hcp_tenant_quota | float * (1024 if hcp_tenant_quota_unit | upper == 'TB' else 1) }}"
   tasks:
+    # Roles may come as a list, a comma-separated string, or an AAP multiselect (newlines).
+    - name: Normalise the tenant admin roles
+      ansible.builtin.set_fact:
+        hcp_t_roles: >-
+          {{ (hcp_tenant_admin_roles if hcp_tenant_admin_roles is not string
+              else hcp_tenant_admin_roles | regex_replace('\n', ',') | split(','))
+             | map('trim') | map('upper') | reject('equalto', '') | unique | sort }}
+
     - name: Check inputs
       ansible.builtin.assert:
         that:
+          - hcp_t_roles | length > 0
+          - hcp_t_roles | difference(hcp_tenant_role_choices) | length == 0
           - hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
           - hcp_backend_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
           - hcp_root_key_file is defined
@@ -36,7 +48,8 @@
         fail_msg: >-
           Need hcp_cluster, hcp_backend_ip, the HCP secrets credential, hcp_tenant_name (letters,
           digits, hyphens; up to 63), a quota above 0 in GB or TB, the security account password
-          (for MAPI), and the tenant admin user and password.
+          (for MAPI), the tenant admin user and password, and admin roles from
+          {{ hcp_tenant_role_choices | join(', ') }} (SYSTEM is the console's Administrator).
       no_log: true
 
     - name: Tenant over MAPI, namespace defaults over the back-end
@@ -121,6 +134,40 @@
           changed_when: true
           when: hcp_t.status == 200 and hcp_t_update | length > 0
 
+        # admin jvm prints Python literals; the node's python turns them into JSON.
+        - name: Tenant user accounts
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' userAccount list ' ~ hcp_tenant_name ~ ' | ' ~ hcp_to_json] }}"
+          vars:
+            hcp_to_json: >-
+              python -c 'import sys,ast,json; print(json.dumps(ast.literal_eval(sys.stdin.read())))'
+          register: hcp_t_users
+          until: hcp_t_users.rc == 0
+          retries: 6
+          delay: 10
+          changed_when: false
+
+        - name: Pick the tenant admin user
+          ansible.builtin.set_fact:
+            hcp_t_admin: >-
+              {{ (hcp_t_users.stdout | from_json).values()
+                 | selectattr('name', 'equalto', hcp_tenant_admin_user) | first | default({}) }}
+
+        - name: Tenant admin user found
+          ansible.builtin.assert:
+            that: hcp_t_admin | length > 0
+            fail_msg: >-
+              Tenant '{{ hcp_tenant_name }}' has no user '{{ hcp_tenant_admin_user }}'
+              (it has: {{ (hcp_t_users.stdout | from_json).values() | map(attribute='name') | join(', ') }}).
+
+        - name: Tenant admin roles {{ hcp_t_roles | join(',') }}
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' userAccount update ' ~ hcp_tenant_name ~ ' '
+                 ~ hcp_t_admin.userId ~ ' --roles ' ~ hcp_t_roles | join(',')] }}
+          when: (hcp_t_admin.roles.split(',') | map('trim') | reject('equalto', '') | sort | list) != hcp_t_roles
+          changed_when: true
+
         # admin jvm prints the defaults as Python literals; compare before and after.
         - name: Namespace defaults, before
           ansible.builtin.command:
@@ -156,7 +203,8 @@
         msg:
           - >-
             {{ hcp_clname }}: tenant '{{ hcp_tenant_name }}' {{ 'created' if hcp_t.status == 404 else 'present' }},
-            hard quota {{ hcp_quota_str }}, soft {{ hcp_tenant_soft_quota }}%, namespace quota none.
+            hard quota {{ hcp_quota_str }}, soft {{ hcp_tenant_soft_quota }}%, namespace quota none;
+            '{{ hcp_tenant_admin_user }}' has roles {{ hcp_t_roles | join(',') }}.
           - "New namespaces default to protocol optimization {{ hcp_ns_cloud_optimized | upper }}, directory usage {{ hcp_ns_directory_usage | upper }}."
           - "Tenant console: https://{{ hcp_tenant_name }}.{{ hcp_clname }}:8000"
           - "{{ hcp_nsd_after.stdout_lines }}"

@@ -87,7 +87,11 @@ hcp_tenant_description: "Created by hcp-vm"
 hcp_tenant_quota: 100                   # hard quota, in hcp_tenant_quota_unit
 hcp_tenant_quota_unit: GB               # GB | TB
 hcp_tenant_soft_quota: 85               # percent
-hcp_tenant_admin_user: admin            # the tenant's first user (administrator + security)
+hcp_tenant_admin_user: admin            # the tenant's first user; HCP makes it Security only
+# Roles the play gives that user. Names as admin jvm knows them: SYSTEM is the console's
+# Administrator.
+hcp_tenant_role_choices: [MONITOR, SYSTEM, SECURITY, COMPLIANCE]
+hcp_tenant_admin_roles: "{{ hcp_tenant_role_choices }}"   # list or comma-separated string
 # Tenant features its namespaces may use. HCP won't turn either off again once on.
 hcp_tenant_versioning: true             # object versioning (S3 bucket versioning)
 hcp_tenant_compliance: false            # retention compliance (enterprise/compliance mode, holds)

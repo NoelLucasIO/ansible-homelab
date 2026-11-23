@@ -38,6 +38,13 @@
   default: ""
   min: 0
   max: 64
+- question_name: Tenant admin roles
+  question_description: SYSTEM is the console's Administrator. HCP gives the first user only SECURITY.
+  variable: hcp_tenant_admin_roles
+  type: multiselect
+  required: true
+  default: {{ (hcp_tenant_admin_roles if hcp_tenant_admin_roles is string else hcp_tenant_admin_roles | join('\n')) | to_json }}
+  choices: {{ hcp_tenant_role_choices | to_json }}
 {% if not opt %}
 - question_name: Security account password
   question_description: The 'security' account creates the tenant through MAPI
