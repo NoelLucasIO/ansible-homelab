@@ -121,9 +121,12 @@ the release's `sha256sums.txt`) into `/var/cache/hcp-vm` and copies to the node 
 | `node-exporter.service` | runs `firewall.sh` first (`ExecStartPre`), then node_exporter |
 | `node-exporter-firewall.timer` | reapplies the chain every 5 minutes, in case HCP rebuilds its firewall |
 
-Then the node is added to Prometheus's file_sd targets on `hcp_prometheus_host`
-(`/etc/prometheus/targets/nodes/<system>-<node>.yml`, like the other lab VMs); `destroy.yml`
-removes it again. An HCP upgrade or node rebuild may drop the files: rerun the playbook.
+Then the node is added to Prometheus's file_sd targets: a file
+`<system>-<node>.yml` in `hcp_prometheus_targets_dir` on `hcp_prometheus_host`, owned like that
+directory. That is the host path of a directory Prometheus reads with `file_sd_configs`; for a
+containerized Prometheus, the host side of the mount (e.g. `<config dir>/targets/nodes` when the
+config dir is mounted at `/etc/prometheus`). Prometheus picks it up without a reload;
+`destroy.yml` removes it again. An HCP upgrade or node rebuild may drop the files: rerun the playbook.
 
 ## destroy.yml
 
@@ -180,11 +183,13 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
-| HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server to register with |
+| HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server (inventory host) and its file_sd directory |
 | HCP post-install | all of the above once; a blank tenant name or allow list skips that step |
 
-Defaults come from your site values: put `hcp_node_exporter_allow` and `hcp_prometheus_host` (your
-Prometheus server's address and inventory name) and,
+**HCP VM destroy** also asks for the Prometheus server and file_sd directory, to remove the
+node's target. Defaults come from your site values: put `hcp_node_exporter_allow`,
+`hcp_prometheus_host` and `hcp_prometheus_targets_dir` (your Prometheus server's address,
+inventory name and file_sd directory) and,
 if you like, `hcp_tenant_name` in `site-vars.yml` so the workflow opens pre-filled.
 
 Everything else (MTUs, lockdown, MDPL, filesystem, timeouts, installer kernel arguments) is a role

@@ -16,11 +16,3 @@
   default: {{ hcp_node_exporter_version | to_json }}
   min: 5
   max: 16
-- question_name: Prometheus server (inventory host)
-  question_description: Gets a file_sd target for the node in {{ hcp_prometheus_targets_dir }}. Blank = don't register.
-  variable: hcp_prometheus_host
-  type: text
-  required: false
-  default: {{ hcp_prometheus_host | to_json }}
-  min: 0
-  max: 200

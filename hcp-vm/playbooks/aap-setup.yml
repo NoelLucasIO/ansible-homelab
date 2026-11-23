@@ -155,15 +155,16 @@
                                    template_vars={'chain': true}) | from_yaml,
               'node_exporter': lookup('ansible.builtin.template', aap_sv ~ '/survey-node-exporter.yml.j2') | from_yaml,
               'node_exporter_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-node-exporter.yml.j2',
-                                          template_vars={'chain': true}) | from_yaml} }}
+                                          template_vars={'chain': true}) | from_yaml,
+              'prom_target': lookup('ansible.builtin.template', aap_sv ~ '/survey-prometheus-target.yml.j2') | from_yaml} }}
 
     - name: Combined surveys
       ansible.builtin.set_fact:
         aap_s_chain: "{{ dict(aap_chain | map(attribute='variable') | zip(aap_chain)).values() | list }}"
         aap_s_workflow: "{{ dict(aap_wf | map(attribute='variable') | zip(aap_wf)).values() | list }}"
       vars:
-        aap_chain: "{{ aap_s.target + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt }}"
-        aap_wf: "{{ aap_s.deploy + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt }}"
+        aap_chain: "{{ aap_s.target + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt + aap_s.prom_target }}"
+        aap_wf: "{{ aap_s.deploy + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt + aap_s.prom_target }}"
 
     # --- job templates ---------------------------------------------------------------
     - name: Create or update the job templates
@@ -176,7 +177,7 @@
         - name: HCP VM destroy
           playbook: hcp-vm/playbooks/destroy.yml
           description: Remove an hcp-vm VM, its disks, its NIOS objects and its Prometheus targets
-          survey: "{{ aap_s.destroy }}"
+          survey: "{{ aap_s.destroy + aap_s.prom_target }}"
         - name: HCP post-install
           playbook: hcp-vm/playbooks/post_install.yml
           description: All post-install steps in order (first-login, Prometheus, tenant, node_exporter)
@@ -196,7 +197,7 @@
         - name: HCP node_exporter
           playbook: hcp-vm/playbooks/node_exporter.yml
           description: node_exporter on the HCP node, firewalled to the listed scrapers, registered with Prometheus
-          survey: "{{ aap_s.target + aap_s.node_exporter }}"
+          survey: "{{ aap_s.target + aap_s.node_exporter + aap_s.prom_target }}"
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"

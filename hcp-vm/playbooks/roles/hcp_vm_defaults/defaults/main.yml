@@ -109,7 +109,7 @@ hcp_node_exporter_port: 9100
 hcp_node_exporter_dir: /var/node-exporter
 hcp_cache_dir: /var/cache/hcp-vm        # downloads kept on the hypervisor
 hcp_prometheus_host: fedora             # Prometheus server (inventory host); gets a file_sd target per node; "" = skip
-hcp_prometheus_targets_dir: /etc/prometheus/targets/nodes
+hcp_prometheus_targets_dir: /etc/prometheus/targets/nodes   # HOST path read by file_sd_configs (container: host side of the mount)
 
 # --- NIOS (IPAM + delegation) ------------------------------------------------------
 hcp_use_nios: true                      # false = static front-end IP only, no NIOS calls

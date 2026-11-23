@@ -140,7 +140,7 @@
         contains: "Managed by hcp-vm"
       register: hcp_prom_targets
       delegate_to: "{{ hcp_prometheus_host }}"
-      when: hcp_prometheus_host | length > 0
+      when: hcp_prometheus_host | length > 0 and hcp_prometheus_targets_dir | length > 0
 
     - name: Stop scraping it
       ansible.builtin.file:

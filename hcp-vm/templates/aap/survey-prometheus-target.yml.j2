@@ -1,0 +1,18 @@
+# Where node_exporter.yml registers the node with Prometheus (file_sd), and where destroy.yml
+# removes it again.
+- question_name: Prometheus server (inventory host)
+  question_description: Inventory host that runs Prometheus; gets a file_sd target file per HCP node. Blank = don't register.
+  variable: hcp_prometheus_host
+  type: text
+  required: false
+  default: {{ hcp_prometheus_host | to_json }}
+  min: 0
+  max: 200
+- question_name: Prometheus file_sd directory (on that host)
+  question_description: Host path of a directory Prometheus reads with file_sd_configs (as mounted into the container, if it runs in one)
+  variable: hcp_prometheus_targets_dir
+  type: text
+  required: false
+  default: {{ hcp_prometheus_targets_dir | to_json }}
+  min: 0
+  max: 400

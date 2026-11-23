@@ -183,17 +183,37 @@
 
     # --- Prometheus scrapes it (file_sd, like the other lab VMs) --------------------------
     - name: Register with Prometheus on {{ hcp_prometheus_host }}
-      ansible.builtin.copy:
-        dest: "{{ hcp_prometheus_targets_dir }}/{{ hcp_cluster }}-{{ hcp_ne_host.stdout | trim }}.yml"
-        mode: "0644"
-        content: |
-          # Managed by hcp-vm (node_exporter.yml); removed by destroy.yml
-          - targets: ['{{ hcp_fe_ip }}:{{ hcp_node_exporter_port }}']
-            labels:
-              instance: {{ hcp_ne_host.stdout | trim }}.{{ hcp_clname }}
-              hcp_system: {{ hcp_clname }}
+      when: hcp_prometheus_host | length > 0 and hcp_prometheus_targets_dir | length > 0
       delegate_to: "{{ hcp_prometheus_host }}"
-      when: hcp_prometheus_host | length > 0
+      block:
+        - name: Prometheus file_sd directory
+          ansible.builtin.stat:
+            path: "{{ hcp_prometheus_targets_dir }}"
+          register: hcp_sd_dir
+
+        - name: The directory exists
+          ansible.builtin.assert:
+            that: hcp_sd_dir.stat.isdir | default(false)
+            fail_msg: >-
+              {{ hcp_prometheus_targets_dir }} doesn't exist on {{ hcp_prometheus_host }}. Set
+              hcp_prometheus_targets_dir to the host path of a directory Prometheus reads with
+              file_sd_configs (for a container: the host side of the mount). node_exporter itself
+              is installed and running.
+
+        # file_sd: Prometheus picks the file up by itself, no reload. Owned like the directory,
+        # so a rootless Prometheus's own user can manage it too.
+        - name: Target file for the node
+          ansible.builtin.copy:
+            dest: "{{ hcp_prometheus_targets_dir }}/{{ hcp_cluster }}-{{ hcp_ne_host.stdout | trim }}.yml"
+            owner: "{{ hcp_sd_dir.stat.pw_name }}"
+            group: "{{ hcp_sd_dir.stat.gr_name }}"
+            mode: "0644"
+            content: |
+              # Managed by hcp-vm (node_exporter.yml); removed by destroy.yml
+              - targets: ['{{ hcp_fe_ip }}:{{ hcp_node_exporter_port }}']
+                labels:
+                  instance: {{ hcp_ne_host.stdout | trim }}.{{ hcp_clname }}
+                  hcp_system: {{ hcp_clname }}
 
     - name: Done
       ansible.builtin.debug:
