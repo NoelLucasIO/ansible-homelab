@@ -1,8 +1,11 @@
 # hcp-vm
 
 Deploys a single-node HCP (Hitachi Content Platform) VM on KVM from the HCP ISO, unattended,
-from an AAP job template whose survey carries every installer answer and the VM sizing.
-Tested end to end with HCP 10.1.1.14 (ISO `HS222_10.1.1.14.iso`).
+from an AAP job template whose survey carries every installer answer and the VM sizing, then
+does the post-install setup: first login, HCP's Prometheus, an initial tenant, and node_exporter.
+Tested with HCP 10.1.1.14 (ISO `HS222_10.1.1.14.iso`): deploy, destroy and the deploy +
+first-login workflow end to end; Prometheus, tenant and node_exporter as separate jobs on an
+existing system. The full workflow with all four post-install steps is not yet tested.
 
 ## What deploy.yml does
 
@@ -161,6 +164,8 @@ the hcp-vm marker.
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
    AAP 2.5+ gateways may refuse Basic auth on the API ("Authentication credentials were not
    provided"): use `aap_token` (user menu, API tokens, write scope) instead of user/password.
+   Turn on **Update Revision on Launch** for the AAP project, so every job runs the latest
+   commit without a manual sync.
 4. **CLI** instead of AAP: `playbooks/group_vars/all/vault.yml.example` lists the secrets.
    `inventory.yml`, `site-vars.yml`, `vault.yml` and `*.local.yml` are git-ignored.
 
