@@ -134,28 +134,37 @@
         # The restart also reapplies the firewall chain (ExecStartPre).
         - name: Reload and restart
           ansible.builtin.command:
-            argv: >-
-              {{ hcp_bssh + ['systemctl daemon-reload && systemctl enable node-exporter.service node-exporter-firewall.timer
-                 && systemctl restart node-exporter.service && systemctl restart node-exporter-firewall.timer'] }}
+            argv: "{{ hcp_bssh + [hcp_cmd | join(' && ')] }}"
+          vars:
+            hcp_cmd:
+              - systemctl daemon-reload
+              - systemctl enable node-exporter.service node-exporter-firewall.timer
+              - systemctl restart node-exporter.service
+              - systemctl restart node-exporter-firewall.timer
           when: hcp_ne_copy | length > 0
           changed_when: true
 
         - name: Running, enabled, and the firewall jump in place?
           ansible.builtin.command:
-            argv: >-
-              {{ hcp_bssh + ['systemctl is-active node-exporter.service node-exporter-firewall.timer
-                 && systemctl is-enabled node-exporter.service node-exporter-firewall.timer
-                 && iptables -C INPUT -p tcp -m tcp --dport ' ~ hcp_node_exporter_port ~ ' -j node-exporter
-                 && ss -ltn | grep -q ":' ~ hcp_node_exporter_port ~ ' "'] }}
+            argv: "{{ hcp_bssh + [hcp_cmd | join(' && ')] }}"
+          vars:
+            hcp_cmd:
+              - systemctl is-active node-exporter.service node-exporter-firewall.timer
+              - systemctl is-enabled node-exporter.service node-exporter-firewall.timer
+              - iptables -C INPUT -p tcp -m tcp --dport {{ hcp_node_exporter_port }} -j node-exporter
+              - ss -ltn | grep -q ":{{ hcp_node_exporter_port }} "
           register: hcp_ne_state
           changed_when: false
           failed_when: false
 
         - name: Start what isn't running
           ansible.builtin.command:
-            argv: >-
-              {{ hcp_bssh + ['systemctl enable --now node-exporter.service node-exporter-firewall.timer
-                 && systemctl restart node-exporter.service'] }}
+            argv: "{{ hcp_bssh + [hcp_cmd | join(' && ')] }}"
+          vars:
+            hcp_cmd:
+              - systemctl daemon-reload
+              - systemctl enable --now node-exporter.service node-exporter-firewall.timer
+              - systemctl restart node-exporter.service
           when: hcp_ne_state.rc != 0
           changed_when: true
 
