@@ -182,6 +182,14 @@
           ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_close.yml"
 
     # --- Prometheus scrapes it (file_sd, like the other lab VMs) --------------------------
+    # The node's hostname may already be fully qualified (hcp-node-101.<system>).
+    - name: Node names
+      ansible.builtin.set_fact:
+        hcp_ne_fqdn: >-
+          {{ hcp_ne_host.stdout | trim if '.' in hcp_ne_host.stdout
+             else (hcp_ne_host.stdout | trim) ~ '.' ~ hcp_clname }}
+        hcp_sd_file: "{{ hcp_prometheus_targets_dir }}/{{ hcp_cluster }}-{{ (hcp_ne_host.stdout | trim).split('.')[0] }}.yml"
+
     - name: Register with Prometheus on {{ hcp_prometheus_host }}
       when: hcp_prometheus_host | length > 0 and hcp_prometheus_targets_dir | length > 0
       delegate_to: "{{ hcp_prometheus_host }}"
@@ -202,9 +210,24 @@
 
         # file_sd: Prometheus picks the file up by itself, no reload. Owned like the directory,
         # so a rootless Prometheus's own user can manage it too.
+        - name: Earlier target files for this node under another name
+          ansible.builtin.find:
+            paths: "{{ hcp_prometheus_targets_dir }}"
+            patterns: "{{ hcp_cluster }}-*.yml"
+            contains: "{{ hcp_fe_ip | regex_escape }}:{{ hcp_node_exporter_port }}"
+          register: hcp_sd_old
+
+        - name: Remove them
+          ansible.builtin.file:
+            path: "{{ item.path }}"
+            state: absent
+          loop: "{{ hcp_sd_old.files | rejectattr('path', 'equalto', hcp_sd_file) | list }}"
+          loop_control:
+            label: "{{ item.path }}"
+
         - name: Target file for the node
           ansible.builtin.copy:
-            dest: "{{ hcp_prometheus_targets_dir }}/{{ hcp_cluster }}-{{ hcp_ne_host.stdout | trim }}.yml"
+            dest: "{{ hcp_sd_file }}"
             owner: "{{ hcp_sd_dir.stat.pw_name }}"
             group: "{{ hcp_sd_dir.stat.gr_name }}"
             mode: "0644"
@@ -212,7 +235,7 @@
               # Managed by hcp-vm (node_exporter.yml); removed by destroy.yml
               - targets: ['{{ hcp_fe_ip }}:{{ hcp_node_exporter_port }}']
                 labels:
-                  instance: {{ hcp_ne_host.stdout | trim }}.{{ hcp_clname }}
+                  instance: {{ hcp_ne_fqdn }}
                   hcp_system: {{ hcp_clname }}
 
     - name: Done
