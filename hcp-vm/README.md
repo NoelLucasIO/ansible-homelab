@@ -166,7 +166,9 @@ the hcp-vm marker.
    provided"): use `aap_token` (user menu, API tokens, write scope) instead of user/password.
    Turn on **Update Revision on Launch** for the AAP project, so every job runs the latest
    commit without a manual sync.
-4. **CLI** instead of AAP: `playbooks/group_vars/all/vault.yml.example` lists the secrets.
+4. **AAP project**: turn on *Update Revision on Launch* so each job runs the latest commit;
+   without it a job keeps using whatever revision the last sync pulled.
+5. **CLI** instead of AAP: `playbooks/group_vars/all/vault.yml.example` lists the secrets.
    `inventory.yml`, `site-vars.yml`, `vault.yml` and `*.local.yml` are git-ignored.
 
 ## Survey (HCP VM deploy)
@@ -222,3 +224,11 @@ default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from
   settings (`admin jvm config get|set cluster <name>`), named in
   `/opt/arc/config/configObjectNames.properties`.
 - HCP 10.1's Python is 3.6: current Ansible can't run modules on the node.
+- MAPI won't create a tenant without `versioningConfigurationEnabled` and
+  `complianceConfigurationEnabled` in the request, and gives the tenant's first user only the
+  Security role. In `admin jvm`, the console's Administrator role is `SYSTEM`.
+- HCP bakes Prometheus's TSDB retention into the server's command line
+  (`/opt/arc/prometheus-server/prometheus.sh`) when it starts the server: change the setting,
+  then turn Prometheus off and on.
+- An HCP node's `hostname` is already fully qualified (`hcp-node-101.<system>`).
+- Ansible's `find` `contains` matches from the start of each line: prefix the pattern with `.*`.
