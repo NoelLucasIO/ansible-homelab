@@ -74,7 +74,9 @@
                   'systemVisibleDescription': hcp_tenant_description,
                   'hardQuota': hcp_quota_str,
                   'softQuota': hcp_tenant_soft_quota | int,
-                  'namespaceQuota': 'None'} }}
+                  'namespaceQuota': 'None',
+                  'versioningConfigurationEnabled': hcp_tenant_versioning | bool,
+                  'complianceConfigurationEnabled': hcp_tenant_compliance | bool} }}
             validate_certs: false
             status_code: [200, 400, 403, 409]
           register: hcp_t_new

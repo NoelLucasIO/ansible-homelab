@@ -94,7 +94,8 @@ on again and checks the command line.
 
 Creates the tenant through MAPI as the security account (MAPI is the documented way to say
 *namespace quota: none*): name, description, hard quota (`hcp_tenant_quota` in GB or TB), soft
-quota (85%), namespace quota none, and its first user (`hcp_tenant_admin_user`, administrator and
+quota (85%), namespace quota none, versioning allowed (`hcp_tenant_versioning`), retention
+compliance not (`hcp_tenant_compliance`; neither can be turned off later), and its first user (`hcp_tenant_admin_user`, administrator and
 security roles). An existing tenant keeps its user and password; only its quotas are brought in
 line. Then its namespace defaults, with `admin jvm namespaceDefaults update`:
 

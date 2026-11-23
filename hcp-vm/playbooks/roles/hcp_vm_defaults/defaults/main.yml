@@ -88,6 +88,9 @@ hcp_tenant_quota: 100                   # hard quota, in hcp_tenant_quota_unit
 hcp_tenant_quota_unit: GB               # GB | TB
 hcp_tenant_soft_quota: 85               # percent
 hcp_tenant_admin_user: admin            # the tenant's first user (administrator + security)
+# Tenant features its namespaces may use. HCP won't turn either off again once on.
+hcp_tenant_versioning: true             # object versioning (S3 bucket versioning)
+hcp_tenant_compliance: false            # retention compliance (enterprise/compliance mode, holds)
 # hcp_tenant_admin_password: survey or vault, never committed
 # Namespace defaults for the tenant. These are the console's "Protocol optimization" and
 # "Directory usage" choices.
