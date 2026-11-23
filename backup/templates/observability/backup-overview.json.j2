@@ -1,0 +1,92 @@
+{% raw %}{
+  "title": "Backups (PBS)",
+  "uid": "backup-overview",
+  "tags": ["backup", "pbs"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "5m",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": {
+    "list": [
+      { "name": "prom", "label": "Prometheus", "type": "datasource", "query": "prometheus" },
+      { "name": "loki", "label": "Loki", "type": "datasource", "query": "loki" }
+    ]
+  },
+  "panels": [
+    { "type": "stat", "title": "PBS", "gridPos": { "x": 0, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "min(pbs_up)", "refId": "A" } ],
+      "fieldConfig": { "defaults": {
+        "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } } } ],
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "Jobs failing", "gridPos": { "x": 3, "y": 0, "w": 3, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "count(pbs_backup_last_exit_code != 0) or vector(0)", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } },
+      "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "Oldest last success", "gridPos": { "x": 6, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "max(time() - pbs_backup_last_success_timestamp_seconds)", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "s",
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 93600 }, { "color": "red", "value": 108000 } ] } } },
+      "options": { "colorMode": "value", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "bargauge", "title": "Datastore used", "gridPos": { "x": 10, "y": 0, "w": 8, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "100 * pbs_used / pbs_size", "legendFormat": "{{datastore}}", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100,
+        "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 75 }, { "color": "red", "value": 85 } ] } } },
+      "options": { "orientation": "horizontal", "displayMode": "gradient", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "stat", "title": "Snapshots", "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "sum by (datastore) (pbs_snapshot_count)", "legendFormat": "{{datastore}}", "refId": "A" } ],
+      "options": { "colorMode": "none", "graphMode": "area", "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"] } } },
+
+    { "type": "table", "title": "Backup jobs", "gridPos": { "x": 0, "y": 4, "w": 24, "h": 9 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [
+        { "expr": "time() - pbs_backup_last_success_timestamp_seconds", "format": "table", "instant": true, "refId": "AGE" },
+        { "expr": "pbs_backup_last_exit_code", "format": "table", "instant": true, "refId": "EXIT" },
+        { "expr": "pbs_backup_duration_seconds", "format": "table", "instant": true, "refId": "DUR" }
+      ],
+      "transformations": [
+        { "id": "merge" },
+        { "id": "organize", "options": {
+          "excludeByName": { "Time": true, "__name__": true, "job": true },
+          "renameByName": { "Value #AGE": "Since last success", "Value #EXIT": "Last exit", "Value #DUR": "Last duration", "kind": "Kind", "target": "Target", "instance": "Host" } } }
+      ],
+      "fieldConfig": { "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Since last success" }, "properties": [ { "id": "unit", "value": "s" },
+            { "id": "custom.cellOptions", "value": { "type": "color-background" } },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 93600 }, { "color": "red", "value": 108000 } ] } } ] },
+          { "matcher": { "id": "byName", "options": "Last exit" }, "properties": [
+            { "id": "custom.cellOptions", "value": { "type": "color-text" } },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 1 } ] } } ] },
+          { "matcher": { "id": "byName", "options": "Last duration" }, "properties": [ { "id": "unit", "value": "s" } ] } ] } },
+
+    { "type": "timeseries", "title": "Job duration", "gridPos": { "x": 0, "y": 13, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "pbs_backup_duration_seconds", "legendFormat": "{{instance}} {{kind}} {{target}}", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "s" } } },
+
+    { "type": "timeseries", "title": "Datastore used", "gridPos": { "x": 12, "y": 13, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "${prom}" },
+      "targets": [ { "expr": "pbs_used", "legendFormat": "{{datastore}}", "refId": "A" } ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } } },
+
+    { "type": "logs", "title": "Backup job logs (journal)", "gridPos": { "x": 0, "y": 21, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [ { "expr": "{unit=~\"pbs-backup-.*\"}", "refId": "A" } ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" } },
+
+    { "type": "logs", "title": "PBS server (syslog)", "gridPos": { "x": 0, "y": 31, "w": 24, "h": 10 },
+      "datasource": { "type": "loki", "uid": "${loki}" },
+      "targets": [ { "expr": "{job=\"linux\", host=~\"{% endraw %}{{ pbs_name }}{% raw %}.*\"} |~ \"(?i)proxmox-backup|datastore|sync|verify|prune|garbage|error\"", "refId": "A" } ],
+      "options": { "showTime": true, "wrapLogMessage": true, "sortOrder": "Descending" } }
+  ]
+}{% endraw %}

@@ -1,0 +1,181 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so inventory variables
+# (AAP inventory included), survey answers and -e all override them.
+# Documentation addresses (RFC 5737) and example.com: real values live in the inventory.
+
+# =====================================================================================
+# Proxmox Backup Server VM (pbs-deploy.yml)
+# =====================================================================================
+pbs_kvm_host: fedora                       # inventory hostname of the hypervisor
+pbs_name: pbs01                            # libvirt name and short hostname
+pbs_domain: example.com
+pbs_iso: /srv/iso/proxmox-backup-server_4.2-1.iso   # vendor ISO, on the hypervisor
+pbs_iso_work_dir: /srv/vm/pbs-iso          # prepared (auto-install) ISO is built here, removed after install
+pbs_disk_dir: /srv/vm                      # OS disk
+pbs_os_disk_gb: 32
+pbs_store_disk_dir: /srv/backup            # datastore disk: put it on the big array
+pbs_store_disk_gb: 4096                    # thin qcow2; grows as chunks land
+pbs_cache_disk_gb: 128                     # local cache for the S3 (offsite) datastore; thin
+pbs_keyring_sha256: ""                     # optional pin for the Proxmox archive keyring
+pbs_vcpus: 4
+pbs_memory_gb: 8
+pbs_bridge: br0
+pbs_os_variant: debian13
+pbs_os_variant_fallbacks: [debian13, debian12, linux2024, linux2022]
+pbs_install_timeout: 1800                  # seconds: ISO boot + unattended install + first boot
+
+# Answer-file values (proxmox-auto-install-assistant, PBS 4.x kebab-case keys)
+pbs_keyboard: en-us
+pbs_country: us
+pbs_timezone: America/New_York
+pbs_mailto: root@example.com
+pbs_filesystem: xfs                        # OS disk filesystem
+# pbs_root_password: secret (AAP credential / vault). Hashed before it goes into the ISO.
+pbs_root_ssh_keys: []                      # public keys for root (the automation key, at least)
+
+# Network
+pbs_ip: ""                                 # blank = next free address from NIOS
+pbs_network: 192.0.2.0/24
+pbs_prefix: 24
+pbs_gateway: 192.0.2.1
+pbs_dns: 192.0.2.1                         # the installer takes one resolver
+
+# Assistant container (prepares the ISO; Fedora has no proxmox-auto-install-assistant package)
+pbs_assistant_image: docker.io/library/debian:trixie
+pbs_apt_base: https://download.proxmox.com/debian
+pbs_keyring_url: https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
+
+# Lifecycle
+pbs_replace: false                         # true = rebuild a pbs-deploy VM of the same name (OS disk only; the datastore disk is kept)
+pbs_owner_comment: "backup: provisioned by AAP"
+
+# =====================================================================================
+# PBS configuration (API, from the controller)
+# =====================================================================================
+pbs_api_port: 8007
+pbs_validate_certs: false                  # self-signed until a lab-CA cert is installed
+pbs_datastore: store1
+pbs_datastore_fs: xfs
+pbs_namespaces: [kvm, hosts]
+pbs_gc_schedule: "sat 03:30"
+pbs_prune_schedule: "04:30"                # a bare time = every day (PBS calendar events)
+pbs_keep: {keep-last: 3, keep-daily: 14, keep-weekly: 8, keep-monthly: 12, keep-yearly: 2}
+pbs_verify_schedule: "05:30"
+pbs_verify_outdated_days: 30               # re-verify a snapshot this often
+pbs_client_user: backup@pbs                # owner of every client token (DatastoreBackup on the store)
+pbs_monitor_user: monitor@pbs              # read-only (Audit) user for the exporter
+
+# =====================================================================================
+# Offsite: S3-backed datastore (Backblaze B2 by default), fed by a local sync job
+# =====================================================================================
+pbs_offsite_enabled: false
+pbs_offsite_store: b2-offsite                  # PBS datastore names need 3+ characters
+pbs_offsite_cache: b2-cache                    # directory mount on vdc for the S3 datastore's local cache
+pbs_offsite_s3_id: backblaze-b2
+pbs_offsite_bucket: ""                     # must already exist; private, "keep only the last version"
+pbs_offsite_region: us-east-005
+pbs_offsite_endpoint: !unsafe "{{bucket}}.s3.{{region}}.backblazeb2.com"   # literal: PBS fills in bucket and region
+pbs_offsite_path_style: false
+pbs_offsite_quirks: [skip-if-none-match-header]   # B2 rejects If-None-Match on PUT
+pbs_offsite_rate_out: 12500KB              # 100 Mbit/s (half the 200 Mbit/s uplink); KB = 1000 bytes
+pbs_offsite_sync_schedule: "06:00"
+pbs_offsite_encrypted_only: true           # only client-encrypted snapshots leave the house
+pbs_offsite_keep: {keep-daily: 7, keep-weekly: 8, keep-monthly: 24, keep-yearly: 3}
+pbs_offsite_prune_schedule: "07:30"
+pbs_offsite_gc_schedule: "sun 08:00"
+pbs_offsite_verify_schedule: "*-*-01 09:00" # monthly (downloads data: counts against free egress)
+pbs_offsite_reuse: false                   # true when the bucket already holds the datastore (rebuild / DR)
+# Secrets: pbs_offsite_access_key (B2 keyID), pbs_offsite_secret_key (B2 applicationKey)
+
+# =====================================================================================
+# Clients (clients.yml): proxmox-backup-client on every host that backs up
+# =====================================================================================
+pbs_client_version: 4.2.8-1                # proxmox-backup-client-static (Debian package, static binary)
+pbs_client_suite: trixie
+pbs_client_bin: /usr/local/bin/proxmox-backup-client
+pbs_client_tool_packages:                  # to verify and unpack the .deb
+  RedHat: [gnupg2, bsdtar, zstd, qrencode]   # qrencode: the client's paperkey needs it
+  Archlinux: [gnupg, libarchive, zstd, qrencode]
+  default: [gnupg, libarchive-tools, zstd, qrencode]
+pbs_server: "{{ pbs_name }}.{{ pbs_domain }}"   # what clients connect to (port pbs_api_port)
+pbs_client_conf_dir: /etc/pbs-backup        # root 0700: token, fingerprint, encryption key
+pbs_client_lib_dir: /usr/local/libexec/pbs-backup
+pbs_client_state_dir: /var/lib/pbs-backup
+pbs_client_textfile_dir: /var/lib/node_exporter/textfile_collector
+pbs_manage_textfile_collector: true        # add --collector.textfile.directory to node_exporter (drop-in)
+pbs_node_exporter_unit: node-exporter.service
+pbs_client_encryption: true                # client-side encryption (AES-256-GCM) with one shared key
+# pbs_client_encryption_key: secret; the key file's JSON. Unset = made on the first client
+# and printed once with its paper key, to be put in the AAP credential.
+
+# File backups: one pxar archive per path; mount points are not crossed.
+pbs_host_backup_enabled: true
+pbs_host_backup_calendar: "*-*-* 01:15:00"
+pbs_host_backup_randomized_delay: 15min
+pbs_host_backup_paths: [{name: etc, path: /etc}, {name: home, path: /home}]
+pbs_host_backup_excludes:                  # gitignore-style, every archive; leading / = that archive's root
+  - "**/.cache"
+  - "**/.local/share/containers"
+  - "**/.local/share/Trash"
+  - "**/.var/app/*/cache"
+  - "**/.local/share/Steam"
+  - "**/node_modules"
+  - "**/__pycache__"
+  - "**/*.qcow2"
+  - "**/*.iso"
+pbs_host_backup_extra_excludes: []         # per host (host_vars)
+pbs_change_detection: metadata             # metadata = skip unchanged files (split archives)
+
+# Pre-backup database dumps (containers on the host), included as their own archive
+pbs_pg_dumps: []                           # [{container: postgres, user: postgres}]
+pbs_dump_dir: /var/lib/pbs-backup/dumps
+
+# Weekly restore test of the newest /etc archive (metric kind="restore")
+pbs_restore_test_enabled: true
+pbs_restore_test_calendar: "Sun *-*-* 10:00:00"
+
+# KVM image backups (virtnbdbackup -> local chain -> PBS)
+pbs_vm_backup_enabled: false               # true on hypervisors (host_vars)
+pbs_vm_backup_calendar: "*-*-* 00:30:00"
+pbs_vm_backup_domains: []                  # names; [] = none. Shut-off domains get a full copy.
+pbs_vm_backup_dir: /srv/backup/vm          # local chains: <dir>/<domain>/<YYYY-MM>/
+pbs_vm_backup_local_months: 2              # chains kept locally (the current one included)
+pbs_vm_backup_compress: true               # lz4 in the chain
+pbs_vm_backup_raw_disks: false             # raw disks have no dirty bitmaps: full copy every run when true
+
+# =====================================================================================
+# Monitoring (on the Prometheus host)
+# =====================================================================================
+pbs_prom_host: fedora
+pbs_prom_owner: root
+pbs_prom_url: http://127.0.0.1:9090
+pbs_prom_rules_dir: /srv/prometheus/config/rules.d
+pbs_prom_scrape_dir: /srv/prometheus/config/scrape.d
+pbs_prom_targets_dir: /srv/prometheus/config/targets/nodes   # node_exporter on the PBS VM
+pbs_prom_targets_path_in_container: /etc/prometheus/targets/nodes
+pbs_exporter_image: ghcr.io/natrontech/pbs-exporter:latest
+pbs_exporter_listen: 127.0.0.1:10019
+pbs_exporter_user: root                    # owner of its rootless quadlet and config dir: set to the Prometheus owner
+pbs_exporter_conf_dir: /srv/pbs-exporter   # env file with the API token (0600)
+pbs_stale_hours: 30                        # nightly jobs: alert when the last success is older
+pbs_restore_stale_days: 9                  # weekly restore test
+pbs_store_full_pct: 85
+pbs_log_target: 192.0.2.45                 # Alloy syslog (RFC 5424 over TCP)
+pbs_log_port: 1516
+
+# =====================================================================================
+# NIOS (IPAM + DNS) and NPM (web UI), same keys as ipam-vm / vtm-vm
+# =====================================================================================
+pbs_use_nios: true
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam
+pbs_nios_view: default
+pbs_nios_candidates: 5
+pbs_npm_proxy: true
+pbs_ui_name: pbs                           # https://pbs.<domain> through NPM, LAN-only
+npm_api: http://192.0.2.45:81/api
+npm_ip: 192.0.2.45
+npm_cert_domain: "*.{{ pbs_domain }}"
+npm_access_list_name: "LAN-only"
+# Secrets: nios_api_password, npm_identity, npm_secret (the ipam-vm credential works)

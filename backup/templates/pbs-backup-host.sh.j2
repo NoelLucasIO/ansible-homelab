@@ -1,0 +1,51 @@
+#!/bin/bash
+# {{ ansible_managed }} (backup/clients)
+# File-level backup of this host to PBS: one pxar archive per path, database dumps first.
+# Namespace "{{ pbs_host_namespace | default('hosts') }}", type host, id = short hostname. Encrypted client-side.
+# shellcheck disable=SC1091
+. {{ pbs_client_lib_dir }}/lib.sh
+start=$(date +%s); rc=0
+DUMPS={{ pbs_dump_dir }}
+
+# --- Database dumps (pg_dumpall in the container, as the container's owner) ---------
+{% if pbs_pg_dumps | length > 0 %}
+install -d -m 0700 "$DUMPS"
+find "$DUMPS" -maxdepth 1 -name '*.sql.zst*' -delete
+{% for d in pbs_pg_dumps %}
+log "pg_dumpall: {{ d.container }}"
+if runuser -u {{ d.owner | default('root') }} -- env XDG_RUNTIME_DIR=/run/user/$(id -u {{ d.owner | default('root') }}) \
+     podman exec {{ d.container }} pg_dumpall -U {{ d.user | default('postgres') }} --clean --if-exists \
+     | zstd -q -T0 -o "$DUMPS/{{ d.container }}.sql.zst.part"; then
+  mv -f "$DUMPS/{{ d.container }}.sql.zst.part" "$DUMPS/{{ d.container }}.sql.zst"
+else
+  log "ERROR: dump of {{ d.container }} failed"; rc=3
+fi
+{% endfor %}
+{% endif %}
+
+# --- Archives -----------------------------------------------------------------------
+args=()
+{% for a in pbs_host_backup_paths %}
+if [ -d "{{ a.path }}" ]; then args+=("{{ a.name }}.pxar:{{ a.path }}"); else log "skip {{ a.path }} (missing)"; fi
+{% endfor %}
+{% if pbs_pg_dumps | length > 0 %}
+args+=("dumps.pxar:$DUMPS")
+{% endif %}
+excl=(
+{% for e in pbs_host_backup_excludes + pbs_host_backup_extra_excludes %}
+  --exclude '{{ e }}'
+{% endfor %}
+)
+
+log "backup ${args[*]}"
+"$PBC" backup "${args[@]}" \
+  --ns {{ pbs_host_namespace | default('hosts') }} --backup-type host --backup-id "$HOST" \
+  --change-detection-mode {{ pbs_change_detection }} --skip-lost-and-found true \
+  "${KEYARGS[@]}" "${excl[@]}"
+brc=$?
+[ "$brc" -ne 0 ] && rc=$brc
+
+end=$(date +%s)
+metric host "$HOST" "$rc" "$start" "$end"
+log "done rc=$rc in $((end - start))s"
+exit "$rc"

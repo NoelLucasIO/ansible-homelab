@@ -1,0 +1,47 @@
+---
+# node_exporter gains the textfile collector (a drop-in restating its ExecStart with one more
+# flag; the unit file itself is untouched), so the jobs' pbs_backup_* metrics are exported.
+# Skipped when the flag is already there. Same logic as opnsense-backup.
+- name: Textfile collector for node_exporter
+  when: pbs_manage_textfile_collector | bool
+  block:
+    - name: Current node_exporter command line
+      ansible.builtin.command: systemctl show -p ExecStart --value {{ pbs_node_exporter_unit }}  # noqa: command-instead-of-module
+      register: pbs_ne_exec
+      changed_when: false
+
+    - name: Its argv
+      ansible.builtin.set_fact:
+        pbs_ne_argv: "{{ ((pbs_ne_exec.stdout | regex_findall('argv\\[\\]=([^;]+);')) + ['']) | first | trim }}"
+
+    - name: Found it
+      ansible.builtin.assert:
+        that: pbs_ne_argv is search('node_exporter')
+        fail_msg: "Couldn't read ExecStart of {{ pbs_node_exporter_unit }}: {{ pbs_ne_exec.stdout }}"
+        quiet: true
+
+    - name: Drop-in directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/{{ pbs_node_exporter_unit }}.d
+        state: directory
+        mode: "0755"
+      when: "'--collector.textfile.directory' not in pbs_ne_argv"
+
+    - name: Drop-in with --collector.textfile.directory
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/{{ pbs_node_exporter_unit }}.d/textfile.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (backup/clients): adds the textfile collector, keeps every other flag.
+          [Service]
+          ExecStart=
+          ExecStart={{ pbs_ne_argv }} --collector.textfile.directory={{ pbs_client_textfile_dir }}
+      when: "'--collector.textfile.directory' not in pbs_ne_argv"
+      register: pbs_ne_dropin
+
+    - name: Restart node_exporter
+      ansible.builtin.systemd_service:
+        name: "{{ pbs_node_exporter_unit }}"
+        state: restarted
+        daemon_reload: true
+      when: pbs_ne_dropin is changed  # noqa: no-handler

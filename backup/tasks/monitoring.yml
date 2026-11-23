@@ -1,0 +1,121 @@
+---
+# On the Prometheus host: pbs-exporter (rootless Quadlet, token from pbs_configure), the PBS VM's
+# node_exporter as a file_sd target, scrape config, alert rules and a Grafana dashboard.
+# Logs need nothing here: the VM forwards syslog to Alloy (first boot), and the client jobs log
+# to the journal that Alloy already reads.
+- name: Owner of the exporter Quadlet
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ pbs_exporter_user }}"
+
+- name: Rootless environment
+  ansible.builtin.set_fact:
+    pbs_exp_home: "{{ ansible_facts.getent_passwd[pbs_exporter_user][4] }}"
+    pbs_exp_env:
+      XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[pbs_exporter_user][1] }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[pbs_exporter_user][1] }}/bus"
+
+- name: Quadlet directory
+  ansible.builtin.file:
+    path: "{{ pbs_exp_home }}/.config/containers/systemd"
+    state: directory
+    owner: "{{ pbs_exporter_user }}"
+    mode: "0755"
+
+- name: Quadlet for pbs-exporter
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/pbs-exporter.container.j2"
+    dest: "{{ pbs_exp_home }}/.config/containers/systemd/pbs-exporter.container"
+    owner: "{{ pbs_exporter_user }}"
+    mode: "0644"
+  register: pbs_exp_unit
+
+- name: Reload the user's systemd (Quadlet generator)
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+    scope: user
+  become: true
+  become_user: "{{ pbs_exporter_user }}"
+  environment: "{{ pbs_exp_env }}"
+  when: pbs_exp_unit is changed  # noqa: no-handler
+
+- name: Exporter running (restarted when its unit or token changed)
+  ansible.builtin.systemd_service:
+    name: pbs-exporter.service
+    scope: user
+    state: "{{ 'restarted' if (pbs_exp_unit is changed or hostvars['localhost'].pbs_exp_env_new is changed) else 'started' }}"
+  become: true
+  become_user: "{{ pbs_exporter_user }}"
+  environment: "{{ pbs_exp_env }}"
+
+- name: Exporter answers and reaches PBS
+  ansible.builtin.uri:
+    url: "http://{{ pbs_exporter_listen }}/metrics"
+    return_content: true
+  register: pbs_exp_metrics
+  until: pbs_exp_metrics.status == 200 and 'pbs_up 1' in pbs_exp_metrics.content
+  retries: 12
+  delay: 5
+
+- name: Prometheus fragments
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: "{{ pbs_prom_owner }}"
+    mode: "0644"
+  loop:
+    - {src: prometheus-scrape.yml.j2, dest: "{{ pbs_prom_scrape_dir }}/backup.yml"}
+    - {src: prometheus-rules.yml.j2, dest: "{{ pbs_prom_rules_dir }}/backup.yml"}
+    - {src: node-target.yml.j2, dest: "{{ pbs_prom_targets_dir }}/{{ pbs_name }}.yml"}
+  loop_control: { label: "{{ item.dest }}" }
+  register: pbs_prom_files
+
+- name: Prometheus config and rules are valid
+  ansible.builtin.command:
+    cmd: podman exec prometheus sh -c 'promtool check config /etc/prometheus/prometheus.yml && promtool check rules /etc/prometheus/rules.d/backup.yml'
+    chdir: /
+  become: true
+  become_user: "{{ pbs_prom_owner }}"
+  environment: "{{ pbs_exp_env if pbs_prom_owner == pbs_exporter_user else {} }}"
+  changed_when: false
+  when: pbs_prom_files is changed and pbs_prom_check | default(true) | bool
+
+- name: Reload Prometheus
+  ansible.builtin.uri:
+    url: "{{ pbs_prom_url }}/-/reload"
+    method: POST
+    status_code: [200]
+  when: pbs_prom_files is changed  # noqa: no-handler
+
+- name: Grafana dashboard
+  when: pbs_grafana_provisioning | default('') | length > 0
+  block:
+    - name: Dashboard directory
+      ansible.builtin.file:
+        path: "{{ pbs_grafana_provisioning }}/dashboards/backup"
+        state: directory
+        owner: "{{ pbs_prom_owner }}"
+        mode: "0755"
+
+    - name: Provider and dashboard
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+        dest: "{{ pbs_grafana_provisioning }}/dashboards/{{ item.dest }}"
+        owner: "{{ pbs_prom_owner }}"
+        mode: "0644"
+      loop:
+        - {src: grafana-dashboards.yaml.j2, dest: backup.yaml}
+        - {src: backup-overview.json.j2, dest: backup/backup-overview.json}
+      loop_control: { label: "{{ item.dest }}" }
+      register: pbs_graf
+
+    # A new provider needs a restart; dashboard edits are picked up every 60 s.
+    - name: Restart Grafana to load the new provider
+      ansible.builtin.systemd_service:
+        name: "{{ pbs_grafana_unit | default('grafana.service') }}"
+        scope: user
+        state: restarted
+      become: true
+      become_user: "{{ pbs_prom_owner }}"
+      environment: "{{ pbs_exp_env if pbs_prom_owner == pbs_exporter_user else {} }}"
+      when: pbs_graf.results[0] is changed  # noqa: no-handler

@@ -1,0 +1,21 @@
+# {{ ansible_managed }} (backup/pbs-deploy)
+[Unit]
+Description=Prometheus exporter for Proxmox Backup Server ({{ pbs_fqdn }})
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=pbs-exporter
+Image={{ pbs_exporter_image }}
+Network=host
+LogDriver=journald
+EnvironmentFile={{ pbs_exporter_conf_dir }}/env
+NoNewPrivileges=true
+ReadOnly=true
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

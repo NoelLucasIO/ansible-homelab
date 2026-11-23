@@ -1,0 +1,63 @@
+# {{ ansible_managed }} (backup/pbs-deploy)
+# Client metrics (pbs_backup_*) come from each host's node_exporter textfile collector,
+# written by the backup jobs themselves; server metrics (pbs_*) from pbs-exporter.
+groups:
+  - name: backup
+    rules:
+      - alert: BackupStale
+        expr: time() - pbs_backup_last_success_timestamp_seconds{kind!="restore"} > {{ pbs_stale_hours | int }} * 3600
+        for: 15m
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}No good {{ $labels.kind }} backup of {{ $labels.target }} on {{ $labels.instance }}{% endraw %} for over {{ pbs_stale_hours }} hours"
+          description: "{% raw %}journalctl -u pbs-backup-{{ $labels.kind }}.service on {{ $labels.instance }}{% endraw %}"
+      - alert: RestoreTestStale
+        expr: time() - pbs_backup_last_success_timestamp_seconds{kind="restore"} > {{ pbs_restore_stale_days | int }} * 86400
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}No passing restore test on {{ $labels.instance }} for over {% endraw %}{{ pbs_restore_stale_days }}{% raw %} days{% endraw %}"
+          description: "{% raw %}journalctl -u pbs-restore-test.service on {{ $labels.instance }}{% endraw %}"
+      - alert: BackupFailed
+        expr: pbs_backup_last_exit_code != 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}Last {{ $labels.kind }} backup of {{ $labels.target }} on {{ $labels.instance }} failed (exit {{ $value }}){% endraw %}"
+      - alert: BackupMetricsMissing
+        expr: absent(pbs_backup_last_success_timestamp_seconds)
+        for: 30h
+        labels: { severity: warning }
+        annotations:
+          summary: "No backup job metrics at all (textfile collector, or no job ever succeeded)"
+      - alert: PBSDown
+        expr: up{job="pbs"} == 0 or pbs_up == 0
+        for: 10m
+        labels: { severity: critical }
+        annotations:
+          summary: "Proxmox Backup Server {{ pbs_fqdn }} is not answering the exporter"
+      - alert: PBSDatastoreFilling
+        expr: 100 * pbs_used / pbs_size > {{ pbs_store_full_pct | int }}
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}PBS datastore {{ $labels.datastore }} is {{ $value | printf \"%.0f\" }}% full{% endraw %}"
+      - alert: PBSVerifyOverdue
+        expr: (time() - pbs_snapshot_vm_last_verify) > 45 * 86400 and pbs_snapshot_vm_last_verify > 0
+        for: 1h
+        labels: { severity: info }
+        annotations:
+          summary: "{% raw %}{{ $labels.vm_id }} in {{ $labels.datastore }}/{{ $labels.namespace }}: newest verify over 45 days old{% endraw %}"
+{% if pbs_offsite_enabled | bool %}
+      - alert: OffsiteBehind
+        expr: |
+          max by (namespace, vm_id) (pbs_snapshot_vm_last_timestamp{datastore="{{ pbs_datastore }}"})
+            - on (namespace, vm_id)
+          max by (namespace, vm_id) (pbs_snapshot_vm_last_timestamp{datastore="{{ pbs_offsite_store }}"})
+            > 2 * 86400
+        for: 2h
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}Offsite copy of {{ $labels.vm_id }} ({{ $labels.namespace }}) is over 2 days behind the local datastore{% endraw %}"
+          description: "Check the sync job {{ pbs_offsite_store }}-sync in the PBS UI (Datastore > {{ pbs_offsite_store }} > Sync Jobs)."
+{% endif %}

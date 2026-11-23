@@ -1,0 +1,53 @@
+---
+# Create or update one PBS config object, only when something differs.
+#   pbs_obj:
+#     path: /config/prune          collection (GET lists, POST creates, PUT <path>/<id> updates)
+#     key: id                      the list item's name field
+#     id: daily                    its value
+#     body: {...}                  full desired config (includes the key)
+#     write_only: [secret-key]     never returned by GET: sent on create only
+#     no_log: false                hide the body (secrets)
+#     defaults: {...}              API defaults: GET leaves out keys that are at their default
+- name: Current {{ pbs_obj.path }}
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}{{ pbs_obj.path }}"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  register: pbs_obj_list
+  no_log: true
+
+- name: Compare, {{ pbs_obj.path ~ '/' ~ pbs_obj.id }}
+  ansible.builtin.set_fact:
+    pbs_obj_cur: "{{ pbs_obj_list.json.data | selectattr(pbs_obj.key, 'equalto', pbs_obj.id) | first | default({}) }}"
+  no_log: true
+
+- name: Desired vs current (only the keys we manage)
+  ansible.builtin.set_fact:
+    pbs_obj_want: >-
+      {{ pbs_obj.body | dict2items | rejectattr('key', 'in', (pbs_obj.write_only | default([])) + [pbs_obj.key]) | items2dict }}
+  no_log: true
+
+- name: Changed?
+  ansible.builtin.set_fact:
+    pbs_obj_changed: >-
+      {{ pbs_obj_cur | length == 0
+         or (pbs_obj.defaults | default({}) | combine(pbs_obj_cur) | dict2items
+             | selectattr('key', 'in', pbs_obj_want.keys() | list) | items2dict) != pbs_obj_want }}
+  no_log: true
+
+- name: Create or update, {{ pbs_obj.path ~ '/' ~ pbs_obj.id }}
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}{{ pbs_obj.path }}{{ ('/' ~ (pbs_obj.id | urlencode)) if pbs_obj_cur | length > 0 else '' }}"
+    method: "{{ 'PUT' if pbs_obj_cur | length > 0 else 'POST' }}"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    body_format: json
+    body: >-
+      {{ pbs_obj.body if pbs_obj_cur | length == 0
+         else (pbs_obj.body | dict2items | rejectattr('key', 'in', pbs_obj.write_only | default([])) | items2dict) }}
+    return_content: true
+  register: pbs_obj_set
+  when: pbs_obj_changed | bool
+  changed_when: true
+  no_log: "{{ pbs_obj.no_log | default(false) }}"

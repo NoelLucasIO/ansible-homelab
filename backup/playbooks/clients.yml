@@ -1,0 +1,221 @@
+---
+# Backup clients: proxmox-backup-client (static build, verified), one API token per host, the
+# shared encryption key, and systemd timers for the jobs. The jobs run on the hosts themselves,
+# so backups keep happening when AAP (itself a VM being backed up) is down.
+#   ansible-playbook playbooks/clients.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass
+#   -e pbs_run_now=true   also start the jobs once and wait for them
+# Hosts: group pbs_clients (pbs_clients_hosts overrides). Per host: pbs_host_backup_paths,
+# pbs_pg_dumps, pbs_vm_backup_enabled + pbs_vm_backup_domains (KVM hosts, Fedora/RHEL).
+- name: PBS API session
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - backup_defaults
+  tasks:
+    - name: PBS address
+      ansible.builtin.set_fact:
+        pbs_addr: "{{ pbs_server }}"
+
+    - name: Log in
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/pbs_login.yml"
+
+    - name: Certificate fingerprint
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/nodes/localhost/certificates/info"
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        return_content: true
+      register: pbs_certs
+
+    - name: Fingerprint
+      ansible.builtin.set_fact:
+        pbs_fingerprint: "{{ (pbs_certs.json.data | selectattr('filename', 'equalto', 'proxy.pem') | first).fingerprint }}"
+
+- name: Backup clients
+  hosts: "{{ pbs_clients_hosts | default('pbs_clients') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - backup_defaults
+  tasks:
+    - name: Facts
+      ansible.builtin.setup:
+        gather_subset: ['!all', '!min', distribution]
+
+    - name: API session from the first play
+      ansible.builtin.set_fact:
+        pbs_api: "{{ hostvars['localhost'].pbs_api }}"
+        pbs_headers: "{{ hostvars['localhost'].pbs_headers }}"
+        pbs_fingerprint: "{{ hostvars['localhost'].pbs_fingerprint }}"
+        pbs_token_name: "{{ inventory_hostname_short | regex_replace('[^A-Za-z0-9._-]', '-') }}"
+      no_log: true
+
+    - name: VM backups only where virtnbdbackup is packaged (Fedora/RHEL)
+      ansible.builtin.assert:
+        that: not pbs_vm_backup_enabled | bool or ansible_facts.os_family == 'RedHat'
+        fail_msg: "{{ inventory_hostname }}: pbs_vm_backup_enabled needs virtnbdbackup (dnf); not packaged for {{ ansible_facts.distribution }}."
+        quiet: true
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: "{{ pbs_client_conf_dir }}", mode: "0700"}
+        - {path: "{{ pbs_client_lib_dir }}", mode: "0755"}
+        - {path: "{{ pbs_client_state_dir }}", mode: "0700"}
+        - {path: "{{ pbs_client_textfile_dir }}", mode: "0755"}
+      loop_control: { label: "{{ item.path }}" }
+
+    - name: Textfile collector for the job metrics
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/textfile_collector.yml"
+
+    - name: Client binary
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/client_install.yml"
+
+    - name: Install virtnbdbackup
+      ansible.builtin.dnf:
+        name: [virtnbdbackup, zstd]
+        state: present
+      register: pbs_vnb_pkg
+      until: pbs_vnb_pkg is succeeded
+      retries: 10
+      delay: 30
+      when: pbs_vm_backup_enabled | bool
+
+    - name: Install qrencode (the client's paperkey needs it)
+      ansible.builtin.package:
+        name: qrencode
+        state: present
+      register: pbs_qr_pkg
+      until: pbs_qr_pkg is succeeded
+      retries: 10
+      delay: 30
+
+    - name: Install zstd for database dumps
+      ansible.builtin.package:
+        name: zstd
+        state: present
+      register: pbs_zstd_pkg
+      until: pbs_zstd_pkg is succeeded
+      retries: 10
+      delay: 30
+      when: pbs_pg_dumps | length > 0
+
+    # --- Encryption key: decided once, on the first host, then the same file everywhere ---
+    - name: Encryption key
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/client_key.yml"
+      run_once: true
+      when: pbs_client_encryption | bool
+
+    - name: Key file
+      ansible.builtin.copy:
+        dest: "{{ pbs_client_conf_dir }}/encryption-key.json"
+        content: "{{ hostvars['localhost'].pbs_client_key_json }}"
+        mode: "0600"
+        backup: true          # a host that had another key keeps it beside the new one
+      when: pbs_client_encryption | bool
+      no_log: true
+
+    - name: API token and client.env
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/client_token.yml"
+
+    # --- Jobs ------------------------------------------------------------------------
+    - name: Job scripts
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/{{ item.src }}"
+        dest: "{{ pbs_client_lib_dir }}/{{ item.dest }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - {src: pbs-backup-lib.sh.j2, dest: lib.sh, mode: "0644"}
+        - {src: pbs-backup-host.sh.j2, dest: pbs-backup-host, mode: "0755"}
+        - {src: pbs-backup-vm.sh.j2, dest: pbs-backup-vm, mode: "0755"}
+        - {src: pbs-restore-test.sh.j2, dest: pbs-restore-test, mode: "0755"}
+      loop_control: { label: "{{ item.dest }}" }
+
+    # Per-archive selection: PBS applies a .pxarexclude file only to the tree it sits in
+    # (gitignore rules: last match wins, "!" re-includes, "/" anchors at that directory).
+    - name: Per-archive .pxarexclude (archives that define one)
+      ansible.builtin.copy:
+        dest: "{{ item.path }}/.pxarexclude"
+        mode: "0644"
+        content: |
+          # Managed by Ansible (backup/clients): what the {{ item.name }} archive of {{ item.path }} contains.
+          {% for line in item.pxarexclude %}
+          {{ line }}
+          {% endfor %}
+      loop: "{{ pbs_host_backup_paths | selectattr('pxarexclude', 'defined') | list }}"
+      loop_control: { label: "{{ item.path }}" }
+
+    - name: Scripts parse
+      ansible.builtin.command: bash -n {{ pbs_client_lib_dir }}/{{ item }}
+      loop: [lib.sh, pbs-backup-host, pbs-backup-vm, pbs-restore-test]
+      changed_when: false
+
+    - name: Systemd units
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/systemd/{{ item }}.j2"
+        dest: /etc/systemd/system/{{ item }}
+        mode: "0644"
+      loop: [pbs-backup-host.service, pbs-backup-host.timer, pbs-backup-vm.service, pbs-backup-vm.timer,
+             pbs-restore-test.service, pbs-restore-test.timer]
+      register: pbs_units
+
+    - name: Reload systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: pbs_units is changed  # noqa: no-handler
+
+    - name: Timers
+      ansible.builtin.systemd_service:
+        name: "{{ item.unit }}"
+        enabled: "{{ item.wanted | bool }}"
+        state: "{{ 'started' if item.wanted | bool else 'stopped' }}"
+      loop:
+        - {unit: pbs-backup-host.timer, wanted: "{{ pbs_host_backup_enabled }}"}
+        - {unit: pbs-backup-vm.timer, wanted: "{{ pbs_vm_backup_enabled and pbs_vm_backup_domains | length > 0 }}"}
+        - {unit: pbs-restore-test.timer, wanted: "{{ pbs_restore_test_enabled }}"}
+      loop_control: { label: "{{ item.unit }}={{ item.wanted }}" }
+
+    - name: Connection works (lists this host's groups)
+      ansible.builtin.shell: |
+        set -a; . {{ pbs_client_conf_dir }}/client.env; set +a
+        {{ pbs_client_bin }} list --ns hosts --output-format json
+      args:
+        executable: /bin/bash
+      register: pbs_list
+      changed_when: false
+
+    # --- Optional first run -------------------------------------------------------------
+    - name: Run the jobs now
+      when: pbs_run_now | default(false) | bool
+      block:
+        - name: Host backup (oneshot, so this waits for it)
+          ansible.builtin.systemd_service:
+            name: pbs-backup-host.service
+            state: started
+          when: pbs_host_backup_enabled | bool
+          async: "{{ pbs_run_now_timeout | default(14400) }}"
+          poll: 30
+
+        - name: VM backups (oneshot, so this waits for them)
+          ansible.builtin.systemd_service:
+            name: pbs-backup-vm.service
+            state: started
+          when: pbs_vm_backup_enabled | bool and pbs_vm_backup_domains | length > 0
+          async: "{{ pbs_run_now_timeout | default(14400) }}"
+          poll: 30
+
+        - name: Metrics written
+          ansible.builtin.slurp:
+            src: "{{ pbs_client_textfile_dir }}/pbs_backup_{{ item }}.prom"
+          loop: [host, vm]
+          register: pbs_prom_out
+          failed_when: false
+
+        - name: Result
+          ansible.builtin.debug:
+            msg: >-
+              {{ pbs_prom_out.results | selectattr('content', 'defined') | map(attribute='content') | map('b64decode') | list }}

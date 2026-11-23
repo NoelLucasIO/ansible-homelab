@@ -1,0 +1,18 @@
+---
+# Wait for a PBS worker task (pbs_upid) and fail on anything but "OK".
+- name: Wait for the PBS task, {{ pbs_upid.split(':')[5] | default(pbs_upid) }}
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/nodes/localhost/tasks/{{ pbs_upid | urlencode }}/status"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  register: pbs_task
+  until: pbs_task.json.data.status == 'stopped'
+  retries: 120
+  delay: 5
+
+- name: Task result
+  ansible.builtin.assert:
+    that: pbs_task.json.data.exitstatus == 'OK'
+    fail_msg: "PBS task {{ pbs_upid }} ended with: {{ pbs_task.json.data.exitstatus }}"
+    quiet: true

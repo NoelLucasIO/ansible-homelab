@@ -1,0 +1,62 @@
+---
+# One client-side encryption key for every host (any host can restore any backup, and the
+# offsite copy is ciphertext only). Source, in order: the credential (pbs_client_encryption_key),
+# the first host that already has one, or a new key made on the first host. The key itself is
+# never printed (job logs keep output): the play shows its fingerprint and how to read it on the
+# host. Runs once, on the first client of the play.
+- name: Key already on {{ inventory_hostname }}?
+  ansible.builtin.slurp:
+    src: "{{ pbs_client_conf_dir }}/encryption-key.json"
+  register: pbs_key_old
+  failed_when: false
+  no_log: true
+
+- name: Make a new key (no key in the credential or on this host)
+  when:
+    - pbs_client_encryption_key | default('') | length == 0
+    - pbs_key_old.content is not defined
+  block:
+    - name: Create key (kdf none, so the file itself is the secret)
+      ansible.builtin.command: "{{ pbs_client_bin }} key create --kdf none {{ pbs_client_conf_dir }}/encryption-key.json"
+      args:
+        creates: "{{ pbs_client_conf_dir }}/encryption-key.json"
+
+    - name: Read it back
+      ansible.builtin.slurp:
+        src: "{{ pbs_client_conf_dir }}/encryption-key.json"
+      register: pbs_key_new
+      no_log: true
+
+    # The key never goes into Ansible output (terminal, AAP job log): only its fingerprint.
+    - name: SAVE THE NEW KEY (it is not printed here)
+      ansible.builtin.debug:
+        msg:
+          - "A new PBS encryption key was made on {{ inventory_hostname }} (fingerprint {{ (pbs_key_new.content | b64decode | from_json).fingerprint }})."
+          - "Without it no backup can be restored, including from B2. On {{ inventory_hostname }}, as root:"
+          - "  cat {{ pbs_client_conf_dir }}/encryption-key.json        -> the vault / AAP credential as pbs_client_encryption_key"
+          - "  {{ pbs_client_bin }} key paperkey {{ pbs_client_conf_dir }}/encryption-key.json --output-format text   -> print, keep offline"
+
+- name: Key on this host (existing or just made)
+  ansible.builtin.set_fact:
+    pbs_key_here: "{{ pbs_key_new.content if pbs_key_new.content is defined else pbs_key_old.content | default('') }}"
+  no_log: true
+
+- name: The key every host gets
+  ansible.builtin.set_fact:
+    pbs_client_key_json: "{{ pbs_client_encryption_key if pbs_client_encryption_key | default('') | length > 0 else (pbs_key_here | b64decode) }}"
+  delegate_to: localhost
+  delegate_facts: true
+  no_log: true
+
+- name: Key in the credential differs from the one on {{ inventory_hostname }}
+  ansible.builtin.assert:
+    that: (pbs_key_here | b64decode | from_json) == (pbs_client_encryption_key | from_json)
+    fail_msg: >-
+      {{ inventory_hostname }} has a different encryption key than the credential. Backups made with it
+      need it to restore: keep a copy of {{ pbs_client_conf_dir }}/encryption-key.json before replacing it,
+      or put that key into the credential.
+    quiet: true
+  when:
+    - pbs_client_encryption_key | default('') | length > 0
+    - pbs_key_here | length > 0
+  no_log: true

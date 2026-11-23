@@ -1,0 +1,45 @@
+---
+# One job template (create or update) and its credentials; a missing credential is reported.
+- name: Job template exists? {{ ab_t.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/?name={{ ab_t.name | urlencode }}"
+  register: ab_jt_q
+
+# become stays off at template level: the plays set become where they need it.
+- name: Create or update {{ ab_t.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ (ab_jt_q.json.results[0].id ~ '/') if ab_jt_q.json.count else '' }}"
+    method: "{{ 'PATCH' if ab_jt_q.json.count else 'POST' }}"
+    body:
+      name: "{{ ab_t.name }}"
+      description: "{{ ab_t.description }}"
+      job_type: run
+      project: "{{ ab_project_id | int }}"
+      inventory: "{{ ab_inv_id | int }}"
+      playbook: "{{ ab_t.playbook }}"
+      become_enabled: false
+      ask_variables_on_launch: true
+      timeout: 14400
+  register: ab_jt
+  changed_when: true
+
+- name: Credential ids for {{ ab_t.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/credentials/?name={{ item | urlencode }}"
+  loop: "{{ ab_t.credentials }}"
+  register: ab_c
+
+- name: Missing credentials
+  ansible.builtin.debug:
+    msg: "No credential named {{ ab_c.results | selectattr('json.count', 'eq', 0) | map(attribute='item') | list }} yet; create it and rerun."
+  when: ab_c.results | selectattr('json.count', 'eq', 0) | list | length > 0
+
+- name: Attach
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ ab_jt.json.id }}/credentials/"
+    method: POST
+    body: {id: "{{ item.json.results[0].id }}"}
+    status_code: [204, 400]       # 400: already attached
+  loop: "{{ ab_c.results | selectattr('json.count', 'gt', 0) | list }}"
+  loop_control: { label: "{{ item.item }}" }
+  changed_when: false

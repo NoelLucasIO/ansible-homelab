@@ -1,0 +1,84 @@
+---
+# One virtual disk -> one XFS directory mount (/mnt/datastore/<name>) through the PBS API,
+# optionally with a datastore on it. Safe to rerun: an existing mount (or datastore) is reused,
+# a disk that's in use for anything else stops the play instead of being wiped.
+#   pbs_ds: {name: store1, disk: vdb, datastore: true}
+- name: Directory mounts and disks
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/{{ item }}"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  loop: [nodes/localhost/disks/directory, nodes/localhost/disks/list, config/datastore]
+  register: pbs_ds_q
+
+- name: What's there for {{ pbs_ds.name }}
+  ansible.builtin.set_fact:
+    # Matched on the mount path: the API's "name" is the systemd mount unit's, not ours.
+    pbs_ds_mounted: >-
+      {{ (pbs_ds_q.results[0].json.data | selectattr('path', 'defined')
+          | selectattr('path', 'equalto', '/mnt/datastore/' ~ pbs_ds.name) | list | length > 0)
+         or (pbs_ds.datastore | bool and pbs_ds_q.results[2].json.data
+             | selectattr('name', 'equalto', pbs_ds.name) | list | length > 0) }}
+    pbs_ds_disk: "{{ pbs_ds_q.results[1].json.data | selectattr('name', 'equalto', pbs_ds.disk) | first | default({}) }}"
+    pbs_ds_exists: "{{ pbs_ds_q.results[2].json.data | selectattr('name', 'equalto', pbs_ds.name) | list | length > 0 }}"
+
+- name: Format and mount the disk as a directory, {{ pbs_ds.name }}
+  when: not pbs_ds_mounted | bool
+  block:
+    - name: The disk is there and unused
+      ansible.builtin.assert:
+        that:
+          - pbs_ds_disk | length > 0
+          - pbs_ds_disk.used | default('unused') == 'unused'
+        fail_msg: >-
+          /dev/{{ pbs_ds.disk }} on {{ pbs_fqdn | default(pbs_addr) }} is
+          {{ 'missing' if pbs_ds_disk | length == 0 else 'in use (' ~ pbs_ds_disk.used ~ ')' }} and no
+          '{{ pbs_ds.name }}' mount exists. Nothing was changed. After a rebuild that kept the disk,
+          mount it on the PBS host (Administration > Storage/Disks > Directory) and rerun.
+
+    - name: Create the directory mount{{ ' and datastore' if pbs_ds.datastore else '' }}
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/nodes/localhost/disks/directory"
+        method: POST
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body:
+          name: "{{ pbs_ds.name }}"
+          disk: "{{ pbs_ds.disk }}"
+          filesystem: "{{ pbs_datastore_fs }}"
+          add-datastore: "{{ pbs_ds.datastore | bool }}"
+        return_content: true
+      register: pbs_ds_new
+      changed_when: true
+
+    - name: Wait for it
+      ansible.builtin.include_tasks: pbs_task_wait.yml
+      vars:
+        pbs_upid: "{{ pbs_ds_new.json.data }}"
+
+- name: Datastore on an existing mount (rebuilt VM, kept disk)
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/config/datastore"
+    method: POST
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    body_format: json
+    body: {name: "{{ pbs_ds.name }}", path: "/mnt/datastore/{{ pbs_ds.name }}", reuse-datastore: true}
+    return_content: true
+  register: pbs_ds_reuse
+  when:
+    - pbs_ds.datastore | bool
+    - pbs_ds_mounted | bool
+    - not pbs_ds_exists | bool
+  changed_when: true
+
+- name: Wait for the reuse
+  ansible.builtin.include_tasks: pbs_task_wait.yml
+  vars:
+    pbs_upid: "{{ pbs_ds_reuse.json.data }}"
+  when:
+    - pbs_ds_reuse is changed
+    - pbs_ds_reuse.json.data is string
+    - pbs_ds_reuse.json.data is match('^UPID:')

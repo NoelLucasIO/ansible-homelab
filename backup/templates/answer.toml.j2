@@ -1,0 +1,34 @@
+# Managed by Ansible (backup/pbs-deploy). Proxmox automated installation, PBS 4.x (kebab-case keys).
+# Validated with `proxmox-auto-install-assistant validate-answer` before the ISO is built.
+[global]
+keyboard = "{{ pbs_keyboard }}"
+country = "{{ pbs_country }}"
+fqdn = "{{ pbs_fqdn }}"
+mailto = "{{ pbs_mailto }}"
+timezone = "{{ pbs_timezone }}"
+root-password-hashed = "{{ pbs_root_password_hashed }}"
+root-ssh-keys = [
+{% for k in pbs_root_ssh_keys %}
+  "{{ k }}",
+{% endfor %}
+]
+reboot-on-error = false
+# Power off when done: the play waits for "shut off", ejects the ISO, then boots the disk.
+reboot-mode = "power-off"
+
+[network]
+source = "from-answer"
+cidr = "{{ pbs_addr }}/{{ pbs_prefix }}"
+dns = "{{ pbs_dns }}"
+gateway = "{{ pbs_gateway }}"
+# The NIC with this VM's fixed MAC (udev ID_NET_NAME_MAC = enx<mac>)
+filter.ID_NET_NAME_MAC = "*{{ pbs_mac | replace(':', '') }}"
+
+[disk-setup]
+filesystem = "{{ pbs_filesystem }}"
+# Only the OS disk; vdb (datastore) and vdc (S3 cache) are formatted later through the API.
+disk-list = ["vda"]
+
+[first-boot]
+source = "from-iso"
+ordering = "network-online"

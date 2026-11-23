@@ -1,0 +1,65 @@
+#!/bin/bash
+# {{ ansible_managed }} (backup/clients)
+# KVM image backups: virtnbdbackup keeps a monthly chain per domain (full on the 1st run of
+# the month, then incrementals from libvirt dirty bitmaps) in {{ pbs_vm_backup_dir }}/<domain>/<YYYY-MM>;
+# the chain is then uploaded to PBS (namespace "kvm", type vm, id = domain). Each PBS snapshot
+# is a complete, restorable chain; unchanged chain files are skipped (metadata change detection).
+# Restore: proxmox-backup-client restore ... chain.pxar <dir>, then virtnbdrestore -i <dir> -o <out>.
+# shellcheck disable=SC1091
+. {{ pbs_client_lib_dir }}/lib.sh
+ROOT={{ pbs_vm_backup_dir }}
+KEEP={{ pbs_vm_backup_local_months | int }}
+DOMAINS=({% for d in pbs_vm_backup_domains %}"{{ d }}" {% endfor %})
+opts=({{ '--compress' if pbs_vm_backup_compress | bool else '' }} {{ '--raw' if pbs_vm_backup_raw_disks | bool else '' }})
+overall=0
+
+upload() {  # upload <domain> <dir>
+  "$PBC" backup "chain.pxar:$2" --ns kvm --backup-type vm --backup-id "$1" \
+    --change-detection-mode {{ pbs_change_detection }} "${KEYARGS[@]}"
+}
+
+for dom in "${DOMAINS[@]}"; do
+  start=$(date +%s); rc=0
+  state=$(virsh -c qemu:///system domstate "$dom" 2>/dev/null) || { log "ERROR: no domain $dom"; metric vm "$dom" 2 "$start" "$(date +%s)"; overall=2; continue; }
+  install -d -m 0700 "$ROOT/$dom"
+  if [ "$state" = "running" ]; then
+    dir="$ROOT/$dom/$(date +%Y-%m)"
+    log "== $dom (running): virtnbdbackup auto -> $dir"
+    if ! virtnbdbackup -U qemu:///system -d "$dom" -l auto -o "$dir" "${opts[@]}"; then
+      # A broken chain (failed run, lost checkpoint) blocks every later incremental: set it aside
+      # and start a fresh full chain right away.
+      log "WARN: $dom: chain failed; moving it aside and retrying with a full"
+      [ -d "$dir" ] && mv "$dir" "$dir.failed-$(date +%Y%m%dT%H%M%S)"
+      virtnbdbackup -U qemu:///system -d "$dom" -l auto -o "$dir" "${opts[@]}" || rc=4
+    fi
+  else
+    # Shut off: no dirty bitmaps to read. A full copy, only when a disk changed since the last one.
+    dir="$ROOT/$dom/offline"
+    newest=$(virsh -c qemu:///system domblklist "$dom" --details | awk '$2=="disk"{print $4}' \
+             | xargs -r stat -c %Y 2>/dev/null | sort -n | tail -1)
+    last=$(cat "$dir/.copied" 2>/dev/null || echo 0)
+    if [ -n "$newest" ] && [ "$newest" -le "$last" ]; then
+      log "== $dom ($state): unchanged since the last copy, uploading it again"
+    else
+      log "== $dom ($state): virtnbdbackup copy -> $dir"
+      rm -rf "$dir.new"
+      if virtnbdbackup -U qemu:///system -d "$dom" -l copy -o "$dir.new" "${opts[@]}"; then
+        rm -rf "$dir"; mv "$dir.new" "$dir"; date +%s > "$dir/.copied"
+      else
+        rc=4
+      fi
+    fi
+  fi
+  if [ "$rc" -eq 0 ]; then
+    upload "$dom" "$dir" || rc=5
+  fi
+  # Local retention: newest $KEEP monthly chains (failed chains go with them)
+  find "$ROOT/$dom" -mindepth 1 -maxdepth 1 -type d -name '20[0-9][0-9]-[0-9][0-9]*' -printf '%f\n' \
+    | sort -r | awk -v k="$KEEP" '{m=substr($0,1,7); if (!(m in s)) {n++; s[m]=1} if (n>k) print}' \
+    | while read -r old; do log "expire local chain $dom/$old"; rm -rf "${ROOT:?}/$dom/$old"; done
+  end=$(date +%s)
+  metric vm "$dom" "$rc" "$start" "$end"
+  log "== $dom rc=$rc in $((end - start))s"
+  [ "$rc" -ne 0 ] && overall=$rc
+done
+exit "$overall"

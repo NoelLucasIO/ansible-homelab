@@ -1,0 +1,4 @@
+# {{ ansible_managed }} (backup/pbs-deploy): node_exporter on the PBS VM (installed at first boot)
+- targets: ['{{ pbs_addr }}:9100']
+  labels:
+    instance: {{ pbs_name }}

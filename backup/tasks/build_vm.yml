@@ -1,0 +1,239 @@
+---
+# An auto-install ISO is made from the vendor ISO (answer file and first-boot script embedded),
+# the VM boots it, installs unattended and powers off; the ISO is then ejected and deleted
+# (it holds the root password hash) and the VM started from its disk.
+#   vda: OS (the installer's only target), vdb: datastore, vdc: S3 cache (both formatted later
+#   through the PBS API). vdb and vdc are never deleted by this play, not even on replace.
+
+# --- Replace: only VMs this project built --------------------------------------------
+- name: Replace the existing domain
+  when:
+    - pbs_domstate.rc == 0
+    - pbs_replace | bool
+  block:
+    - name: Who built it?
+      ansible.builtin.command: virsh desc {{ pbs_name }}
+      register: pbs_desc
+      changed_when: false
+
+    - name: Only replace VMs built by this project
+      ansible.builtin.assert:
+        that: pbs_owner_comment in pbs_desc.stdout
+        fail_msg: "{{ pbs_name }} was not built by this project (description lacks \"{{ pbs_owner_comment }}\")."
+
+    - name: Power off
+      ansible.builtin.command: virsh destroy {{ pbs_name }}
+      when: pbs_domstate.stdout != 'shut off'
+      changed_when: true
+
+    - name: Undefine (disks stay)
+      ansible.builtin.command: virsh undefine {{ pbs_name }}
+      changed_when: true
+
+    - name: Remove the old OS disk only
+      ansible.builtin.file:
+        path: "{{ pbs_os_disk }}"
+        state: absent
+
+    - name: The domain is gone now
+      ansible.builtin.set_fact:
+        pbs_domstate: {rc: 1, stdout: ''}
+
+- name: Domain already exists (no replace), leaving it as is
+  ansible.builtin.debug:
+    msg: "{{ pbs_name }} exists; skipping the build. Set pbs_replace to rebuild its OS disk."
+  when: pbs_domstate.rc == 0
+
+- name: Build the VM
+  when: pbs_domstate.rc != 0
+  block:
+    # Existing VM directories are shared with other domains: create them if missing, never
+    # touch their mode or owner. qemu must be able to traverse every one of them.
+    - name: VM disk directories (created if missing; existing ones left as they are)
+      ansible.builtin.command: install -d -m 0755 {{ item }}
+      args:
+        creates: "{{ item }}"
+      loop: "{{ [pbs_disk_dir, pbs_store_disk_dir] | unique }}"
+
+    - name: ISO work directory (qemu reads the ISO; the answer file inside is 0600)
+      ansible.builtin.file:
+        path: "{{ pbs_iso_work_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: The qemu user can reach every file the VM uses
+      ansible.builtin.command: >-
+        runuser -u qemu -- test -x {{ item }}
+      loop: "{{ [pbs_iso_work_dir, pbs_disk_dir, pbs_store_disk_dir] | unique }}"
+      changed_when: false
+      register: pbs_qemu_access
+      failed_when: false
+
+    - name: Directory permissions block qemu
+      ansible.builtin.assert:
+        that: pbs_qemu_access.results | selectattr('rc', 'ne', 0) | list | length == 0
+        fail_msg: >-
+          qemu can't read {{ pbs_qemu_access.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+          (check every parent directory for o+x). Nothing was changed.
+        quiet: true
+
+    - name: Root password hash (SHA-512 crypt; the plaintext stays out of the ISO)
+      ansible.builtin.command: openssl passwd -6 -stdin
+      args:
+        stdin: "{{ pbs_root_password }}"
+      register: pbs_root_hash
+      changed_when: false
+      no_log: true
+
+    - name: Answer file
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/answer.toml.j2"
+        dest: "{{ pbs_iso_work_dir }}/answer.toml"
+        mode: "0600"
+      vars:
+        pbs_root_password_hashed: "{{ pbs_root_hash.stdout }}"
+      no_log: true
+
+    - name: First-boot script
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/first-boot.sh.j2"
+        dest: "{{ pbs_iso_work_dir }}/first-boot.sh"
+        mode: "0755"
+
+    - name: Assistant script (runs in a Debian container)
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/prepare-iso.sh.j2"
+        dest: "{{ pbs_iso_work_dir }}/prepare-iso.sh"
+        mode: "0755"
+
+    - name: Validate the answer file and build the auto-install ISO
+      ansible.builtin.command:
+        argv: [podman, run, --rm, --network=host,
+               "-v", "{{ pbs_iso }}:/src.iso:ro",
+               "-v", "{{ pbs_iso_work_dir }}:/work",
+               "{{ pbs_assistant_image }}", bash, /work/prepare-iso.sh]
+      register: pbs_prep
+      changed_when: true
+
+    - name: Assistant output
+      ansible.builtin.debug:
+        msg: "{{ pbs_prep.stdout_lines | select('search', 'valid|success|ISO|answer|error', ignorecase=true) | list }}"
+
+    - name: Datastore and cache disks (created once, then kept)
+      ansible.builtin.command:
+        argv: [qemu-img, create, -q, -f, qcow2, "{{ item.path }}", "{{ item.gb }}G"]
+        creates: "{{ item.path }}"
+      loop:
+        - {path: "{{ pbs_store_disk }}", gb: "{{ pbs_store_disk_gb }}"}
+        - {path: "{{ pbs_cache_disk }}", gb: "{{ pbs_cache_disk_gb }}"}
+      loop_control: { label: "{{ item.path }}" }
+
+    - name: Empty thin OS disk, GB {{ pbs_os_disk_gb }}
+      ansible.builtin.command:
+        argv: [qemu-img, create, -q, -f, qcow2, "{{ pbs_os_disk }}", "{{ pbs_os_disk_gb }}G"]
+      changed_when: true
+
+    - name: OS variants libosinfo knows
+      ansible.builtin.command: virt-install --osinfo list
+      register: pbs_osinfo
+      changed_when: false
+
+    - name: Pick the OS variant
+      ansible.builtin.set_fact:
+        pbs_variant: >-
+          {{ ([pbs_os_variant] + pbs_os_variant_fallbacks)
+             | select('in', pbs_osinfo.stdout | regex_findall('[\w.-]+')) | first | default('linux2022') }}
+
+    - name: Create the VM and boot the installer
+      ansible.builtin.command:
+        argv:
+          - virt-install
+          - --name={{ pbs_name }}
+          - --metadata=description={{ pbs_owner_comment }} ({{ pbs_fqdn }})
+          - --memory={{ pbs_memory_gb | int * 1024 }}
+          - --vcpus={{ pbs_vcpus }}
+          - --cpu=host-passthrough
+          - --machine=q35
+          - --os-variant={{ pbs_variant }}
+          - --disk=path={{ pbs_os_disk }},format=qcow2,bus=virtio,target.dev=vda
+          - --disk=path={{ pbs_store_disk }},format=qcow2,bus=virtio,target.dev=vdb,serial=pbs-store
+          - --disk=path={{ pbs_cache_disk }},format=qcow2,bus=virtio,target.dev=vdc,serial=pbs-cache
+          - --cdrom={{ pbs_auto_iso }}
+          - --boot=hd,cdrom
+          - --network=bridge={{ pbs_bridge }},model=virtio,mac={{ pbs_mac }}
+          - --serial=pty
+          - --graphics=vnc,listen=127.0.0.1
+          - --channel=unix,target.type=virtio,target.name=org.qemu.guest_agent.0
+          - --rng=/dev/urandom
+          - --noautoconsole
+      changed_when: true
+
+    - name: Unattended install (the answer file powers the VM off when done)
+      ansible.builtin.command: virsh domstate {{ pbs_name }}
+      register: pbs_inst
+      until: pbs_inst.stdout == 'shut off'
+      retries: "{{ (pbs_install_timeout | int / 15) | int }}"
+      delay: 15
+      changed_when: false
+
+    # virt-install drops the install media from the persistent config itself after the
+    # install phase; eject only if something is still inserted.
+    - name: CD-ROM with media still inserted
+      ansible.builtin.shell: set -o pipefail; virsh domblklist {{ pbs_name }} --details | awk '$2=="cdrom" && $4!="-"{print $3; exit}'
+      register: pbs_cdrom
+      changed_when: false
+
+    - name: Eject the installer ISO
+      ansible.builtin.command: virsh change-media {{ pbs_name }} {{ pbs_cdrom.stdout }} --eject --config
+      when: pbs_cdrom.stdout | length > 0
+      changed_when: true
+
+    - name: First boot from disk
+      ansible.builtin.command: virsh start {{ pbs_name }}
+      changed_when: true
+
+  rescue:
+    - name: Install didn't finish
+      ansible.builtin.fail:
+        msg: >-
+          {{ pbs_name }}: {{ ansible_failed_result.msg | default(ansible_failed_result.stderr | default('failed')) }}.
+          The installer screen is on VNC 127.0.0.1 of {{ inventory_hostname }} (virsh vncdisplay {{ pbs_name }});
+          the prepared ISO and answer file are kept in {{ pbs_iso_work_dir }} for a look.
+
+- name: Remove the prepared ISO and answer file (password hash)
+  ansible.builtin.file:
+    path: "{{ pbs_iso_work_dir }}/{{ item }}"
+    state: absent
+  loop: ["{{ pbs_name }}-auto.iso", answer.toml]
+
+- name: Running?
+  ansible.builtin.command: virsh domstate {{ pbs_name }}
+  register: pbs_state
+  changed_when: false
+
+- name: Start it
+  ansible.builtin.command: virsh start {{ pbs_name }}
+  when: pbs_state.stdout == 'shut off'
+  changed_when: true
+
+- name: Autostart with the host?
+  ansible.builtin.command: virsh dominfo {{ pbs_name }}
+  register: pbs_dominfo
+  changed_when: false
+
+- name: Autostart on
+  ansible.builtin.command: virsh autostart {{ pbs_name }}
+  when: "pbs_dominfo.stdout is search('Autostart: +disable')"
+  changed_when: true
+
+- name: PBS API answers, {{ pbs_addr ~ ':' ~ pbs_api_port }}
+  ansible.builtin.wait_for:
+    host: "{{ pbs_addr }}"
+    port: "{{ pbs_api_port | int }}"
+    timeout: 600
+
+- name: First boot finished (repositories switched, node_exporter installed and listening)
+  ansible.builtin.wait_for:
+    host: "{{ pbs_addr }}"
+    port: 9100
+    timeout: 900

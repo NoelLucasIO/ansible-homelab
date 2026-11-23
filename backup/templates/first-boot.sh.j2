@@ -1,0 +1,42 @@
+#!/bin/bash
+# Managed by Ansible (backup/pbs-deploy). Embedded in the auto-install ISO; runs once on the
+# installed system's first boot (ordering: network-online). Log: /var/log/pbs-first-boot.log
+#   * no-subscription repository instead of enterprise (no subscription key here)
+#   * full upgrade, then qemu-guest-agent, node_exporter (9100) and rsyslog forwarding to Alloy
+set -euo pipefail
+exec >>/var/log/pbs-first-boot.log 2>&1
+echo "== first boot $(date -Is)"
+export DEBIAN_FRONTEND=noninteractive
+
+cd /etc/apt/sources.list.d
+for f in pbs-enterprise.sources pbs-enterprise.list; do
+  [ -e "$f" ] && mv -v "$f" "$f.disabled"
+done
+cat > pbs-no-subscription.sources <<'SRC'
+Types: deb
+URIs: {{ pbs_apt_base }}/pbs
+Suites: trixie
+Components: pbs-no-subscription
+Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+SRC
+
+apt-get -q update
+apt-get -q -y -o Dpkg::Options::=--force-confold dist-upgrade
+apt-get -q -y install qemu-guest-agent rsyslog prometheus-node-exporter
+
+install -d -m 0700 /var/lib/rsyslog
+cat > /etc/rsyslog.d/50-forward.conf <<'RS'
+# Managed by Ansible (backup/pbs-deploy first boot): everything to Alloy (Loki), RFC 5424 over TCP.
+*.* action(type="omfwd" target="{{ pbs_log_target }}" port="{{ pbs_log_port }}" protocol="tcp"
+           template="RSYSLOG_SyslogProtocol23Format" TCP_Framing="octet-counted"
+           queue.type="LinkedList" queue.filename="fwd_alloy" queue.maxDiskSpace="256m"
+           queue.saveOnShutdown="on" action.resumeRetryCount="-1")
+RS
+rsyslogd -N1
+systemctl enable --now rsyslog prometheus-node-exporter
+systemctl start qemu-guest-agent || true   # static unit, started by udev on the virtio port
+systemctl restart rsyslog
+# A VM has no BMC: the ISO enables openipmi, which fails every boot and shows as a failed unit.
+systemctl disable openipmi.service || true
+systemctl reset-failed openipmi.service || true
+echo "== first boot done $(date -Is)"

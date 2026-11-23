@@ -1,0 +1,9 @@
+# {{ ansible_managed }} (backup/pbs-deploy)
+scrape_configs:
+  - job_name: pbs
+    scrape_interval: 60s
+    scrape_timeout: 30s
+    static_configs:
+      - targets: ['{{ pbs_exporter_listen }}']
+        labels:
+          instance: {{ pbs_name }}

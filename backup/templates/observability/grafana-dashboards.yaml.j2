@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+apiVersion: 1
+providers:
+  - name: backup
+    folder: {{ pbs_grafana_folder | default('Infrastructure') }}
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/provisioning/dashboards/backup
+      foldersFromFilesStructure: false

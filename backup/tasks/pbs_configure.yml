@@ -1,0 +1,315 @@
+---
+# Everything inside PBS, through its REST API (no SSH, no agent on the appliance).
+# Idempotent: objects are compared with what's there and only sent when they differ.
+- name: Log in
+  ansible.builtin.include_tasks: pbs_login.yml
+
+- name: Version
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/version"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  register: pbs_version
+
+# --- Storage --------------------------------------------------------------------------
+- name: Datastore disk (vdb)
+  ansible.builtin.include_tasks: pbs_disk_store.yml
+  vars:
+    pbs_ds: {name: "{{ pbs_datastore }}", disk: vdb, datastore: true}
+
+- name: S3 cache disk (vdc)
+  ansible.builtin.include_tasks: pbs_disk_store.yml
+  vars:
+    pbs_ds: {name: "{{ pbs_offsite_cache }}", disk: vdc, datastore: false}
+  when: pbs_offsite_enabled | bool
+
+- name: Datastore options, {{ pbs_datastore }}
+  ansible.builtin.include_tasks: pbs_object.yml
+  vars:
+    pbs_obj:
+      path: /config/datastore
+      key: name
+      id: "{{ pbs_datastore }}"
+      body:
+        name: "{{ pbs_datastore }}"
+        comment: "Local datastore (backup/pbs-deploy)"
+        gc-schedule: "{{ pbs_gc_schedule }}"
+
+- name: Namespaces
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/admin/datastore/{{ pbs_datastore }}/namespace"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  register: pbs_ns
+
+- name: Create missing namespaces
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/admin/datastore/{{ pbs_datastore }}/namespace"
+    method: POST
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    body_format: json
+    body: {name: "{{ item }}"}
+  loop: "{{ pbs_namespaces | difference(pbs_ns.json.data | map(attribute='ns') | list) }}"
+  changed_when: true
+
+- name: Prune job, {{ pbs_datastore }}
+  ansible.builtin.include_tasks: pbs_object.yml
+  vars:
+    pbs_obj:
+      path: /config/prune
+      key: id
+      id: "{{ pbs_datastore }}-daily"
+      body: "{{ {'id': pbs_datastore ~ '-daily', 'store': pbs_datastore, 'schedule': pbs_prune_schedule,
+                 'comment': 'backup/pbs-deploy'} | combine(pbs_keep) }}"
+
+- name: Verify job, {{ pbs_datastore }}
+  ansible.builtin.include_tasks: pbs_object.yml
+  vars:
+    pbs_obj:
+      path: /config/verify
+      key: id
+      id: "{{ pbs_datastore }}-verify"
+      defaults: {ignore-verified: true}
+      body:
+        id: "{{ pbs_datastore }}-verify"
+        store: "{{ pbs_datastore }}"
+        schedule: "{{ pbs_verify_schedule }}"
+        ignore-verified: true
+        outdated-after: "{{ pbs_verify_outdated_days | int }}"
+        comment: backup/pbs-deploy
+
+# --- Users and ACLs (tokens are made per client by clients.yml, and below for the exporter) ---
+- name: Users
+  ansible.builtin.include_tasks: pbs_object.yml
+  loop:
+    - {id: "{{ pbs_client_user }}", comment: "Backup clients (one API token per host)"}
+    - {id: "{{ pbs_monitor_user }}", comment: "Read-only, for the Prometheus exporter"}
+  loop_control: { loop_var: pbs_u, label: "{{ pbs_u.id }}" }
+  vars:
+    pbs_obj:
+      path: /access/users
+      key: userid
+      id: "{{ pbs_u.id }}"
+      body: {userid: "{{ pbs_u.id }}", comment: "{{ pbs_u.comment }}"}
+
+- name: ACLs for the users (a token gets at most what its user has)
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/access/acl"
+    method: PUT
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    body_format: json
+    body: "{{ item }}"
+  loop:
+    - {path: "/datastore/{{ pbs_datastore }}", role: DatastoreBackup, auth-id: "{{ pbs_client_user }}", propagate: true}
+    - {path: /, role: Audit, auth-id: "{{ pbs_monitor_user }}", propagate: true}
+  changed_when: false        # PUT is idempotent; the API doesn't say whether it changed anything
+
+# --- Exporter token (secret shown once: kept only in the exporter's env file) ------------
+- name: Exporter env file on {{ pbs_prom_host }}
+  ansible.builtin.stat:
+    path: "{{ pbs_exporter_conf_dir }}/env"
+  delegate_to: "{{ pbs_prom_host }}"
+  become: true
+  register: pbs_exp_env
+
+- name: New exporter token
+  when: not pbs_exp_env.stat.exists or pbs_rotate_tokens | default(false) | bool
+  block:
+    - name: Drop the old one (if any)
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/users/{{ pbs_monitor_user | urlencode }}/token/exporter"
+        method: DELETE
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        status_code: [200, 400, 404, 500]
+      changed_when: false
+
+    - name: Create the exporter token, {{ pbs_monitor_user ~ '!exporter' }}
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/users/{{ pbs_monitor_user | urlencode }}/token/exporter"
+        method: POST
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body: {comment: "pbs-exporter on {{ pbs_prom_host }}"}
+        return_content: true
+      register: pbs_exp_tok
+      changed_when: true
+      no_log: true
+
+    - name: Token ACL (Audit on /)
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/acl"
+        method: PUT
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body: {path: /, role: Audit, auth-id: "{{ pbs_monitor_user }}!exporter", propagate: true}
+      changed_when: true
+
+    - name: Config directory
+      ansible.builtin.file:
+        path: "{{ pbs_exporter_conf_dir }}"
+        state: directory
+        owner: "{{ pbs_exporter_user }}"
+        mode: "0700"
+      delegate_to: "{{ pbs_prom_host }}"
+      become: true
+
+    - name: Env file (token secret)
+      ansible.builtin.copy:
+        dest: "{{ pbs_exporter_conf_dir }}/env"
+        owner: "{{ pbs_exporter_user }}"
+        mode: "0600"
+        content: |
+          # Managed by Ansible (backup/pbs-deploy)
+          PBS_ENDPOINT=https://{{ pbs_addr }}:{{ pbs_api_port }}
+          PBS_USERNAME={{ pbs_monitor_user }}
+          PBS_API_TOKEN_NAME=exporter
+          PBS_API_TOKEN={{ pbs_exp_tok.json.data.value }}
+          PBS_INSECURE={{ 'false' if pbs_validate_certs | bool else 'true' }}
+          PBS_TIMEOUT=15s
+          PBS_LISTEN_ADDRESS={{ pbs_exporter_listen }}
+      delegate_to: "{{ pbs_prom_host }}"
+      become: true
+      no_log: true
+      register: pbs_exp_env_new
+
+# --- Offsite: S3 datastore (Backblaze B2) fed by a local pull sync -------------------
+- name: Offsite
+  when: pbs_offsite_enabled | bool
+  block:
+    - name: Offsite inputs
+      ansible.builtin.assert:
+        that:
+          - pbs_offsite_bucket | length > 0
+          - pbs_offsite_access_key | default('') | length > 0
+          - pbs_offsite_secret_key | default('') | length > 0
+        fail_msg: "Offsite needs pbs_offsite_bucket (inventory) and pbs_offsite_access_key / pbs_offsite_secret_key (credential)."
+        quiet: true
+
+    - name: S3 endpoint {{ pbs_offsite_s3_id }}
+      ansible.builtin.include_tasks: pbs_object.yml
+      vars:
+        pbs_obj:
+          path: /config/s3
+          key: id
+          id: "{{ pbs_offsite_s3_id }}"
+          write_only: [secret-key]
+          defaults: {path-style: false}
+          no_log: true
+          body:
+            id: "{{ pbs_offsite_s3_id }}"
+            endpoint: "{{ pbs_offsite_endpoint }}"
+            region: "{{ pbs_offsite_region }}"
+            access-key: "{{ pbs_offsite_access_key }}"
+            secret-key: "{{ pbs_offsite_secret_key }}"
+            path-style: "{{ pbs_offsite_path_style | bool }}"
+            provider-quirks: "{{ pbs_offsite_quirks }}"
+            rate-out: "{{ pbs_offsite_rate_out }}"
+
+    - name: Datastores now
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/config/datastore"
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        return_content: true
+      register: pbs_ds_all
+
+    - name: S3 datastore on the bucket, {{ pbs_offsite_store ~ ' on ' ~ pbs_offsite_bucket }}
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/config/datastore"
+        method: POST
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body:
+          name: "{{ pbs_offsite_store }}"
+          path: "/mnt/datastore/{{ pbs_offsite_cache }}"
+          backend: "bucket={{ pbs_offsite_bucket }},client={{ pbs_offsite_s3_id }},type=s3"
+          reuse-datastore: "{{ pbs_offsite_reuse | bool }}"   # true: the bucket already holds this datastore (rebuild/DR)
+          comment: "Offsite: Backblaze B2 (backup/pbs-deploy)"
+        return_content: true
+      register: pbs_s3_new
+      when: pbs_ds_all.json.data | selectattr('name', 'equalto', pbs_offsite_store) | list | length == 0
+      changed_when: true
+
+    - name: Wait for the S3 datastore
+      ansible.builtin.include_tasks: pbs_task_wait.yml
+      vars:
+        pbs_upid: "{{ pbs_s3_new.json.data }}"
+      when:
+        - pbs_s3_new is changed
+        - pbs_s3_new.json.data is string
+        - pbs_s3_new.json.data is match('^UPID:')
+
+    - name: S3 datastore options
+      ansible.builtin.include_tasks: pbs_object.yml
+      vars:
+        pbs_obj:
+          path: /config/datastore
+          key: name
+          id: "{{ pbs_offsite_store }}"
+          body:
+            name: "{{ pbs_offsite_store }}"
+            gc-schedule: "{{ pbs_offsite_gc_schedule }}"
+
+    - name: Sync job, {{ pbs_datastore ~ ' to ' ~ pbs_offsite_store }}
+      ansible.builtin.include_tasks: pbs_object.yml
+      vars:
+        pbs_obj:
+          path: /config/sync
+          key: id
+          id: "{{ pbs_offsite_store }}-sync"
+          defaults: {remove-vanished: false, encrypted-only: false}
+          body:
+            id: "{{ pbs_offsite_store }}-sync"
+            store: "{{ pbs_offsite_store }}"
+            remote-store: "{{ pbs_datastore }}"
+            schedule: "{{ pbs_offsite_sync_schedule }}"
+            encrypted-only: "{{ pbs_offsite_encrypted_only | bool }}"
+            remove-vanished: false   # offsite keeps its own, longer retention
+            comment: "Local -> Backblaze B2 (backup/pbs-deploy)"
+
+    - name: Prune job, {{ pbs_offsite_store }}
+      ansible.builtin.include_tasks: pbs_object.yml
+      vars:
+        pbs_obj:
+          path: /config/prune
+          key: id
+          id: "{{ pbs_offsite_store }}-daily"
+          body: "{{ {'id': pbs_offsite_store ~ '-daily', 'store': pbs_offsite_store, 'schedule': pbs_offsite_prune_schedule,
+                     'comment': 'backup/pbs-deploy'} | combine(pbs_offsite_keep) }}"
+
+    - name: Verify job (reads back from the bucket, so egress), {{ pbs_offsite_store }}
+      ansible.builtin.include_tasks: pbs_object.yml
+      vars:
+        pbs_obj:
+          path: /config/verify
+          key: id
+          id: "{{ pbs_offsite_store }}-verify"
+          defaults: {ignore-verified: true}
+          body:
+            id: "{{ pbs_offsite_store }}-verify"
+            store: "{{ pbs_offsite_store }}"
+            schedule: "{{ pbs_offsite_verify_schedule }}"
+            ignore-verified: true
+            outdated-after: 90
+            comment: backup/pbs-deploy
+
+# --- What clients need -----------------------------------------------------------------
+- name: Certificate fingerprint (clients pin it)
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/nodes/localhost/certificates/info"
+    headers: "{{ pbs_headers }}"
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  register: pbs_certs
+
+- name: Fingerprint
+  ansible.builtin.set_fact:
+    pbs_fingerprint: "{{ (pbs_certs.json.data | selectattr('filename', 'equalto', 'proxy.pem') | first).fingerprint }}"

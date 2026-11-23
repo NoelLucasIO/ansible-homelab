@@ -1,0 +1,13 @@
+---
+# CLI only: copy to vault.yml (git-ignored), fill in, then ansible-vault encrypt vault.yml.
+# In AAP these come from the credentials "homelab-pbs" (type PBS secrets, aap-setup.yml) and
+# "ipam-vm secrets" (NIOS/NPM, shared with ipam-vm and vtm-vm).
+pbs_root_password: CHANGE_ME              # 12+ characters; root@pam on the PBS VM
+# pbs_client_encryption_key: |            # set after the first clients.yml run prints it
+#   {"kdf": null, ...}
+# pbs_offsite_access_key: CHANGE_ME       # Backblaze B2 keyID (bucket-restricted application key)
+# pbs_offsite_secret_key: CHANGE_ME       # Backblaze B2 applicationKey
+# NIOS/NPM (pbs-deploy registers the VM's address in NIOS and publishes the UI through NPM):
+# not repeated here. Load ipam-vm's vault alongside this one (same vault password):
+#   -e @../ipam-vm/playbooks/group_vars/all/vault.yml
+# Or skip both: pbs_use_nios: false, pbs_ip: <address>, pbs_npm_proxy: false.

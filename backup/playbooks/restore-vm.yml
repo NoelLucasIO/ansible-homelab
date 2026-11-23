@@ -1,0 +1,74 @@
+---
+# Restore a KVM domain's disks from PBS to a scratch directory on the hypervisor (never over the
+# running VM): the chain (newest, or pbs_restore_snapshot) is restored with proxmox-backup-client,
+# then virtnbdrestore rebuilds the qcow2 disks and the domain XML from it.
+#   ansible-playbook playbooks/restore-vm.yml -i inventory.yml -e pbs_restore_host=fedora \
+#     -e pbs_restore_domain=vm1 [-e pbs_restore_snapshot=2026-11-22T05:30:01Z] [-e pbs_restore_until=virtnbdbackup.3]
+# Then inspect the result, and define it under a new name, or swap disks by hand.
+- name: Restore a VM from PBS
+  hosts: "{{ pbs_restore_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - backup_defaults
+  vars:
+    pbs_restore_dir: "{{ pbs_vm_backup_dir }}/restore/{{ pbs_restore_domain }}-{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+  tasks:
+    - name: Inputs
+      ansible.builtin.assert:
+        that: pbs_restore_domain | default('') is match('^[A-Za-z0-9._-]+$')
+        fail_msg: "Set pbs_restore_domain (the backup id in namespace kvm, i.e. the libvirt name)."
+        quiet: true
+
+    - name: Directories
+      ansible.builtin.file:
+        path: "{{ pbs_restore_dir }}/{{ item }}"
+        state: directory
+        mode: "0700"
+      loop: [chain, disks]
+
+    - name: Restore the chain from PBS (decrypts with the shared key)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a; . {{ pbs_client_conf_dir }}/client.env; set +a
+        snap="vm/{{ pbs_restore_domain }}{{ ('/' ~ pbs_restore_snapshot) if pbs_restore_snapshot | default('') | length > 0 else '' }}"
+        {{ pbs_client_bin }} restore --ns kvm "$snap" chain.pxar {{ pbs_restore_dir }}/chain \
+          --keyfile {{ pbs_client_conf_dir }}/encryption-key.json
+        ls -la {{ pbs_restore_dir }}/chain
+      args:
+        executable: /bin/bash
+      register: pbs_r_chain
+      changed_when: true
+
+    - name: What's in the chain
+      ansible.builtin.command: virtnbdrestore -i {{ pbs_restore_dir }}/chain -o dump
+      register: pbs_r_dump
+      changed_when: false
+
+    - name: Rebuild the disks (and domain XML)
+      ansible.builtin.command:
+        argv: "{{ ['virtnbdrestore', '-i', pbs_restore_dir ~ '/chain', '-o', pbs_restore_dir ~ '/disks']
+                  + (['--until', pbs_restore_until] if pbs_restore_until | default('') | length > 0 else []) }}"
+      register: pbs_r_restore
+      changed_when: true
+
+    - name: Restored files
+      ansible.builtin.find:
+        paths: "{{ pbs_restore_dir }}/disks"
+      register: pbs_r_files
+
+    - name: Images are readable qcow2
+      ansible.builtin.command: qemu-img check {{ item.path }}
+      loop: "{{ pbs_r_files.files | selectattr('path', 'search', '[.](qcow2|img|raw)$|vd[a-z]$|sd[a-z]$') | list }}"
+      loop_control: { label: "{{ item.path | basename }}" }
+      changed_when: false
+      failed_when: false
+      register: pbs_r_check
+
+    - name: Result
+      ansible.builtin.debug:
+        msg:
+          - "Restored {{ pbs_restore_domain }} into {{ pbs_restore_dir }}/disks:"
+          - "{{ pbs_r_files.files | map(attribute='path') | map('basename') | list }}"
+          - "{{ pbs_r_check.results | map(attribute='stdout_lines') | flatten | select('search', 'No errors|errors|leaked') | list }}"
+          - "Chain dir {{ pbs_restore_dir }}/chain can be deleted once you're done."

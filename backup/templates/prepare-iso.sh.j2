@@ -1,0 +1,25 @@
+#!/bin/bash
+# Managed by Ansible (backup/pbs-deploy). Runs in {{ pbs_assistant_image }}:
+# installs proxmox-auto-install-assistant from the Proxmox repository (signed-by the
+# Proxmox archive keyring), validates the answer file and embeds it in a copy of the ISO.
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+apt-get -qq update
+apt-get -qq install -y --no-install-recommends ca-certificates curl xorriso >/dev/null
+curl -fsSL {{ pbs_keyring_url }} -o /usr/share/keyrings/proxmox-archive-keyring.gpg
+{% if pbs_keyring_sha256 | length > 0 %}
+echo "{{ pbs_keyring_sha256 }}  /usr/share/keyrings/proxmox-archive-keyring.gpg" | sha256sum -c -
+{% endif %}
+echo "deb [signed-by=/usr/share/keyrings/proxmox-archive-keyring.gpg] {{ pbs_apt_base }}/pbs trixie pbs-no-subscription" \
+  > /etc/apt/sources.list.d/pbs.list
+apt-get -qq update
+apt-get -qq install -y --no-install-recommends proxmox-auto-install-assistant >/dev/null
+proxmox-auto-install-assistant --version || true
+proxmox-auto-install-assistant validate-answer /work/answer.toml
+rm -f /work/{{ pbs_name }}-auto.iso
+proxmox-auto-install-assistant prepare-iso /src.iso \
+  --fetch-from iso \
+  --answer-file /work/answer.toml \
+  --on-first-boot /work/first-boot.sh \
+  --output /work/{{ pbs_name }}-auto.iso
+ls -l /work/{{ pbs_name }}-auto.iso

@@ -1,0 +1,137 @@
+---
+# proxmox-backup-client from Proxmox's own Debian repository, as the *static* build
+# (proxmox-backup-client-static: one binary, no Debian libraries), so it runs on Fedora and Arch.
+# Trust chain, all checked here before anything runs: Proxmox archive keyring (HTTPS) ->
+# signed InRelease (gpgv) -> Packages index hash -> .deb SHA-256 -> extracted binary.
+- name: Installed client version
+  ansible.builtin.command: "{{ pbs_client_bin }} version"
+  register: pbs_cli_have
+  changed_when: false
+  failed_when: false
+
+- name: Install proxmox-backup-client {{ pbs_client_version }}
+  when: >-
+    (pbs_cli_have.stdout | default('')) is not search('client version: ' ~ (pbs_client_version.split('-')[0] | regex_escape) ~ '$')
+  block:
+    - name: Tools (gpgv, bsdtar)
+      ansible.builtin.package:
+        name: "{{ pbs_client_tool_packages[ansible_facts.os_family] | default(pbs_client_tool_packages.default) }}"
+        state: present
+      register: pbs_cli_tools
+      until: pbs_cli_tools is succeeded      # another dnf/pacman (makecache, PackageKit) may hold the lock
+      retries: 10
+      delay: 30
+
+    - name: Staging directory
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: -pbsclient
+      register: pbs_cli_tmp
+
+    - name: Keyring, InRelease, Packages
+      ansible.builtin.get_url:
+        url: "{{ item.url }}"
+        dest: "{{ pbs_cli_tmp.path }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - {url: "{{ pbs_keyring_url }}", dest: keyring.gpg}
+        - {url: "{{ pbs_apt_base }}/pbs-client/dists/{{ pbs_client_suite }}/InRelease", dest: InRelease}
+        - {url: "{{ pbs_apt_base }}/pbs-client/dists/{{ pbs_client_suite }}/main/binary-amd64/Packages", dest: Packages}
+      loop_control: { label: "{{ item.dest }}" }
+
+    - name: Keyring pin (optional)
+      ansible.builtin.stat:
+        path: "{{ pbs_cli_tmp.path }}/keyring.gpg"
+        checksum_algorithm: sha256
+      register: pbs_cli_kr
+      failed_when: pbs_keyring_sha256 | length > 0 and pbs_cli_kr.stat.checksum != pbs_keyring_sha256
+
+    - name: InRelease is signed by Proxmox
+      ansible.builtin.command: gpgv --keyring {{ pbs_cli_tmp.path }}/keyring.gpg {{ pbs_cli_tmp.path }}/InRelease
+      changed_when: false
+
+    - name: Packages index hash
+      ansible.builtin.stat:
+        path: "{{ pbs_cli_tmp.path }}/Packages"
+        checksum_algorithm: sha256
+      register: pbs_cli_pk
+
+    - name: Read InRelease
+      ansible.builtin.slurp:
+        src: "{{ pbs_cli_tmp.path }}/InRelease"
+      register: pbs_cli_inrel
+
+    # Paragraph-mode awk: the entry whose Package and Version both match, nothing else.
+    - name: Package entry for proxmox-backup-client-static {{ pbs_client_version }}
+      ansible.builtin.command:
+        argv:
+          - awk
+          - -v
+          - RS=
+          - -v
+          - want={{ pbs_client_version }}
+          - |
+            { pkg = ver = fn = sha = ""
+              n = split($0, line, "\n")
+              for (i = 1; i <= n; i++) {
+                k = line[i]; sub(/: .*/, "", k); v = line[i]; sub(/^[^:]*: /, "", v)
+                if (k == "Package") pkg = v; else if (k == "Version") ver = v
+                else if (k == "Filename") fn = v; else if (k == "SHA256") sha = v
+              }
+              if (pkg == "proxmox-backup-client-static" && ver == want) { print fn; print sha; exit }
+            }
+          - "{{ pbs_cli_tmp.path }}/Packages"
+      register: pbs_cli_entry
+      changed_when: false
+
+    - name: The index is the signed one, and has the version
+      ansible.builtin.assert:
+        that:
+          - pbs_cli_pk.stat.checksum in (pbs_cli_inrel.content | b64decode)
+          - pbs_cli_entry.stdout_lines | length == 2
+          - pbs_cli_entry.stdout_lines[0] is search('/proxmox-backup-client-static_' ~ (pbs_client_version | regex_escape) ~ '_amd64[.]deb$')
+          - pbs_cli_entry.stdout_lines[1] is match('^[0-9a-f]{64}$')
+        fail_msg: >-
+          Packages hash not in the signed InRelease, or no proxmox-backup-client-static
+          {{ pbs_client_version }} in {{ pbs_client_suite }}. Pick a listed version (pbs_client_version).
+
+    - name: Download the .deb (SHA-256 from the signed index)
+      ansible.builtin.get_url:
+        url: "{{ pbs_apt_base }}/pbs-client/{{ pbs_cli_entry.stdout_lines[0] }}"
+        dest: "{{ pbs_cli_tmp.path }}/client.deb"
+        checksum: "sha256:{{ pbs_cli_entry.stdout_lines[1] }}"
+        mode: "0644"
+
+    - name: Extract the binary from the .deb
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ pbs_cli_tmp.path }}
+        mkdir x ctl
+        # The control file must name the package we asked for.
+        bsdtar -xOf client.deb 'control.tar*' | bsdtar -xf - -C ctl
+        name=$(awk -F': ' '$1=="Package"{print $2; exit}' ctl/control)
+        [ "$name" = proxmox-backup-client-static ] || { echo "downloaded package is '$name', not proxmox-backup-client-static"; exit 1; }
+        bsdtar -xOf client.deb 'data.tar*' | bsdtar -xf - -C x
+        # Member names may or may not carry a leading "./": find the binary instead of naming it.
+        bin=$(find x -type f -path '*/bin/proxmox-backup-client' | head -1)
+        [ -n "$bin" ] || { echo "no bin/proxmox-backup-client in the package:"; find x -type f | head -50; exit 1; }
+        install -m 0755 "$bin" {{ pbs_client_bin }}
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+  always:
+    - name: Remove the staging directory
+      ansible.builtin.file:
+        path: "{{ pbs_cli_tmp.path }}"
+        state: absent
+      when: pbs_cli_tmp.path is defined
+
+- name: Client runs
+  ansible.builtin.command: "{{ pbs_client_bin }} version"
+  register: pbs_cli_now
+  changed_when: false
+
+- name: Client version
+  ansible.builtin.debug:
+    msg: "{{ pbs_cli_now.stdout | trim }}"

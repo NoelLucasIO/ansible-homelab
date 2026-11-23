@@ -1,0 +1,70 @@
+---
+# Validate inputs, derive names, and check the hypervisor has what it needs.
+- name: Check inputs
+  ansible.builtin.assert:
+    that:
+      - pbs_name is match('^[a-z][a-z0-9-]{0,62}$')
+      - pbs_ui_name is match('^[a-z][a-z0-9-]{0,62}$')
+      - pbs_ui_name != pbs_name
+      - pbs_ip | length == 0 or pbs_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+      - pbs_ip | length > 0 or pbs_use_nios | bool
+      - pbs_prefix | int >= 8
+      - pbs_prefix | int <= 30
+      - pbs_vcpus | int >= 2
+      - pbs_memory_gb | int >= 4
+      - pbs_os_disk_gb | int >= 16
+      - pbs_store_disk_gb | int >= 100
+      - pbs_root_password is defined
+      - pbs_root_password | length >= 12
+      - pbs_root_password is not search('[\r\n]')
+      - pbs_root_ssh_keys | length > 0
+    fail_msg: >-
+      Check the inputs: lowercase names (pbs_ui_name is the NPM name and must differ from pbs_name);
+      IP blank (NIOS) or IPv4, required when NIOS is off; at least 2 vCPU / 4 GB / 16 GB OS / 100 GB store;
+      pbs_root_password of 12+ characters (secret); pbs_root_ssh_keys with at least the automation key.
+  no_log: true    # the expression list includes the password
+
+- name: Derive names, disks, MAC (52:54:00 = QEMU/KVM prefix)
+  ansible.builtin.set_fact:
+    pbs_fqdn: "{{ pbs_name }}.{{ pbs_domain }}"
+    pbs_ui_fqdn: "{{ pbs_ui_name }}.{{ pbs_domain }}"
+    pbs_os_disk: "{{ pbs_disk_dir }}/{{ pbs_name }}-root.qcow2"
+    pbs_store_disk: "{{ pbs_store_disk_dir }}/{{ pbs_name }}-store.qcow2"
+    pbs_cache_disk: "{{ pbs_store_disk_dir }}/{{ pbs_name }}-cache.qcow2"
+    pbs_auto_iso: "{{ pbs_iso_work_dir }}/{{ pbs_name }}-auto.iso"
+    pbs_mac: "{{ (pbs_name ~ '-nic0') | hash('md5') | regex_replace('^(..)(..)(..).*$', '52:54:00:\\1:\\2:\\3') }}"
+
+- name: Tools on {{ inventory_hostname }}
+  ansible.builtin.command: sh -c 'for t in virt-install virsh qemu-img podman openssl; do command -v $t >/dev/null || { echo $t; exit 1; }; done'
+  register: pbs_tools
+  changed_when: false
+  failed_when: false
+
+- name: Vendor ISO present?
+  ansible.builtin.stat:
+    path: "{{ pbs_iso }}"
+    get_checksum: false
+  register: pbs_iso_st
+
+- name: Hypervisor ready
+  ansible.builtin.assert:
+    that:
+      - pbs_tools.rc == 0
+      - pbs_iso_st.stat.exists
+    fail_msg: >-
+      {{ inventory_hostname }}: need {{ pbs_iso }} (set pbs_iso in host_vars) and
+      virt-install, virsh, qemu-img, podman, openssl on PATH (missing: {{ pbs_tools.stdout | default('') }}).
+
+- name: Does the domain exist?
+  ansible.builtin.command: virsh domstate {{ pbs_name }}
+  register: pbs_domstate
+  changed_when: false
+  failed_when: false
+
+- name: Plan
+  ansible.builtin.debug:
+    msg: >-
+      {{ pbs_name }} on {{ inventory_hostname }}: {{ pbs_vcpus }} vCPU, {{ pbs_memory_gb }} GB,
+      OS {{ pbs_os_disk_gb }} GB, datastore {{ pbs_store_disk_gb }} GB ({{ pbs_store_disk }}),
+      S3 cache {{ pbs_cache_disk_gb }} GB. Domain {{ 'exists (' ~ pbs_domstate.stdout ~ ')' if pbs_domstate.rc == 0 else 'is new' }};
+      replace={{ pbs_replace | bool }}.

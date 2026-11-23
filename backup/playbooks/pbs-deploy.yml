@@ -1,0 +1,111 @@
+---
+# Proxmox Backup Server as a KVM VM, installed unattended from the vendor ISO and configured
+# through its API. Safe to rerun: an existing VM is left alone and only its configuration
+# is brought in line.
+#   ansible-playbook playbooks/pbs-deploy.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass
+# Steps: address from NIOS -> auto-install ISO (answer file + first-boot script) -> VM installs
+# and powers off -> boots from disk -> datastore, namespaces, prune/verify/GC, users, exporter
+# token, offsite (B2) through the API -> NPM proxy for the UI -> exporter, alerts, dashboard.
+- name: The hypervisor must be in the inventory
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - backup_defaults
+  tasks:
+    - name: Check pbs_kvm_host
+      ansible.builtin.assert:
+        that:
+          - pbs_kvm_host in groups['all']
+          - pbs_prom_host in groups['all']
+        fail_msg: >-
+          pbs_kvm_host ({{ pbs_kvm_host }}) and pbs_prom_host ({{ pbs_prom_host }}) must be inventory
+          hosts. Inventory hosts: {{ groups['all'] | join(', ') }}.
+
+- name: PBS VM
+  hosts: "{{ pbs_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password | default(omit) }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200, 201]
+      timeout: 60
+  roles:
+    - backup_defaults
+  tasks:
+    - name: 1. Inputs, names, hypervisor checks
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/preflight.yml"
+
+    - name: 2. Address (NIOS IPAM or static) and DNS
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/allocate_ip.yml"
+
+    - name: 3. Auto-install ISO, VM, unattended install, first boot
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/build_vm.yml"
+
+    - name: 4. Web UI through NPM with the wildcard certificate
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/npm_proxy.yml"
+      when: pbs_npm_proxy | bool
+
+# No play-level "connection: local" here: it would also apply to the tasks delegated to the
+# Prometheus host (exporter token file) and run them on the controller. The implicit localhost
+# is local anyway.
+- name: PBS configuration (API)
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - backup_defaults
+  tasks:
+    - name: Address and names from the VM play
+      ansible.builtin.set_fact:
+        pbs_addr: "{{ hostvars[pbs_kvm_host].pbs_addr }}"
+        pbs_fqdn: "{{ hostvars[pbs_kvm_host].pbs_fqdn }}"
+        pbs_ui_fqdn: "{{ hostvars[pbs_kvm_host].pbs_ui_fqdn }}"
+
+    - name: 5. Datastore, jobs, users, exporter token, offsite
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/pbs_configure.yml"
+
+- name: Monitoring on the Prometheus host
+  hosts: "{{ pbs_prom_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - backup_defaults
+  tasks:
+    - name: Names from the VM play
+      ansible.builtin.set_fact:
+        pbs_addr: "{{ hostvars[pbs_kvm_host].pbs_addr }}"
+        pbs_fqdn: "{{ hostvars[pbs_kvm_host].pbs_fqdn }}"
+
+    - name: 6. Exporter, scrape config, alert rules, dashboard
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/monitoring.yml"
+
+- name: Summary
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - backup_defaults
+  tasks:
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - >-
+            {{ pbs_fqdn }} ({{ pbs_addr }}) runs Proxmox Backup Server
+            {{ pbs_version.json.data.version | default('?') }}.{{ pbs_version.json.data.release | default('') }}
+          - >-
+            UI: {{ ('https://' ~ pbs_ui_fqdn ~ '/') if pbs_npm_proxy | bool else ('https://' ~ pbs_addr ~ ':' ~ pbs_api_port ~ '/') }}
+            (root@pam)
+          - >-
+            Datastore {{ pbs_datastore }} (namespaces {{ pbs_namespaces | join(', ') }}); prune {{ pbs_prune_schedule }},
+            verify {{ pbs_verify_schedule }}, GC {{ pbs_gc_schedule }}
+          - >-
+            {{ ('Offsite: ' ~ pbs_offsite_store ~ ' on bucket ' ~ pbs_offsite_bucket ~ ', sync ' ~ pbs_offsite_sync_schedule)
+               if pbs_offsite_enabled | bool else 'Offsite: off (pbs_offsite_enabled)' }}
+          - "Fingerprint (clients pin it): {{ pbs_fingerprint }}"
+          - "Next: playbooks/clients.yml for each host that backs up."

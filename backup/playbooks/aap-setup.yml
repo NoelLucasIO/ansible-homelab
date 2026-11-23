@@ -1,0 +1,177 @@
+---
+# Brings AAP in line with backup/ (controller API, built-in modules only). Idempotent.
+#   * credential type "PBS secrets" and credential "homelab-pbs" (filled from your vault when
+#     pbs_root_password is there; optional fields are injected only when set)
+#   * group "pbs_clients" in the inventory, with aap_pbs_clients as members
+#   * job templates "PBS deploy" and "Backup clients", with the machine, NIOS/NPM and PBS credentials
+#
+#   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @../site-vars.yml \
+#     -e @playbooks/group_vars/all/vault.yml --ask-vault-pass
+- name: AAP setup for backup
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - backup_defaults
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    aap_inventory: homelab
+    aap_machine_credential: homelab-ssh
+    aap_nios_credential: ipam-vm secrets          # nios_api_password, npm_identity, npm_secret
+    aap_pbs_credential: homelab-pbs
+    aap_pbs_clients: [fedora.example.com]         # inventory host names
+    aap_templates:
+      - name: PBS deploy
+        playbook: backup/playbooks/pbs-deploy.yml
+        description: Proxmox Backup Server VM (unattended from the ISO) and its configuration through the API
+        credentials: ["{{ aap_machine_credential }}", "{{ aap_nios_credential }}", "{{ aap_pbs_credential }}"]
+      - name: Backup clients
+        playbook: backup/playbooks/clients.yml
+        description: proxmox-backup-client, tokens, encryption key and nightly timers on the pbs_clients hosts
+        credentials: ["{{ aap_machine_credential }}", "{{ aap_pbs_credential }}"]
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 202, 204]
+  tasks:
+    - name: Settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+        fail_msg: "Pass -e @../hcp-vm/aap.local.yml (aap_url, aap_token) -e @../site-vars.yml."
+        quiet: true
+
+    - name: Project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/?name={{ aap_project | urlencode }}"
+      register: ab_project
+
+    - name: Sync the project (the templates need backup/ in it)
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ ab_project.json.results[0].id }}/update/"
+        method: POST
+      register: ab_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ ab_sync.json.id }}/"
+      register: ab_sync_job
+      until: ab_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+      failed_when: ab_sync_job.json.status != 'successful'
+
+    - name: Inventory
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/?name={{ aap_inventory | urlencode }}"
+      register: ab_inv
+
+    - name: Ids
+      ansible.builtin.set_fact:
+        ab_org: "{{ ab_project.json.results[0].organization }}"
+        ab_project_id: "{{ ab_project.json.results[0].id }}"
+        ab_inv_id: "{{ ab_inv.json.results[0].id }}"
+
+    # --- Credential type and credential -----------------------------------------------
+    - name: Credential type exists? PBS secrets
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ 'PBS secrets' | urlencode }}"
+      register: ab_ct_q
+
+    - name: Create credential type PBS secrets
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/"
+        method: POST
+        body:
+          name: PBS secrets
+          description: Proxmox Backup Server root password, client encryption key, offsite (B2) keys
+          kind: cloud
+          inputs:
+            fields:
+              - {id: pbs_root_password, label: PBS root password, type: string, secret: true}
+              - {id: pbs_client_encryption_key, label: Client encryption key (JSON), type: string, secret: true, multiline: true}
+              - {id: pbs_offsite_access_key, label: Offsite S3 access key (B2 keyID), type: string}
+              - {id: pbs_offsite_secret_key, label: Offsite S3 secret key (B2 applicationKey), type: string, secret: true}
+            required: [pbs_root_password]
+          injectors:
+            extra_vars:
+              pbs_root_password: !unsafe "{{ pbs_root_password }}"
+              pbs_client_encryption_key: !unsafe "{{ pbs_client_encryption_key | default('') }}"
+              pbs_offsite_access_key: !unsafe "{{ pbs_offsite_access_key | default('') }}"
+              pbs_offsite_secret_key: !unsafe "{{ pbs_offsite_secret_key | default('') }}"
+      register: ab_ct_new
+      when: ab_ct_q.json.count == 0
+      changed_when: true
+
+    - name: Credential exists? {{ aap_pbs_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ aap_pbs_credential | urlencode }}"
+      register: ab_cred_q
+
+    - name: Create or update the credential from the vault, {{ aap_pbs_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/{{ (ab_cred_q.json.results[0].id ~ '/') if ab_cred_q.json.count else '' }}"
+        method: "{{ 'PATCH' if ab_cred_q.json.count else 'POST' }}"
+        body:
+          name: "{{ aap_pbs_credential }}"
+          credential_type: "{{ (ab_ct_new.json.id if ab_ct_q.json.count == 0 else ab_ct_q.json.results[0].id) | int }}"
+          organization: "{{ ab_org | int }}"
+          inputs: >-
+            {{ {'pbs_root_password': pbs_root_password,
+                'pbs_client_encryption_key': pbs_client_encryption_key | default(''),
+                'pbs_offsite_access_key': pbs_offsite_access_key | default(''),
+                'pbs_offsite_secret_key': pbs_offsite_secret_key | default('')} | dict2items
+               | selectattr('value') | items2dict }}
+      when: pbs_root_password | default('') | length > 0
+      changed_when: true
+      no_log: true
+
+    # --- Group pbs_clients --------------------------------------------------------------
+    - name: Group exists? pbs_clients
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ ab_inv_id }}/groups/?name=pbs_clients"
+      register: ab_grp_q
+
+    - name: Create group pbs_clients
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ ab_inv_id }}/groups/"
+        method: POST
+        body: {name: pbs_clients, description: Hosts that back up to Proxmox Backup Server (backup/clients.yml)}
+      register: ab_grp_new
+      when: ab_grp_q.json.count == 0
+      changed_when: true
+
+    - name: Host ids
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/{{ ab_inv_id }}/hosts/?name={{ item | urlencode }}"
+      loop: "{{ aap_pbs_clients }}"
+      register: ab_hosts
+
+    - name: Hosts in pbs_clients
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/groups/{{ ab_grp_new.json.id if ab_grp_q.json.count == 0 else ab_grp_q.json.results[0].id }}/hosts/"
+        method: POST
+        body: {id: "{{ item.json.results[0].id }}"}
+      loop: "{{ ab_hosts.results | selectattr('json.count', 'gt', 0) | list }}"
+      loop_control: { label: "{{ item.item }}" }
+      changed_when: false
+
+    - name: Not in the inventory (skipped)
+      ansible.builtin.debug:
+        msg: "{{ ab_hosts.results | selectattr('json.count', 'eq', 0) | map(attribute='item') | list }}"
+      when: ab_hosts.results | selectattr('json.count', 'eq', 0) | list | length > 0
+
+    # --- Job templates ---------------------------------------------------------------------
+    - name: Job templates
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_template.yml"
+      loop: "{{ aap_templates }}"
+      loop_control: { loop_var: ab_t, label: "{{ ab_t.name }}" }

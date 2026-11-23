@@ -1,0 +1,66 @@
+---
+# One API token per host (backup@pbs!<host>), DatastoreBackup on the datastore only: a host can
+# write and read its own backup groups, nothing else, and can't delete or prune. The secret is
+# shown once by PBS and kept only in the host's client.env; a missing file means a new token.
+- name: Is client.env present?
+  ansible.builtin.stat:
+    path: "{{ pbs_client_conf_dir }}/client.env"
+  register: pbs_env_st
+
+- name: New token for {{ inventory_hostname_short }}
+  when: not pbs_env_st.stat.exists or pbs_rotate_tokens | default(false) | bool
+  block:
+    - name: Drop the old token (if any)
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/users/{{ pbs_client_user | urlencode }}/token/{{ pbs_token_name }}"
+        method: DELETE
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        status_code: [200, 400, 404, 500]
+      delegate_to: localhost
+      become: false
+      changed_when: false
+
+    - name: Create the token, {{ pbs_client_user ~ '!' ~ pbs_token_name }}
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/users/{{ pbs_client_user | urlencode }}/token/{{ pbs_token_name }}"
+        method: POST
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body: {comment: "backup client {{ inventory_hostname }}"}
+        return_content: true
+      delegate_to: localhost
+      become: false
+      register: pbs_tok
+      changed_when: true
+      no_log: true
+
+    - name: Token ACL (DatastoreBackup on {{ pbs_datastore }})
+      ansible.builtin.uri:
+        url: "{{ pbs_api }}/access/acl"
+        method: PUT
+        headers: "{{ pbs_headers }}"
+        validate_certs: "{{ pbs_validate_certs | bool }}"
+        body_format: json
+        body: {path: "/datastore/{{ pbs_datastore }}", role: DatastoreBackup, auth-id: "{{ pbs_client_user }}!{{ pbs_token_name }}", propagate: true}
+      delegate_to: localhost
+      become: false
+      changed_when: true
+
+    - name: Write client.env
+      ansible.builtin.copy:
+        dest: "{{ pbs_client_conf_dir }}/client.env"
+        mode: "0600"
+        content: |
+          # Managed by Ansible (backup/clients). Token secret: delete this file and rerun to rotate.
+          PBS_REPOSITORY='{{ pbs_client_user }}!{{ pbs_token_name }}@{{ pbs_server }}:{{ pbs_api_port }}:{{ pbs_datastore }}'
+          PBS_PASSWORD='{{ pbs_tok.json.data.value }}'
+          PBS_FINGERPRINT='{{ pbs_fingerprint }}'
+      no_log: true
+
+- name: Fingerprint in client.env is current
+  ansible.builtin.lineinfile:
+    path: "{{ pbs_client_conf_dir }}/client.env"
+    regexp: '^PBS_FINGERPRINT='
+    line: "PBS_FINGERPRINT='{{ pbs_fingerprint }}'"

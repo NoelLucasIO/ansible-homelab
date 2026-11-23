@@ -1,0 +1,38 @@
+---
+# Copy to inventory.yml (git-ignored). In AAP these are host/inventory variables.
+all:
+  hosts:
+    fedora:                                   # hypervisor, Prometheus host, and a client
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3
+      pbs_vm_backup_enabled: true
+      pbs_vm_backup_domains: [vm1, vm2]
+      pbs_vm_backup_dir: /srv/backup/vm
+      pbs_host_backup_paths:
+        - {name: etc, path: /etc}
+        - {name: home, path: /home}
+        - {name: srv, path: /srv}
+      # Patterns are gitignore-style and apply to every archive; a leading "/" anchors at the
+      # archive's root (so "/prometheus/data" is /srv/prometheus/data in the srv archive).
+      pbs_host_backup_extra_excludes: ["/prometheus/data", "/postgresql/data", "/vm"]
+      pbs_pg_dumps: [{container: postgres, user: postgres, owner: CHANGE_ME}]
+    workstation:
+      ansible_host: 192.0.2.50
+      pbs_host_backup_paths: [{name: etc, path: /etc}, {name: home, path: /home}]
+  children:
+    pbs_clients:
+      hosts:
+        fedora:
+        workstation:
+  vars:
+    pbs_kvm_host: fedora
+    pbs_prom_host: fedora
+    pbs_domain: example.com
+    pbs_network: 192.0.2.0/24
+    pbs_gateway: 192.0.2.1
+    pbs_dns: 192.0.2.1
+    pbs_iso: /srv/iso/proxmox-backup-server_4.2-1.iso
+    pbs_root_ssh_keys: ["ssh-ed25519 AAAA... automation@example.com"]
+    nios_ip: 192.0.2.25
+    npm_api: http://192.0.2.45:81/api
+    npm_ip: 192.0.2.45

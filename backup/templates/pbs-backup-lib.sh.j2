@@ -1,0 +1,49 @@
+# {{ ansible_managed }} (backup/clients) - sourced by the pbs-backup-* jobs.
+# Connection settings (token, fingerprint) and the encryption key live in {{ pbs_client_conf_dir }} (root 0700).
+set -o pipefail
+CONF={{ pbs_client_conf_dir }}
+STATE={{ pbs_client_state_dir }}
+TEXTFILE={{ pbs_client_textfile_dir }}
+PBC={{ pbs_client_bin }}
+# shellcheck disable=SC1091
+. "$CONF/client.env"
+export PBS_REPOSITORY PBS_PASSWORD PBS_FINGERPRINT
+KEYARGS=()
+[ -f "$CONF/encryption-key.json" ] && KEYARGS=(--keyfile "$CONF/encryption-key.json")
+HOST=$(hostname -s)
+mkdir -p "$STATE"
+
+log() { echo "$*"; }
+
+# metric <kind> <target> <rc> <start> <end>: one state file per target, merged into <kind>.prom
+metric() {
+  local kind=$1 target=$2 rc=$3 start=$4 end=$5 f="$STATE/$1.$2.state" last_ok=0
+  [ -f "$f" ] && last_ok=$(awk '/^ok /{print $2}' "$f")
+  [ "$rc" -eq 0 ] && last_ok=$end
+  printf 'ok %s\nrun %s\nrc %s\ndur %s\n' "${last_ok:-0}" "$end" "$rc" "$((end - start))" > "$f"
+  [ -d "$TEXTFILE" ] || return 0
+  local tmp
+  tmp=$(mktemp "$TEXTFILE/.pbs_backup_$kind.XXXXXX")
+  {
+    echo "# HELP pbs_backup_last_success_timestamp_seconds Last run that finished with exit 0."
+    echo "# TYPE pbs_backup_last_success_timestamp_seconds gauge"
+    echo "# HELP pbs_backup_last_run_timestamp_seconds Last run, any result."
+    echo "# TYPE pbs_backup_last_run_timestamp_seconds gauge"
+    echo "# HELP pbs_backup_last_exit_code Exit code of the last run (0 = ok)."
+    echo "# TYPE pbs_backup_last_exit_code gauge"
+    echo "# HELP pbs_backup_duration_seconds Duration of the last run."
+    echo "# TYPE pbs_backup_duration_seconds gauge"
+    for s in "$STATE/$kind".*.state; do
+      [ -f "$s" ] || continue
+      local t=${s#"$STATE/$kind."}; t=${t%.state}
+      local l="kind=\"$kind\",target=\"$t\""
+      awk -v l="$l" '
+        /^ok /  {print "pbs_backup_last_success_timestamp_seconds{" l "} " $2}
+        /^run / {print "pbs_backup_last_run_timestamp_seconds{" l "} " $2}
+        /^rc /  {print "pbs_backup_last_exit_code{" l "} " $2}
+        /^dur / {print "pbs_backup_duration_seconds{" l "} " $2}' "$s"
+    done
+  } > "$tmp"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$TEXTFILE/pbs_backup_$kind.prom"
+}

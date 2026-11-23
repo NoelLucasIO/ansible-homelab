@@ -1,0 +1,37 @@
+#!/bin/bash
+# {{ ansible_managed }} (backup/clients)
+# Weekly restore test: restores the newest "etc" archive of this host from PBS into a scratch
+# directory (decrypting with the shared key) and compares files that haven't changed since that
+# backup with the live ones. A failure here means restores don't work, whatever the jobs say.
+# shellcheck disable=SC1091
+. {{ pbs_client_lib_dir }}/lib.sh
+start=$(date +%s); rc=0
+scratch=$(mktemp -d /var/tmp/pbs-restore-test.XXXXXX)
+trap 'rm -rf "$scratch"' EXIT
+
+export H=$HOST
+last=$("$PBC" list --ns hosts --output-format json \
+       | python3 -c 'import json,sys,os; g=[x for x in json.load(sys.stdin) if x["backup-id"]==os.environ["H"]]; print(g[0]["last-backup"] if g else 0)' 2>/dev/null) || last=0
+if [ "${last:-0}" -eq 0 ]; then
+  log "ERROR: no host backup of $HOST in PBS yet"; rc=2
+else
+  log "restore host/$HOST (newest, $(date -d @"$last" -Is)) etc.pxar -> $scratch"
+  if "$PBC" restore --ns hosts "host/$HOST" etc.pxar "$scratch/etc" "${KEYARGS[@]}"; then
+    n=$(find "$scratch/etc" -type f | wc -l)
+    checked=0; bad=0
+    while read -r f; do
+      rel=${f#/etc/}
+      [ -f "$scratch/etc/$rel" ] || { log "missing in restore: $f"; bad=$((bad+1)); continue; }
+      cmp -s "$f" "$scratch/etc/$rel" || { log "differs: $f"; bad=$((bad+1)); }
+      checked=$((checked+1))
+    done < <(find /etc -xdev -type f -readable ! -newermt "@$last" -size -1M 2>/dev/null | shuf -n 50)
+    log "restored $n files; compared $checked unchanged files, $bad bad"
+    { [ "$n" -gt 0 ] && [ "$checked" -gt 0 ] && [ "$bad" -eq 0 ]; } || rc=6
+  else
+    rc=5
+  fi
+fi
+end=$(date +%s)
+metric restore "$HOST" "$rc" "$start" "$end"
+log "restore test rc=$rc in $((end - start))s"
+exit "$rc"

@@ -1,0 +1,11 @@
+# {{ ansible_managed }} (backup/clients)
+[Unit]
+Description=PBS: KVM image backups (virtnbdbackup) (nightly)
+
+[Timer]
+OnCalendar={{ pbs_vm_backup_calendar }}
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

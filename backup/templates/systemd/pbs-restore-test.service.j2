@@ -1,0 +1,12 @@
+# {{ ansible_managed }} (backup/clients)
+[Unit]
+Description=PBS: weekly restore test (newest /etc archive vs live files)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart={{ pbs_client_lib_dir }}/pbs-restore-test
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h

@@ -1,0 +1,23 @@
+---
+# Ticket for root@pam: sets pbs_api and pbs_headers (cookie + CSRF token) for later calls.
+- name: PBS API base
+  ansible.builtin.set_fact:
+    pbs_api: "https://{{ pbs_addr }}:{{ pbs_api_port }}/api2/json"
+
+- name: Log in to PBS as root@pam
+  ansible.builtin.uri:
+    url: "{{ pbs_api }}/access/ticket"
+    method: POST
+    body_format: form-urlencoded
+    body: {username: root@pam, password: "{{ pbs_root_password }}"}
+    validate_certs: "{{ pbs_validate_certs | bool }}"
+    return_content: true
+  register: pbs_ticket
+  no_log: true
+
+- name: Auth headers
+  ansible.builtin.set_fact:
+    pbs_headers:
+      Cookie: "PBSAuthCookie={{ pbs_ticket.json.data.ticket | urlencode }}"
+      CSRFPreventionToken: "{{ pbs_ticket.json.data.CSRFPreventionToken }}"
+  no_log: true

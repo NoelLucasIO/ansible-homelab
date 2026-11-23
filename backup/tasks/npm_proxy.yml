@@ -1,0 +1,101 @@
+---
+# PBS web UI at https://<pbs_ui_name>.<domain> through NPM, using NPM's wildcard certificate
+# (the key never leaves NPM) and the LAN-only access list. Same pattern as ipam-vm's Cockpit proxy.
+- name: Log in to NPM
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/tokens"
+    user: ""          # don't inherit the NIOS login from module_defaults
+    password: ""
+    force_basic_auth: false
+    method: POST
+    body: {identity: "{{ npm_identity }}", secret: "{{ npm_secret }}"}
+    status_code: [200]
+  register: pbs_npm_login
+  no_log: true
+
+- name: NPM auth header
+  ansible.builtin.set_fact:
+    pbs_npm_headers: {Authorization: "Bearer {{ pbs_npm_login.json.token }}"}
+  no_log: true
+
+- name: Existing proxy hosts
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    user: ""
+    password: ""
+    force_basic_auth: false
+    body_format: raw  # no body; the json default sends 'null', which NPM rejects (400)
+    headers: "{{ pbs_npm_headers }}"
+  register: pbs_npm_hosts
+
+- name: Create the proxy host
+  when: pbs_npm_hosts.json | selectattr('domain_names', 'contains', pbs_ui_fqdn) | list | length == 0
+  block:
+    - name: Certificates
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/certificates"
+        user: ""
+        password: ""
+        force_basic_auth: false
+        body_format: raw
+        headers: "{{ pbs_npm_headers }}"
+      register: pbs_npm_certs
+
+    - name: Access lists
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/access-lists"
+        user: ""
+        password: ""
+        force_basic_auth: false
+        body_format: raw
+        headers: "{{ pbs_npm_headers }}"
+      register: pbs_npm_acls
+
+    - name: NPM proxy host to the PBS web UI, {{ pbs_ui_fqdn }}
+      ansible.builtin.uri:
+        url: "{{ npm_api }}/nginx/proxy-hosts"
+        user: ""
+        password: ""
+        force_basic_auth: false
+        method: POST
+        headers: "{{ pbs_npm_headers }}"
+        status_code: [200, 201]
+        body:
+          domain_names: ["{{ pbs_ui_fqdn }}"]
+          forward_scheme: https
+          forward_host: "{{ pbs_addr }}"
+          forward_port: "{{ pbs_api_port | int }}"
+          certificate_id: "{{ (pbs_npm_certs.json | selectattr('domain_names', 'contains', npm_cert_domain) | sort(attribute='expires_on') | last).id | int }}"
+          access_list_id: "{{ (pbs_npm_acls.json | selectattr('name', 'equalto', npm_access_list_name) | first).id | int }}"
+          ssl_forced: true
+          http2_support: true
+          block_exploits: true
+          allow_websocket_upgrade: true
+          caching_enabled: false
+          hsts_enabled: false
+          hsts_subdomains: false
+          advanced_config: ""
+          locations: []
+          meta: {letsencrypt_agree: false, dns_challenge: false}
+      changed_when: true
+
+- name: A record pointing at NPM, {{ pbs_ui_fqdn }}
+  when: pbs_use_nios | bool
+  block:
+    - name: Look up in NIOS, {{ pbs_ui_fqdn }}
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a?name={{ pbs_ui_fqdn }}&view={{ pbs_nios_view }}"
+      register: pbs_ui_a
+
+    - name: Create it
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a"
+        method: POST
+        status_code: [201]
+        body:
+          name: "{{ pbs_ui_fqdn }}"
+          ipv4addr: "{{ npm_ip }}"
+          view: "{{ pbs_nios_view }}"
+          comment: "{{ pbs_owner_comment }}"
+      when: pbs_ui_a.json | length == 0
+      changed_when: true
