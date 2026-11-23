@@ -98,7 +98,9 @@ quota (85%), namespace quota none, versioning allowed (`hcp_tenant_versioning`),
 compliance not (`hcp_tenant_compliance`; neither can be turned off later), and its first user
 (`hcp_tenant_admin_user`). HCP gives that user only the Security role, so the play sets its roles
 to `hcp_tenant_admin_roles` with `admin jvm userAccount update <tenant>`: Monitor, Administrator
-(`SYSTEM`), Security and Compliance by default. An existing tenant keeps its user's password;
+(`SYSTEM`), Security and Compliance by default. It also ticks *Allow system-level users to
+manage this tenant and search its namespaces* (`hcp_tenant_admin_allowed`,
+`admin jvm tenant update <tenant> --administrationAllowed true`). An existing tenant keeps its user's password;
 quotas and roles are brought in line. Then its namespace defaults, with
 `admin jvm namespaceDefaults update`:
 
@@ -177,7 +179,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 |---|---|
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
-| HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, security account password (for MAPI) |
+| HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
 | HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server to register with |
 | HCP post-install | all of the above once; a blank tenant name or allow list skips that step |
 

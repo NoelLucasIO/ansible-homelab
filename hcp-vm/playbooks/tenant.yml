@@ -6,7 +6,9 @@
 # The tenant is made through MAPI as the system 'security' account (needs MAPI on, see
 # first_login.yml): MAPI is the documented way to say "namespace quota: none". HCP gives its
 # first user (hcp_tenant_admin_user) only the Security role; the play then sets that user's
-# roles to hcp_tenant_admin_roles (Monitor, Administrator, Security, Compliance by default).
+# roles to hcp_tenant_admin_roles (Monitor, Administrator, Security, Compliance by default),
+# and lets system-level users manage the tenant and search its namespaces
+# (hcp_tenant_admin_allowed).
 # Namespace defaults are set with HCP's `admin jvm namespaceDefaults` over the back-end:
 # protocol optimization (cloud protocols only) and directory usage (balanced).
 # Rerun-safe: an existing tenant keeps its admin user's password; quotas and roles are brought
@@ -168,6 +170,24 @@
           when: (hcp_t_admin.roles.split(',') | map('trim') | reject('equalto', '') | sort | list) != hcp_t_roles
           changed_when: true
 
+        # "Allow system-level users to manage this tenant and search its namespaces"
+        - name: Tenant settings
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' tenant list ' ~ hcp_tenant_name ~ ' | ' ~ hcp_to_json] }}"
+          vars:
+            hcp_to_json: >-
+              python -c 'import sys,ast,json; print(json.dumps(ast.literal_eval(sys.stdin.read())))'
+          register: hcp_t_cfg
+          changed_when: false
+
+        - name: System-level management {{ 'allowed' if hcp_tenant_admin_allowed | bool else 'not allowed' }}
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' tenant update ' ~ hcp_tenant_name ~ ' --administrationAllowed '
+                 ~ (hcp_tenant_admin_allowed | bool | string | lower)] }}
+          when: (hcp_t_cfg.stdout | from_json).tenant.isAdministrationAllowed | bool != hcp_tenant_admin_allowed | bool
+          changed_when: true
+
         # admin jvm prints the defaults as Python literals; compare before and after.
         - name: Namespace defaults, before
           ansible.builtin.command:
@@ -204,7 +224,8 @@
           - >-
             {{ hcp_clname }}: tenant '{{ hcp_tenant_name }}' {{ 'created' if hcp_t.status == 404 else 'present' }},
             hard quota {{ hcp_quota_str }}, soft {{ hcp_tenant_soft_quota }}%, namespace quota none;
-            '{{ hcp_tenant_admin_user }}' has roles {{ hcp_t_roles | join(',') }}.
+            '{{ hcp_tenant_admin_user }}' has roles {{ hcp_t_roles | join(',') }}; system-level users
+            {{ 'may' if hcp_tenant_admin_allowed | bool else 'may not' }} manage it and search its namespaces.
           - "New namespaces default to protocol optimization {{ hcp_ns_cloud_optimized | upper }}, directory usage {{ hcp_ns_directory_usage | upper }}."
           - "Tenant console: https://{{ hcp_tenant_name }}.{{ hcp_clname }}:8000"
           - "{{ hcp_nsd_after.stdout_lines }}"

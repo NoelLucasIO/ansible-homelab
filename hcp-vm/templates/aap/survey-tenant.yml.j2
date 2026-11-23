@@ -45,6 +45,13 @@
   required: true
   default: {{ (hcp_tenant_admin_roles if hcp_tenant_admin_roles is string else hcp_tenant_admin_roles | join('\n')) | to_json }}
   choices: {{ hcp_tenant_role_choices | to_json }}
+- question_name: Allow system-level users to manage this tenant
+  question_description: The tenant's "Allow system-level users to manage this tenant and search its namespaces"
+  variable: hcp_tenant_admin_allowed
+  type: multiplechoice
+  required: true
+  default: {{ hcp_tenant_admin_allowed | string | lower | to_json }}
+  choices: ["true", "false"]
 {% if not opt %}
 - question_name: Security account password
   question_description: The 'security' account creates the tenant through MAPI

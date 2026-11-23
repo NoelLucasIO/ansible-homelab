@@ -92,6 +92,7 @@ hcp_tenant_admin_user: admin            # the tenant's first user; HCP makes it 
 # Administrator.
 hcp_tenant_role_choices: [MONITOR, SYSTEM, SECURITY, COMPLIANCE]
 hcp_tenant_admin_roles: "{{ hcp_tenant_role_choices }}"   # list or comma-separated string
+hcp_tenant_admin_allowed: true          # "Allow system-level users to manage this tenant and search its namespaces"
 # Tenant features its namespaces may use. HCP won't turn either off again once on.
 hcp_tenant_versioning: true             # object versioning (S3 bucket versioning)
 hcp_tenant_compliance: false            # retention compliance (enterprise/compliance mode, holds)
