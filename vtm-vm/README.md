@@ -103,5 +103,6 @@ be overridden from the inventory.
 - The deploy's last check is `/api/tm/<newest>/status/local_tm/state`, which answers with an error
   whenever the admin server can't reach the traffic manager.
 - Not yet run on an Arch/CachyOS hypervisor (package names per `vtm_hypervisor_packages`).
-- Not automated: anything after the Initial Configuration, such as traffic IP groups, pools,
-  virtual servers and syslog targets. With REST on, those can be a follow-up playbook.
+- After the Initial Configuration, [`vtm-config`](../vtm-config/README.md) takes over through the REST API:
+  its own API user, NTP, event syslog to Loki, Analytics Export to Splunk HEC and scheduled backups.
+  Certificates and services (traffic IP groups, pools, virtual servers) are next.
