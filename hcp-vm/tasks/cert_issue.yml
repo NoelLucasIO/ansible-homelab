@@ -79,6 +79,13 @@
       changed_when: true
 
     # The pki metrics alert (PKIIssuedCertExpiring) watches <issued dir>/<name>/*.crt.
+    - name: Directory for its records
+      ansible.builtin.file:
+        path: "{{ hcp_pki_issued_dir }}/hcp-{{ hcp_cluster }}"
+        state: directory
+        mode: "0700"
+      when: hcp_pki_issued_dir | length > 0
+
     - name: Record the public certificate for expiry alerts
       ansible.builtin.copy:
         src: "{{ hcp_pki_htmp.path }}/c.crt"
