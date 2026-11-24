@@ -150,7 +150,7 @@ left alone. HCP's own `admin jvm userAccount create|update` over the back-end. A
 | Tenant, service account name | `hcp_tenant_name`, `hcp_svc_user` | |
 | Password (used only at creation) | `hcp_svc_password` | |
 | Namespaces | `hcp_svc_namespaces` | |
-| Data access permissions | `hcp_svc_permissions` | read, write, delete, search |
+| Data access permissions | `hcp_svc_permissions` | browse, read, write, delete, search |
 | Password hash scheme | `hcp_svc_hash_scheme` | MD5 (HCP's default) |
 
 A rerun brings the listed namespaces' permissions in line and keeps the account's permissions on

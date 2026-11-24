@@ -147,7 +147,7 @@ hcp_svc_user: ""                        # local tenant user with no roles, data 
 hcp_svc_fullname: ""                    # blank = the username
 # hcp_svc_password: survey or vault, never committed; used only when the account is created
 hcp_svc_namespaces: []                  # namespaces in hcp_tenant_name (list or comma-separated)
-hcp_svc_permissions: [read, write, delete, search]  # browse read write delete purge search privileged read_acl write_acl change_owner
+hcp_svc_permissions: [browse, read, write, delete, search]  # browse read write delete purge search privileged read_acl write_acl change_owner
 hcp_svc_hash_scheme: MD5                # MD5 (HCP's default) | SHA-256: how the S3 secret key is derived
 
 # --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
