@@ -42,12 +42,16 @@ groups:
         labels: { severity: warning }
         annotations:
           summary: "{% raw %}PBS datastore {{ $labels.datastore }} is {{ $value | printf \"%.0f\" }}% full{% endraw %}"
+      # pbs_snapshot_vm_last_verify is the verify STATE of a group's newest snapshot (1 = ok, 0 = not
+      # verified or failed), not a time. The verify job runs nightly on the local store, so a newest
+      # snapshot still unverified after 30 h means the job isn't running or the snapshot fails it.
+      # The offsite store is verified monthly by design: not covered here.
       - alert: PBSVerifyOverdue
-        expr: (time() - pbs_snapshot_vm_last_verify) > 45 * 86400 and pbs_snapshot_vm_last_verify > 0
-        for: 1h
-        labels: { severity: info }
+        expr: pbs_snapshot_vm_last_verify{datastore="{{ pbs_datastore }}"} != 1
+        for: 30h
+        labels: { severity: warning }
         annotations:
-          summary: "{% raw %}{{ $labels.vm_id }} in {{ $labels.datastore }}/{{ $labels.namespace }}: newest verify over 45 days old{% endraw %}"
+          summary: "{% raw %}{{ $labels.vm_id }} in {{ $labels.datastore }}/{{ $labels.namespace }}: newest snapshot not verified OK for 30 h{% endraw %}"
 {% if pbs_offsite_enabled | bool %}
       - alert: OffsiteBehind
         expr: |
