@@ -96,13 +96,32 @@
           failed_when: hcp_nsx_new.rc != 0 or hcp_nsx_new.stdout is search('(?i)exception|error|usage:|cannot|invalid')
           when: not hcp_nsx_exists | bool
 
+        # admin jvm prints Python literals; the node's python turns them into JSON.
         - name: Settings, before
           ansible.builtin.command:
-            argv: "{{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' --namespace ' ~ hcp_namespace_name] }}"
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' --namespace '
+                 ~ hcp_namespace_name ~ ' | ' ~ hcp_to_json] }}
+          vars:
+            hcp_to_json: >-
+              python -c 'import sys,ast,json; print(json.dumps(ast.literal_eval(sys.stdin.read())))'
           register: hcp_nsx_before
           changed_when: false
 
-        - name: Update quota, owner, versioning and S3 overwrite
+        # Only what the update sets; HCP bumps 'version' on every update, so whole listings differ.
+        - name: What differs
+          ansible.builtin.set_fact:
+            hcp_nsx_cur: "{{ (hcp_nsx_before.stdout | from_json).namespace }}"
+            hcp_nsx_diff: >-
+              {{ [] + (['quota'] if ns.hardQuota | int != hcp_nsx_bytes | int or ns.softQuota | int != hcp_namespace_soft_quota | int else [])
+                 + (['owner'] if ns.owner | default('') != hcp_nsx_owner else [])
+                 + (['versioning'] if ns.versioningEnabled | bool != hcp_namespace_versioning | bool else [])
+                 + (['S3 overwrite'] if ns.unversionedOverwriteEnabled | bool != hcp_namespace_s3_overwrite | bool else [])
+                 + (['ACLs'] if hcp_namespace_s3 | bool and not ns.aclsEnabled | bool else []) }}
+          vars:
+            ns: "{{ (hcp_nsx_before.stdout | from_json).namespace }}"
+
+        - name: Update {{ hcp_nsx_diff | join(', ') if hcp_nsx_diff | length > 0 else 'nothing' }}
           ansible.builtin.command:
             argv: >-
               {{ hcp_bssh + [hcp_admin ~ ' namespace update --tenant ' ~ hcp_tenant_name
@@ -113,21 +132,15 @@
                  ~ ' --s3UnversionedOverwrite ' ~ hcp_namespace_s3_overwrite | bool | string | lower
                  ~ (' --enableACLs true' if hcp_namespace_s3 | bool else '')] }}
           register: hcp_nsx_upd
-          changed_when: false
+          changed_when: true
           failed_when: hcp_nsx_upd.rc != 0 or hcp_nsx_upd.stdout is search('(?i)exception|error|usage:|cannot|invalid')
-          when: hcp_nsx_exists | bool
-
-        - name: Settings, after
-          ansible.builtin.command:
-            argv: "{{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' --namespace ' ~ hcp_namespace_name] }}"
-          register: hcp_nsx_after
-          changed_when: hcp_nsx_exists | bool and hcp_nsx_after.stdout != hcp_nsx_before.stdout
+          when: hcp_nsx_exists | bool and hcp_nsx_diff | length > 0
 
         # Protocols tab > HTTP(S): settings of the namespace's own location (its UUID). The
         # "allows.auth" keys mean anonymous access allowed (false = authenticated access only).
         - name: Namespace UUID
           ansible.builtin.set_fact:
-            hcp_nsx_uuid: "{{ hcp_nsx_after.stdout | regex_search(\"'uuid'\\s*:\\s*'([0-9a-f-]{36})'\", '\\1') | first }}"
+            hcp_nsx_uuid: "{{ hcp_nsx_cur.uuid }}"
             hcp_nsx_proto:
               - {key: gateway.https.enabled, value: "{{ hcp_namespace_https | bool | string | lower }}"}
               - {key: gateway.http.enabled, value: "{{ hcp_namespace_http | bool | string | lower }}"}
