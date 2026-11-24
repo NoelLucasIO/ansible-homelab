@@ -2,7 +2,7 @@
 # workflow) the tenant is optional: a blank name skips the step.
 {% set opt = chain | default(false) %}
 - question_name: Initial tenant name
-  question_description: "{{ 'Blank = no tenant. ' if opt else '' }}Letters, digits, hyphens. New namespaces default to cloud protocols only, balanced directory usage; namespace quota: none."
+  question_description: "{{ 'Blank = no tenant. ' if opt else '' }}Letters, digits, hyphens. New namespaces default to cloud protocols only, unbalanced directory usage; namespace quota: none."
   variable: hcp_tenant_name
   type: text
   required: {{ (not opt) | lower }}

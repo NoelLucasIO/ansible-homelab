@@ -128,7 +128,7 @@ quotas and roles are brought in line. Then its namespace defaults, with
 | Console setting | Value | Variable |
 |---|---|---|
 | Protocol optimization | cloud protocols only (`CLOUD`) | `hcp_ns_cloud_optimized` |
-| Directory usage | balanced (`BALANCED`) | `hcp_ns_directory_usage` |
+| Directory usage | unbalanced (`UNBALANCED`; needs `CLOUD`) | `hcp_ns_directory_usage` |
 
 ### node_exporter.yml
 

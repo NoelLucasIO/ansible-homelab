@@ -105,7 +105,7 @@ hcp_tenant_compliance: false            # retention compliance (enterprise/compl
 # Namespace defaults for the tenant. These are the console's "Protocol optimization" and
 # "Directory usage" choices.
 hcp_ns_cloud_optimized: CLOUD           # CLOUD = cloud protocols only | ALL = all protocols | DEFAULT
-hcp_ns_directory_usage: BALANCED        # BALANCED | UNBALANCED (non-flat) | DEFAULT
+hcp_ns_directory_usage: UNBALANCED      # UNBALANCED | BALANCED | DEFAULT; UNBALANCED needs CLOUD
 
 # --- Physical-node services a VM can't run (vm_services.yml) ---------------------------
 hcp_vm_disable_units: [ipmi.service]    # no BMC in a VM: fails every boot; [] = leave all alone

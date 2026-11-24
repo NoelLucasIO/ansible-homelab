@@ -10,7 +10,7 @@
 # and lets system-level users manage the tenant and search its namespaces
 # (hcp_tenant_admin_allowed).
 # Namespace defaults are set with HCP's `admin jvm namespaceDefaults` over the back-end:
-# protocol optimization (cloud protocols only) and directory usage (balanced).
+# protocol optimization (cloud protocols only) and directory usage (unbalanced).
 # Rerun-safe: an existing tenant keeps its admin user's password; quotas and roles are brought
 # in line.
 - name: HCP initial tenant
@@ -47,10 +47,12 @@
           - hcp_tenant_admin_password | default('') | length > 0
           - hcp_ns_cloud_optimized | upper in ['CLOUD', 'ALL', 'DEFAULT']
           - hcp_ns_directory_usage | upper in ['BALANCED', 'UNBALANCED', 'DEFAULT']
+          - hcp_ns_directory_usage | upper != 'UNBALANCED' or hcp_ns_cloud_optimized | upper == 'CLOUD'
         fail_msg: >-
           Need hcp_cluster, hcp_backend_ip, the HCP secrets credential, hcp_tenant_name (letters,
           digits, hyphens; up to 63), a quota above 0 in GB or TB, the security account password
-          (for MAPI), the tenant admin user and password, and admin roles from
+          (for MAPI), the tenant admin user and password, unbalanced directories only with
+          cloud-protocol optimization, and admin roles from
           {{ hcp_tenant_role_choices | join(', ') }} (SYSTEM is the console's Administrator).
       no_log: true
 
