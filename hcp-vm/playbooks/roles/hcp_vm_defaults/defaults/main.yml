@@ -102,6 +102,9 @@ hcp_tenant_compliance: false            # retention compliance (enterprise/compl
 hcp_ns_cloud_optimized: CLOUD           # CLOUD = cloud protocols only | ALL = all protocols | DEFAULT
 hcp_ns_directory_usage: BALANCED        # BALANCED | UNBALANCED (non-flat) | DEFAULT
 
+# --- Physical-node services a VM can't run (vm_services.yml) ---------------------------
+hcp_vm_disable_units: [ipmi.service]    # no BMC in a VM: fails every boot; [] = leave all alone
+
 # --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
 hcp_node_exporter_allow: []             # addresses/CIDRs allowed to scrape it, e.g. [192.0.2.45]; empty = skip
 hcp_node_exporter_version: "1.13.1"

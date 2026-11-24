@@ -50,12 +50,13 @@ Everything after the install is `post_install.yml` (below).
 
 ## post_install.yml and its steps
 
-`post_install.yml` runs four playbooks in order. Each is also a playbook (and an AAP job
+`post_install.yml` runs five playbooks in order. Each is also a playbook (and an AAP job
 template) of its own, so any step can be rerun alone:
 
 | Playbook | Does | Skipped in post_install.yml when |
 |---|---|---|
 | `first_login.yml` | security account password and roles, SSH, MAPI | never |
+| `vm_services.yml` | disables physical-node services a VM can't run (`hcp_vm_disable_units`, default `ipmi.service`: no BMC, so it fails every boot and shows as a failed unit) | `hcp_vm_disable_units` is empty |
 | `prometheus.yml` | Monitoring > Prometheus > *Enable Prometheus* | never (`hcp_prometheus=false` turns it off) |
 | `tenant.yml` | initial tenant, its quotas and namespace defaults | `hcp_tenant_name` is blank |
 | `node_exporter.yml` | node_exporter, firewalled, registered with Prometheus | `hcp_node_exporter_allow` is empty |

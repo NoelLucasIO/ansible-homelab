@@ -1,12 +1,16 @@
 ---
 # Everything after the install, in order. Each step is also a playbook of its own:
 #   first_login.yml    security account password and roles, SSH, MAPI
+#   vm_services.yml    disable physical-node services a VM can't run (ipmi.service)
 #   prometheus.yml     Monitoring > Prometheus > Enable Prometheus (hcp_prometheus)
 #   tenant.yml         initial tenant + its namespace defaults (skipped when hcp_tenant_name is blank)
 #   node_exporter.yml  node_exporter + firewall chain (skipped when hcp_node_exporter_allow is empty)
 #   ansible-playbook playbooks/post_install.yml -e @my-hcp.yml
 - name: First-login setup
   ansible.builtin.import_playbook: first_login.yml
+
+- name: Services a VM can't use
+  ansible.builtin.import_playbook: vm_services.yml
 
 - name: Prometheus
   ansible.builtin.import_playbook: prometheus.yml
