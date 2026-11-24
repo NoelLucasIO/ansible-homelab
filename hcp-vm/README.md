@@ -138,6 +138,28 @@ the rest. The protocol checkboxes are settings of the namespace's own location, 
 `admin jvm config set <namespace UUID> gateway.*` (`gateway.*.allows.auth` true = anonymous access
 allowed).
 
+### namespace_access.yml (on its own)
+
+Data access for an application service account: a local tenant user with **no roles** (it can't
+use the consoles) and data-access permissions on the listed namespaces. The namespace owner is
+left alone. HCP's own `admin jvm userAccount create|update` over the back-end. AAP template
+**HCP namespace access**.
+
+| Survey question | Variable | Default |
+|---|---|---|
+| Tenant, service account name | `hcp_tenant_name`, `hcp_svc_user` | |
+| Password (used only at creation) | `hcp_svc_password` | |
+| Namespaces | `hcp_svc_namespaces` | |
+| Data access permissions | `hcp_svc_permissions` | read, write, delete, search |
+| Password hash scheme | `hcp_svc_hash_scheme` | MD5 (HCP's default) |
+
+A rerun brings the listed namespaces' permissions in line and keeps the account's permissions on
+other namespaces (HCP replaces all of a user's mappings on update, so the play sends them all).
+It never changes the password, and refuses an existing user that has roles. S3 clients use access
+key = base64 of the username, secret key = the password hashed with the account's scheme; the
+play prints the access key only. *browse* is needed to list a bucket (S3 ListObjects); *purge*
+deletes an object with all its versions; *privileged* deletes or purges objects under retention.
+
 ### syslog.yml
 
 Monitoring > *Syslog* in the System Management Console. The page is cluster settings
@@ -226,7 +248,7 @@ the hcp-vm marker.
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
    **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**, **HCP syslog**,
-   **HCP protocol defaults**, **HCP tenant**, **HCP namespace**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
+   **HCP protocol defaults**, **HCP tenant**, **HCP namespace**, **HCP namespace access**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
    every question once). Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
@@ -257,6 +279,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP protocol defaults | cloud protocols only (true/false), unbalanced directories (true/false) |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
 | HCP namespace | tenant, namespace name, owner, quota and unit, protocol optimization, directory usage, versioning, S3 overwrite, retention type, S3 API on/off, REST API on/off |
+| HCP namespace access | tenant, service account name and password, namespaces, permissions, password hash scheme |
 | HCP syslog | servers (comma-separated `host:port`), level, extra event types |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
 | HCP VM services | nothing more (units: `hcp_vm_disable_units`, default `ipmi.service`) |

@@ -142,6 +142,14 @@ hcp_namespace_rest_anonymous: false     # false = authenticated access only
 hcp_namespace_s3: true                  # Hitachi API for Amazon S3 (turns on ACLs)
 hcp_namespace_s3_anonymous: false       # false = authenticated access only
 
+# --- Namespace access for a service account (namespace_access.yml) -----------------------
+hcp_svc_user: ""                        # local tenant user with no roles, data access only
+hcp_svc_fullname: ""                    # blank = the username
+# hcp_svc_password: survey or vault, never committed; used only when the account is created
+hcp_svc_namespaces: []                  # namespaces in hcp_tenant_name (list or comma-separated)
+hcp_svc_permissions: [read, write, delete, search]  # browse read write delete purge search privileged read_acl write_acl change_owner
+hcp_svc_hash_scheme: MD5                # MD5 (HCP's default) | SHA-256: how the S3 secret key is derived
+
 # --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
 hcp_node_exporter_allow: []             # addresses/CIDRs allowed to scrape it, e.g. [192.0.2.45]; empty = skip
 hcp_node_exporter_version: "1.13.1"

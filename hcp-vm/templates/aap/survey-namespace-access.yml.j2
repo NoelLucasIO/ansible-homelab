@@ -1,0 +1,46 @@
+# Survey questions for namespace_access.yml ("HCP namespace access").
+- question_name: Tenant
+  variable: hcp_tenant_name
+  type: text
+  required: true
+  default: {{ hcp_tenant_name | to_json }}
+  min: 1
+  max: 63
+- question_name: Service account name
+  question_description: Local tenant user with no roles (data access only). Created if missing; an existing user with roles is refused.
+  variable: hcp_svc_user
+  type: text
+  required: true
+  default: {{ hcp_svc_user | to_json }}
+  min: 1
+  max: 64
+- question_name: Service account password
+  question_description: Used only when the account is created. Its hash is the S3 secret key.
+  variable: hcp_svc_password
+  type: password
+  required: false
+  default: ""
+  min: 0
+  max: 64
+- question_name: Namespaces
+  question_description: Comma-separated namespaces in the tenant. Its permissions on other namespaces are kept.
+  variable: hcp_svc_namespaces
+  type: text
+  required: true
+  default: {{ (hcp_svc_namespaces if hcp_svc_namespaces is string else hcp_svc_namespaces | join(', ')) | to_json }}
+  min: 3
+  max: 400
+- question_name: Data access permissions
+  question_description: browse is needed to list a bucket's objects (S3 ListObjects)
+  variable: hcp_svc_permissions
+  type: multiselect
+  required: true
+  default: {{ (hcp_svc_permissions if hcp_svc_permissions is string else hcp_svc_permissions | join('\n')) | to_json }}
+  choices: ["browse", "read", "write", "delete", "purge", "search", "privileged", "read_acl", "write_acl", "change_owner"]
+- question_name: Password hash scheme
+  question_description: How the S3 secret key is derived from the password. Applies when the account is created.
+  variable: hcp_svc_hash_scheme
+  type: multiplechoice
+  required: true
+  default: {{ hcp_svc_hash_scheme | to_json }}
+  choices: ["MD5", "SHA-256"]
