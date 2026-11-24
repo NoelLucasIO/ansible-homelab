@@ -25,3 +25,23 @@ HCP --udp/1517--> Splunk UDP input (index=hcp)   # Splunk takes the message as-i
 Ports can be changed with `RELAY_LISTEN_PORT` / `RELAY_FORWARD_PORT` in the unit's environment;
 keep `hcp.alloy`'s listener address in step. In Grafana: `{job="hcp"}`; labels `host`, `app`
 (`HCP_System_Event`) and `level` come from the syslog header.
+
+## Splunk side
+
+A plain UDP input takes HCP's messages as they are:
+
+```
+[udp://1517]
+acceptFrom = 192.0.2.0/24
+connection_host = dns
+index = hcp
+sourcetype = syslog
+no_appending_timestamp = true
+```
+
+- `connection_host = dns` makes each event's `host` the node's DNS name; don't set a fixed `host`.
+- `no_appending_timestamp = true`: HCP's message has no hostname, so Splunk would otherwise put its
+  own timestamp and host in front of every event.
+- Don't write the stanza as `[udp://<HCP address>:1517]`: an address there limits the input to that
+  one sender. Here it silently dropped every HCP message; use `acceptFrom` to limit senders.
+
