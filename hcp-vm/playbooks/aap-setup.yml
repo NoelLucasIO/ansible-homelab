@@ -3,7 +3,7 @@
 #   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
 #   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (all post-install
 #     steps), and one per step: "HCP first-login", "HCP Prometheus", "HCP tenant",
-#     "HCP node_exporter" (each with a survey)
+#     "HCP VM services", "HCP node_exporter" (each with a survey)
 #   * workflow "HCP VM deploy + post-install" (deploy, then all post-install steps on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
 #
@@ -194,6 +194,10 @@
           playbook: hcp-vm/playbooks/tenant.yml
           description: Create a tenant (quota, no namespace quota) and set its namespace defaults
           survey: "{{ aap_s.target + aap_s.tenant }}"
+        - name: HCP VM services
+          playbook: hcp-vm/playbooks/vm_services.yml
+          description: Disable physical-node services a VM can't run (ipmi.service); rerun after HCP upgrades
+          survey: "{{ aap_s.target }}"
         - name: HCP node_exporter
           playbook: hcp-vm/playbooks/node_exporter.yml
           description: node_exporter on the HCP node, firewalled to the listed scrapers, registered with Prometheus

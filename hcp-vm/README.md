@@ -159,7 +159,7 @@ the hcp-vm marker.
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
    **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**,
-   **HCP tenant**, **HCP node_exporter**) with their surveys, and the workflow
+   **HCP tenant**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
    every question once). Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
@@ -189,6 +189,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
+| HCP VM services | nothing more (units: `hcp_vm_disable_units`, default `ipmi.service`) |
 | HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server (inventory host) and its file_sd directory |
 | HCP post-install | all of the above once; a blank tenant name or allow list skips that step |
 
