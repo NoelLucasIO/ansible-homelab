@@ -50,12 +50,13 @@ Everything after the install is `post_install.yml` (below).
 
 ## post_install.yml and its steps
 
-`post_install.yml` runs five playbooks in order. Each is also a playbook (and an AAP job
+`post_install.yml` runs six playbooks in order. Each is also a playbook (and an AAP job
 template) of its own, so any step can be rerun alone:
 
 | Playbook | Does | Skipped in post_install.yml when |
 |---|---|---|
 | `first_login.yml` | security account password and roles, SSH, MAPI | never |
+| `protocol_defaults.yml` | system-wide defaults for new namespaces: cloud protocols only, unbalanced directories | never |
 | `vm_services.yml` | disables physical-node services a VM can't run (`hcp_vm_disable_units`, default `ipmi.service`: no BMC, so it fails every boot and shows as a failed unit) | `hcp_vm_disable_units` is empty |
 | `prometheus.yml` | Monitoring > Prometheus > *Enable Prometheus* | never (`hcp_prometheus=false` turns it off) |
 | `tenant.yml` | initial tenant, its quotas and namespace defaults | `hcp_tenant_name` is blank |
@@ -83,6 +84,22 @@ The steps the System Management Console asks for at first login, without the con
 Checks: port 22 answers on the front-end, and a MAPI call
 (`/mapi/tenants`) as the security account returns 200, which proves the password and MAPI together.
 Reruns change nothing in HCP.
+
+### protocol_defaults.yml
+
+*Configuration > Protocol Optimization and Directory Usage* in the System Management Console:
+the defaults for new namespaces, system-wide. The two radio groups are the cluster settings
+`location.cloud.optimized` and `location.unbalanced.directory.mode`, set with
+`admin jvm config set cluster`. Runs right after first login, before any tenant exists.
+
+| Setting | Default here | Variable | HCP 10.1 limits |
+|---|---|---|---|
+| Protocol optimization | cloud protocols only | `hcp_sys_cloud_optimized` | 15,000,000 directories per node if every namespace is cloud-optimized; 1,500,000 if any isn't |
+| Directory usage | unbalanced | `hcp_sys_unbalanced_dirs` | no limit on objects per directory; balanced allows 30,000,000 |
+
+Unbalanced directories need cloud-protocol optimization; the play refuses the other mix.
+Namespaces that need CIFS, NFS, WebDAV or SMTP must be set to all protocols when created. A
+tenant's own namespace defaults (`tenant.yml`) override these for that tenant.
 
 ### prometheus.yml
 
@@ -159,7 +176,7 @@ the hcp-vm marker.
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
    **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**,
-   **HCP tenant**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
+   **HCP protocol defaults**, **HCP tenant**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
    every question once). Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
@@ -187,6 +204,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | Template | Asks |
 |---|---|
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
+| HCP protocol defaults | cloud protocols only (true/false), unbalanced directories (true/false) |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
 | HCP VM services | nothing more (units: `hcp_vm_disable_units`, default `ipmi.service`) |

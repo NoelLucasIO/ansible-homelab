@@ -1,6 +1,7 @@
 ---
 # Everything after the install, in order. Each step is also a playbook of its own:
 #   first_login.yml    security account password and roles, SSH, MAPI
+#   protocol_defaults.yml  system-wide default protocol optimization and directory usage
 #   vm_services.yml    disable physical-node services a VM can't run (ipmi.service)
 #   prometheus.yml     Monitoring > Prometheus > Enable Prometheus (hcp_prometheus)
 #   tenant.yml         initial tenant + its namespace defaults (skipped when hcp_tenant_name is blank)
@@ -8,6 +9,9 @@
 #   ansible-playbook playbooks/post_install.yml -e @my-hcp.yml
 - name: First-login setup
   ansible.builtin.import_playbook: first_login.yml
+
+- name: Protocol optimization and directory usage defaults
+  ansible.builtin.import_playbook: protocol_defaults.yml
 
 - name: Services a VM can't use
   ansible.builtin.import_playbook: vm_services.yml

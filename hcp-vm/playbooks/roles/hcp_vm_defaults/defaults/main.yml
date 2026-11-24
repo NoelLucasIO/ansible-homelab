@@ -76,6 +76,11 @@ hcp_enable_ssh: true                    # SSH on the front-end (off on a new sys
 hcp_enable_mapi: true                   # Management API on :9090
 hcp_backend_host_ip: ""                 # hypervisor's temporary back-end address; blank = <back-end /24>.1
 
+# --- System-wide namespace defaults (protocol_defaults.yml) -----------------------------
+# Configuration > Protocol Optimization and Directory Usage. Unbalanced needs cloud optimization.
+hcp_sys_cloud_optimized: true           # true = cloud protocols only, false = all protocols
+hcp_sys_unbalanced_dirs: true           # true = unbalanced, false = balanced
+
 # --- Prometheus (prometheus.yml): Monitoring > Prometheus > Enable Prometheus ----------
 hcp_prometheus: true                    # false = turn it off
 hcp_prometheus_retention_days: 365      # TSDB retention time, 1-365 days (HCP default 15)

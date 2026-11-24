@@ -2,7 +2,7 @@
 # Creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
 #   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (all post-install
-#     steps), and one per step: "HCP first-login", "HCP Prometheus", "HCP tenant",
+#     steps), and one per step: "HCP first-login", "HCP protocol defaults", "HCP Prometheus", "HCP tenant",
 #     "HCP VM services", "HCP node_exporter" (each with a survey)
 #   * workflow "HCP VM deploy + post-install" (deploy, then all post-install steps on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
@@ -149,6 +149,7 @@
               'destroy': lookup('ansible.builtin.template', aap_sv ~ '/survey-destroy.yml.j2') | from_yaml,
               'target': lookup('ansible.builtin.template', aap_sv ~ '/survey-target.yml.j2') | from_yaml,
               'first_login': lookup('ansible.builtin.template', aap_sv ~ '/survey-first-login.yml.j2') | from_yaml,
+              'protocol_defaults': lookup('ansible.builtin.template', aap_sv ~ '/survey-protocol-defaults.yml.j2') | from_yaml,
               'prometheus': lookup('ansible.builtin.template', aap_sv ~ '/survey-prometheus.yml.j2') | from_yaml,
               'tenant': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2') | from_yaml,
               'tenant_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2',
@@ -163,8 +164,11 @@
         aap_s_chain: "{{ dict(aap_chain | map(attribute='variable') | zip(aap_chain)).values() | list }}"
         aap_s_workflow: "{{ dict(aap_wf | map(attribute='variable') | zip(aap_wf)).values() | list }}"
       vars:
-        aap_chain: "{{ aap_s.target + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt + aap_s.prom_target }}"
-        aap_wf: "{{ aap_s.deploy + aap_s.first_login + aap_s.prometheus + aap_s.tenant_opt + aap_s.node_exporter_opt + aap_s.prom_target }}"
+        aap_post: >-
+          {{ aap_s.first_login + aap_s.protocol_defaults + aap_s.prometheus
+             + aap_s.tenant_opt + aap_s.node_exporter_opt + aap_s.prom_target }}
+        aap_chain: "{{ aap_s.target + aap_post }}"
+        aap_wf: "{{ aap_s.deploy + aap_post }}"
 
     # --- job templates ---------------------------------------------------------------
     - name: Create or update the job templates
@@ -186,6 +190,10 @@
           playbook: hcp-vm/playbooks/first_login.yml
           description: First-login setup of a new HCP system (security account, SSH, MAPI)
           survey: "{{ aap_s.target + aap_s.first_login }}"
+        - name: HCP protocol defaults
+          playbook: hcp-vm/playbooks/protocol_defaults.yml
+          description: System-wide default protocol optimization and directory usage for new namespaces
+          survey: "{{ aap_s.target + aap_s.protocol_defaults }}"
         - name: HCP Prometheus
           playbook: hcp-vm/playbooks/prometheus.yml
           description: Turn HCP's built-in Prometheus on (or off)

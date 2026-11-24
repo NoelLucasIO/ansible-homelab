@@ -1,0 +1,15 @@
+# Survey questions for protocol_defaults.yml ("HCP protocol defaults").
+- question_name: New namespaces default to cloud protocols only
+  question_description: false = all protocols (needed for CIFS, NFS, WebDAV, SMTP). Up to 15M directories per node if every namespace is cloud-optimized, 1.5M otherwise.
+  variable: hcp_sys_cloud_optimized
+  type: multiplechoice
+  required: true
+  default: {{ hcp_sys_cloud_optimized | string | lower | to_json }}
+  choices: ["true", "false"]
+- question_name: New namespaces default to unbalanced directory usage
+  question_description: Needs cloud protocols only. Unbalanced has no objects-per-directory limit; balanced allows 30M.
+  variable: hcp_sys_unbalanced_dirs
+  type: multiplechoice
+  required: true
+  default: {{ hcp_sys_unbalanced_dirs | string | lower | to_json }}
+  choices: ["true", "false"]
