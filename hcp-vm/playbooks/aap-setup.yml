@@ -2,7 +2,7 @@
 # Creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
 #   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (all post-install
-#     steps), and one per step: "HCP first-login", "HCP protocol defaults", "HCP Prometheus", "HCP syslog", "HCP tenant",
+#     steps), and one per step: "HCP first-login", "HCP protocol defaults", "HCP Prometheus", "HCP syslog", "HCP tenant", "HCP namespace",
 #     "HCP VM services", "HCP node_exporter" (each with a survey)
 #   * workflow "HCP VM deploy + post-install" (deploy, then all post-install steps on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
@@ -153,6 +153,7 @@
               'syslog': lookup('ansible.builtin.template', aap_sv ~ '/survey-syslog.yml.j2') | from_yaml,
               'syslog_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-syslog.yml.j2',
                                    template_vars={'chain': true}) | from_yaml,
+              'namespace': lookup('ansible.builtin.template', aap_sv ~ '/survey-namespace.yml.j2') | from_yaml,
               'prometheus': lookup('ansible.builtin.template', aap_sv ~ '/survey-prometheus.yml.j2') | from_yaml,
               'tenant': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2') | from_yaml,
               'tenant_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2',
@@ -209,6 +210,10 @@
           playbook: hcp-vm/playbooks/tenant.yml
           description: Create a tenant (quota, no namespace quota) and set its namespace defaults
           survey: "{{ aap_s.target + aap_s.tenant }}"
+        - name: HCP namespace
+          playbook: hcp-vm/playbooks/namespace.yml
+          description: Create a namespace (S3 bucket) in a tenant, or update its quota, owner and versioning
+          survey: "{{ aap_s.target + aap_s.namespace }}"
         - name: HCP VM services
           playbook: hcp-vm/playbooks/vm_services.yml
           description: Disable physical-node services a VM can't run (ipmi.service); rerun after HCP upgrades

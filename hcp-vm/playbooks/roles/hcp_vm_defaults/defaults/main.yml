@@ -120,6 +120,21 @@ hcp_ns_directory_usage: UNBALANCED      # UNBALANCED | BALANCED | DEFAULT; UNBAL
 # --- Physical-node services a VM can't run (vm_services.yml) ---------------------------
 hcp_vm_disable_units: [ipmi.service]    # no BMC in a VM: fails every boot; [] = leave all alone
 
+# --- Namespace (namespace.yml): the tenant console's Create Namespace form -----------------
+hcp_namespace_name: ""                  # S3 bucket name rules: 3-63 lower-case letters, digits, hyphens
+hcp_namespace_owner: ""                 # local tenant user; blank = hcp_tenant_admin_user
+hcp_namespace_description: ""
+hcp_namespace_quota: 50                 # hard quota, in hcp_namespace_quota_unit
+hcp_namespace_quota_unit: GB            # GB | TB
+hcp_namespace_soft_quota: 85            # percent
+hcp_namespace_hash: SHA-256
+hcp_namespace_mask: bRrWwdpscP          # permissions: browse, read ACL, read, write ACL, write, delete, purge, search, chown, privileged
+hcp_namespace_protocols: cloud          # cloud = cloud protocols only | all (CIFS, NFS, WebDAV, SMTP too; balanced only)
+hcp_namespace_directory_usage: unbalanced   # unbalanced (needs cloud) | balanced
+hcp_namespace_versioning: false
+hcp_namespace_s3_overwrite: false       # allow overwrite via the S3 API when versioning is off
+hcp_namespace_retention: hcp            # hcp = HCP retention | s3 = S3 Object Lock (needs cloud + versioning)
+
 # --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
 hcp_node_exporter_allow: []             # addresses/CIDRs allowed to scrape it, e.g. [192.0.2.45]; empty = skip
 hcp_node_exporter_version: "1.13.1"

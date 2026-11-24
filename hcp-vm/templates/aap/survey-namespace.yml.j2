@@ -1,0 +1,71 @@
+# Survey questions for namespace.yml ("HCP namespace").
+- question_name: Tenant
+  variable: hcp_tenant_name
+  type: text
+  required: true
+  default: {{ hcp_tenant_name | to_json }}
+  min: 1
+  max: 63
+- question_name: Namespace (bucket) name
+  question_description: 3-63 lower-case letters, digits and hyphens (S3 bucket rules)
+  variable: hcp_namespace_name
+  type: text
+  required: true
+  default: {{ hcp_namespace_name | to_json }}
+  min: 3
+  max: 63
+- question_name: Namespace owner
+  question_description: A local user of the tenant. Blank = the tenant admin user ({{ hcp_tenant_admin_user }}).
+  variable: hcp_namespace_owner
+  type: text
+  required: false
+  default: {{ hcp_namespace_owner | to_json }}
+  min: 0
+  max: 64
+- question_name: Hard quota
+  variable: hcp_namespace_quota
+  type: integer
+  required: true
+  default: {{ hcp_namespace_quota | int }}
+  min: 1
+  max: 1000000
+- question_name: Hard quota unit
+  variable: hcp_namespace_quota_unit
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_quota_unit | upper | to_json }}
+  choices: ["GB", "TB"]
+- question_name: Protocol optimization
+  question_description: cloud = cloud protocols only (S3, REST); all = also CIFS, NFS, WebDAV, SMTP (balanced directories only)
+  variable: hcp_namespace_protocols
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_protocols | lower | to_json }}
+  choices: ["cloud", "all"]
+- question_name: Directory usage
+  question_description: Fixed at creation. Unbalanced needs cloud protocols; no objects-per-directory limit (balanced allows 30M).
+  variable: hcp_namespace_directory_usage
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_directory_usage | lower | to_json }}
+  choices: ["unbalanced", "balanced"]
+- question_name: Versioning
+  variable: hcp_namespace_versioning
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_versioning | string | lower | to_json }}
+  choices: ["false", "true"]
+- question_name: Allow S3 overwrite when versioning is off
+  question_description: Allow overwrite of objects via Hitachi API for Amazon S3 if versioning is disabled
+  variable: hcp_namespace_s3_overwrite
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_s3_overwrite | string | lower | to_json }}
+  choices: ["false", "true"]
+- question_name: Retention type
+  question_description: Fixed at creation. s3 = S3 Object Lock (needs cloud protocols and versioning; delete markers are turned on)
+  variable: hcp_namespace_retention
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_retention | lower | to_json }}
+  choices: ["hcp", "s3"]

@@ -112,6 +112,26 @@ server on the node (`:9097`); the play waits for it to listen. Console:
 line when it starts it. If the running server still shows other values, the play turns it off and
 on again and checks the command line.
 
+### namespace.yml (on its own, not part of post_install.yml)
+
+The tenant console's *Create Namespace* form, with HCP's own `admin jvm namespace create` over the
+back-end (no tenant credentials needed). AAP template **HCP namespace**.
+
+| Form field | Variable | Default |
+|---|---|---|
+| Namespace name | `hcp_namespace_name` (S3 bucket rules) | none |
+| Namespace owner | `hcp_namespace_owner` | the tenant admin user (`hcp_tenant_admin_user`) |
+| Hard quota, soft quota | `hcp_namespace_quota` + `_unit` (GB/TB), `hcp_namespace_soft_quota` | 50 GB, 85% |
+| Hash algorithm | `hcp_namespace_hash` | SHA-256 |
+| Protocol optimization | `hcp_namespace_protocols` (`cloud` / `all`) | cloud |
+| Directory usage | `hcp_namespace_directory_usage` | unbalanced (needs cloud) |
+| Versioning | `hcp_namespace_versioning` | off |
+| Allow S3 overwrite when versioning is off | `hcp_namespace_s3_overwrite` | off |
+| Retention type | `hcp_namespace_retention` (`hcp` / `s3` = S3 Object Lock, needs cloud + versioning) | HCP retention |
+
+Directory usage and retention type are fixed once the namespace exists. A rerun on an existing
+namespace updates quota, owner, versioning and the S3 overwrite option, and leaves the rest.
+
 ### syslog.yml
 
 Monitoring > *Syslog* in the System Management Console. The page is cluster settings
@@ -200,7 +220,7 @@ the hcp-vm marker.
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
    **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**, **HCP syslog**,
-   **HCP protocol defaults**, **HCP tenant**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
+   **HCP protocol defaults**, **HCP tenant**, **HCP namespace**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
    every question once). Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
@@ -230,6 +250,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP protocol defaults | cloud protocols only (true/false), unbalanced directories (true/false) |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
+| HCP namespace | tenant, namespace name, owner, quota and unit, protocol optimization, directory usage, versioning, S3 overwrite, retention type |
 | HCP syslog | servers (comma-separated `host:port`), level, extra event types |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
 | HCP VM services | nothing more (units: `hcp_vm_disable_units`, default `ipmi.service`) |

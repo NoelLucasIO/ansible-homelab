@@ -1,0 +1,138 @@
+---
+# Create a namespace (S3 bucket) in a tenant, or bring an existing one's changeable settings in
+# line. The tenant console's Create Namespace form:
+#   ansible-playbook playbooks/namespace.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 \
+#     -e hcp_backend_ip=198.51.100.101 -e hcp_tenant_name=tenant1 -e hcp_namespace_name=ns1 \
+#     -e hcp_namespace_quota=50 -e hcp_namespace_quota_unit=GB
+# Made with HCP's own `admin jvm namespace create|update` over the back-end, like the other steps
+# (no tenant credentials needed). The owner is the tenant admin user by default
+# (hcp_namespace_owner); splitting admin and data-access users comes later.
+# Fixed at creation, can't be changed afterwards: protocol optimization once the namespace holds
+# objects or is unbalanced, directory usage, and retention type. A rerun on an existing namespace
+# updates quota, owner, versioning and the S3 overwrite option only, and says if a fixed one differs.
+- name: HCP namespace
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - hcp_vm_defaults
+  vars:
+    hcp_nsx_bytes: >-
+      {{ (hcp_namespace_quota | float * (1024 if hcp_namespace_quota_unit | upper == 'TB' else 1)
+          * 1024 * 1024 * 1024) | round | int }}
+    hcp_nsx_cloud: "{{ hcp_namespace_protocols | lower == 'cloud' }}"
+    hcp_nsx_unbalanced: "{{ hcp_namespace_directory_usage | lower == 'unbalanced' }}"
+    hcp_nsx_s3lock: "{{ hcp_namespace_retention | lower == 's3' }}"
+    hcp_nsx_owner: "{{ hcp_namespace_owner if hcp_namespace_owner | length > 0 else hcp_tenant_admin_user }}"
+  tasks:
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - hcp_backend_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+          - hcp_root_key_file is defined
+          - hcp_tenant_name is match('^[A-Za-z0-9][A-Za-z0-9-]{0,62}$')
+          - hcp_namespace_name is match('^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$')
+          - hcp_nsx_owner is match('^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$')
+          - hcp_namespace_quota | float > 0
+          - hcp_namespace_quota_unit | upper in ['GB', 'TB']
+          - hcp_namespace_soft_quota | int >= 10 and hcp_namespace_soft_quota | int <= 95
+          - hcp_namespace_protocols | lower in ['cloud', 'all']
+          - hcp_namespace_directory_usage | lower in ['balanced', 'unbalanced']
+          - hcp_namespace_retention | lower in ['hcp', 's3']
+          - hcp_namespace_hash in ['SHA-256', 'SHA-384', 'SHA-512', 'SHA-1', 'MD5', 'RIPEMD-160']
+          - hcp_nsx_cloud | bool or not hcp_nsx_unbalanced | bool
+          - not hcp_nsx_s3lock | bool or (hcp_nsx_cloud | bool and hcp_namespace_versioning | bool)
+        fail_msg: >-
+          Need hcp_cluster, hcp_backend_ip, the HCP secrets credential, hcp_tenant_name and
+          hcp_namespace_name (S3 bucket rules: 3-63 lower-case letters, digits, hyphens). Quota
+          above 0 in GB or TB. Unbalanced directories need cloud protocols; S3 Object Lock needs
+          cloud protocols and versioning (HCP's rules).
+        quiet: true
+
+    - name: Namespace over the back-end
+      block:
+        - name: Open a back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_open.yml"
+
+        # admin jvm prints Python literals; the node's python turns them into JSON.
+        - name: Namespaces in the tenant (fails if the tenant doesn't exist)
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' | ' ~ hcp_to_json] }}"
+          vars:
+            hcp_to_json: >-
+              python -c 'import sys,ast,json; print(json.dumps(ast.literal_eval(sys.stdin.read())))'
+          register: hcp_nsx_list
+          until: hcp_nsx_list.rc == 0
+          retries: 6
+          delay: 10
+          changed_when: false
+
+        - name: Does it exist?
+          ansible.builtin.set_fact:
+            hcp_nsx_exists: >-
+              {{ (hcp_nsx_list.stdout | from_json).values() | map(attribute='name', default='')
+                 | select('equalto', hcp_namespace_name) | list | length > 0 }}
+
+        - name: Create {{ hcp_namespace_name }}
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' namespace create ' ~ hcp_tenant_name ~ ' ' ~ hcp_namespace_name
+                 ~ ' ' ~ hcp_nsx_bytes ~ ' ' ~ hcp_namespace_soft_quota | int ~ ' 1 ' ~ hcp_namespace_hash
+                 ~ ' ' ~ hcp_namespace_mask
+                 ~ ' --ownerLocal ' ~ hcp_nsx_owner | quote
+                 ~ ' --cloudOptimized ' ~ hcp_nsx_cloud | bool | string | lower
+                 ~ ' --unbalancedMode ' ~ hcp_nsx_unbalanced | bool | string | lower
+                 ~ ' --retention ' ~ hcp_namespace_retention | lower
+                 ~ (' --versioning' if hcp_namespace_versioning | bool else '')
+                 ~ (' --deleteMarker true' if hcp_nsx_s3lock | bool else '')
+                 ~ ' --s3UnversionedOverwrite ' ~ hcp_namespace_s3_overwrite | bool | string | lower
+                 ~ (' --description ' ~ hcp_namespace_description | quote if hcp_namespace_description | length > 0 else '')] }}
+          register: hcp_nsx_new
+          changed_when: true
+          failed_when: hcp_nsx_new.rc != 0 or hcp_nsx_new.stdout is search('(?i)exception|error|usage:|cannot|invalid')
+          when: not hcp_nsx_exists | bool
+
+        - name: Settings, before
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' --namespace ' ~ hcp_namespace_name] }}"
+          register: hcp_nsx_before
+          changed_when: false
+
+        - name: Update quota, owner, versioning and S3 overwrite
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' namespace update --tenant ' ~ hcp_tenant_name
+                 ~ ' --namespace ' ~ hcp_namespace_name
+                 ~ ' --hardQuota ' ~ hcp_nsx_bytes ~ ' --softQuota ' ~ hcp_namespace_soft_quota | int
+                 ~ ' --ownerLocal ' ~ hcp_nsx_owner | quote
+                 ~ ' --versioning ' ~ hcp_namespace_versioning | bool | string | lower
+                 ~ ' --s3UnversionedOverwrite ' ~ hcp_namespace_s3_overwrite | bool | string | lower] }}
+          register: hcp_nsx_upd
+          changed_when: false
+          failed_when: hcp_nsx_upd.rc != 0 or hcp_nsx_upd.stdout is search('(?i)exception|error|usage:|cannot|invalid')
+          when: hcp_nsx_exists | bool
+
+        - name: Settings, after
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' --namespace ' ~ hcp_namespace_name] }}"
+          register: hcp_nsx_after
+          changed_when: hcp_nsx_exists | bool and hcp_nsx_after.stdout != hcp_nsx_before.stdout
+
+      always:
+        - name: Close the back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_close.yml"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - >-
+            {{ hcp_namespace_name }}.{{ hcp_tenant_name }}.{{ hcp_clname }}: {{ 'updated' if hcp_nsx_exists | bool else 'created' }},
+            {{ hcp_namespace_quota }} {{ hcp_namespace_quota_unit | upper }} (soft {{ hcp_namespace_soft_quota }}%), owner {{ hcp_nsx_owner }}.
+          - >-
+            {{ 'Cloud protocols' if hcp_nsx_cloud | bool else 'All protocols' }},
+            {{ 'unbalanced' if hcp_nsx_unbalanced | bool else 'balanced' }} directories,
+            versioning {{ 'on' if hcp_namespace_versioning | bool else 'off' }},
+            {{ 'S3 Object Lock' if hcp_nsx_s3lock | bool else 'HCP retention' }}{{
+            ' (fixed at creation; not changed on this run)' if hcp_nsx_exists | bool else '' }}.
+          - "{{ hcp_nsx_after.stdout_lines }}"
