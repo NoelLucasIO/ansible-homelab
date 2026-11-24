@@ -350,3 +350,6 @@ default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from
 - MAPI's tenant create (`PUT /mapi/tenants?username=…&password=…`) puts the first user's password
   in the URL, and HCP's management API access log, forwarded by syslog, records the URL. Create
   tenants with `admin jvm tenant create` instead.
+- `admin jvm domain createPKCS12` hands the file path to HCP's JVM, which runs as `ris` and reads
+  the file itself: a file under `/root` comes through as nothing ("toDerInputStream rejects tag
+  type 0"). Put it in `/opt/arc/tmp`, owned by `ris`.

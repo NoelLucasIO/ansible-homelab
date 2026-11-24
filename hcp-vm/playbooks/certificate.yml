@@ -18,6 +18,8 @@
   roles:
     - hcp_vm_defaults
   vars:
+    # HCP's JVM (user ris) reads the file itself, so it can't live under /root.
+    hcp_cert_node_file: /opt/arc/tmp/.hcp-cert.p12
     hcp_cert_keys:
       RSA-2048: [--kty, RSA, --size, "2048"]
       RSA-3072: [--kty, RSA, --size, "3072"]
@@ -101,7 +103,7 @@
 
             - name: PKCS#12 to the node
               ansible.builtin.command:
-                argv: "{{ hcp_bscp + [hcp_log_dir ~ '/.hcp-cert.p12', 'root@' ~ hcp_backend_ip ~ ':/root/.hcp-cert.p12'] }}"
+                argv: "{{ hcp_bscp + [hcp_log_dir ~ '/.hcp-cert.p12', 'root@' ~ hcp_backend_ip ~ ':' ~ hcp_cert_node_file] }}"
               changed_when: true
 
             - name: Domain certificates before
@@ -113,8 +115,9 @@
             - name: Load it into HCP for {{ hcp_clname }}
               ansible.builtin.command:
                 argv: >-
-                  {{ hcp_bssh + ['chmod 600 /root/.hcp-cert.p12; ' ~ hcp_admin ~ ' domain createPKCS12 '
-                     ~ hcp_clname ~ ' /root/.hcp-cert.p12 ' ~ hcp_cert_pw | quote ~ '; rc=$?; rm -f /root/.hcp-cert.p12; exit $rc'] }}
+                  {{ hcp_bssh + ['chown ris: ' ~ hcp_cert_node_file ~ ' && chmod 600 ' ~ hcp_cert_node_file ~ '; '
+                     ~ hcp_admin ~ ' domain createPKCS12 ' ~ hcp_clname ~ ' ' ~ hcp_cert_node_file ~ ' ' ~ hcp_cert_pw | quote
+                     ~ '; rc=$?; rm -f ' ~ hcp_cert_node_file ~ '; exit $rc'] }}
               register: hcp_cert_load
               no_log: true
               changed_when: true
@@ -173,6 +176,12 @@
               changed_when: false
 
           always:
+            - name: Remove the PKCS#12 from the node
+              ansible.builtin.command:
+                argv: "{{ hcp_bssh + ['rm -f ' ~ hcp_cert_node_file] }}"
+              changed_when: false
+              failed_when: false
+
             - name: Remove the PKCS#12 from the hypervisor
               ansible.builtin.file:
                 path: "{{ hcp_log_dir }}/.hcp-cert.p12"
