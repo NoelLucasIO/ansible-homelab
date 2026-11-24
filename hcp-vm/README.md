@@ -2,10 +2,12 @@
 
 Deploys a single-node HCP (Hitachi Content Platform) VM on KVM from the HCP ISO, unattended,
 from an AAP job template whose survey carries every installer answer and the VM sizing, then
-does the post-install setup: first login, HCP's Prometheus, an initial tenant, and node_exporter.
-Tested with HCP 10.1.1.14 (ISO `HS222_10.1.1.14.iso`): deploy, destroy and the deploy +
-first-login workflow end to end; Prometheus, tenant and node_exporter as separate jobs on an
-existing system. The full workflow with all four post-install steps is not yet tested.
+does the post-install setup: first login, system-wide namespace defaults, physical-node services a
+VM can't run, HCP's Prometheus, syslog to Splunk and Loki, an initial tenant, and node_exporter.
+Namespaces (S3 buckets) and service-account data access have playbooks of their own.
+Tested with HCP 10.1.1.14 (ISO `HS222_10.1.1.14.iso`): deploy, destroy and the full deploy +
+post-install workflow end to end; every post-install step, the namespace and the namespace-access
+playbooks also as separate jobs, the last two checked with an S3 client.
 
 ## What deploy.yml does
 
