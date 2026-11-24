@@ -1,0 +1,22 @@
+---
+# Prove events arrive. A run that changes the appliance raises config events ("confadd", "confmod"),
+# which the syslog action sends on, so they show up within a minute; a run that changes nothing
+# relies on earlier lines, hence the 24h window.
+- name: Count the lines from vTM in Loki
+  ansible.builtin.uri:
+    url: >-
+      {{ vtm_loki_url }}/loki/api/v1/query?query={{ ('count_over_time({job="' ~ vtm_alloy_job ~ '"}[24h])') | urlencode }}
+    return_content: true
+  register: vtm_loki
+  until: vtm_loki.json.data.result | length > 0
+  retries: 12
+  delay: 10
+  failed_when: false
+
+- name: Loki has vTM events
+  ansible.builtin.assert:
+    that: vtm_loki.json.data.result | default([]) | length > 0
+    fail_msg: >-
+      No {job="{{ vtm_alloy_job }}"} lines in Loki. Check the syslog action on the appliance
+      ({{ vtm_syslog_host }}:{{ vtm_syslog_port }}) and the Alloy listener on {{ inventory_hostname }}.
+    success_msg: Loki is receiving vTM events (job={{ vtm_alloy_job }}).

@@ -1,0 +1,6 @@
+---
+# CLI: copy to vault.yml, fill in, then `ansible-vault encrypt vault.yml` (vault.yml is git-ignored).
+# AAP: a credential of type "vTM API" (created by aap-setup.yml) supplies these.
+vtm_api_password: CHANGE_ME      # 12+ characters; the playbooks' own vTM account
+vtm_admin_password: CHANGE_ME    # only needed when the API user has to be created or reset
+# vtm_hec_token: CHANGE_ME       # Splunk HEC token; leave out to skip Analytics Export

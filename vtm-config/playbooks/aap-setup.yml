@@ -1,0 +1,104 @@
+---
+# Creates/updates in AAP (controller API, built-in modules only):
+#   * credential type "vTM API" (API user password, admin password, Splunk HEC token)
+#   * job templates "vTM platform" and "vTM backup", with surveys
+#   * a daily schedule for "vTM backup"
+# Idempotent: rerun after changing site values to refresh survey defaults.
+#
+#   ansible-playbook vtm-config/playbooks/aap-setup.yml -e @site-vars.yml \
+#     -e aap_url=https://aap.example.com -e aap_user=admin -e aap_password=... \
+#     -e '{"aap_machine_credential": "homelab-ssh", "aap_secrets_credential": "vtm-api"}'
+#
+# First run creates the credential type; then create a credential of that type in AAP and
+# rerun with aap_secrets_credential set so it gets attached.
+- name: AAP job templates for vtm-config
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    aap_inventory: homelab
+    aap_machine_credential: ""     # for the play on the Alloy host
+    aap_secrets_credential: ""     # a credential of type "vTM API"
+    aap_ee: ""
+    aap_backup_rrule: "DTSTART;TZID=America/New_York:20260101T024700 RRULE:FREQ=DAILY;INTERVAL=1"
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ aap_user }}"
+      password: "{{ aap_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 204]
+  tasks:
+    - name: Credential type exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ 'vTM API' | urlencode }}"
+      register: aap_ct
+
+    - name: Create or update the credential type
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/{{ (aap_ct.json.results[0].id ~ '/') if aap_ct.json.count else '' }}"
+        method: "{{ 'PATCH' if aap_ct.json.count else 'POST' }}"
+        body:
+          name: vTM API
+          kind: cloud
+          description: Ivanti vTM API user password, admin password (to create that user), Splunk HEC token
+          inputs:
+            fields:
+              - {id: vtm_api_password, label: API user password (12+), type: string, secret: true}
+              - {id: vtm_admin_password, label: admin password (only needed to create the API user), type: string, secret: true}
+              - {id: vtm_hec_token, label: Splunk HEC token (optional), type: string, secret: true}
+            required: [vtm_api_password]
+          injectors:
+            extra_vars:
+              vtm_api_password: "{% raw %}{{ vtm_api_password }}{% endraw %}"
+              vtm_admin_password: "{% raw %}{{ vtm_admin_password | default('') }}{% endraw %}"
+              vtm_hec_token: "{% raw %}{{ vtm_hec_token | default('') }}{% endraw %}"
+      changed_when: true
+
+    - name: Project and inventory ids
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/{{ item.kind }}/?name={{ item.name | urlencode }}"
+      loop:
+        - {kind: projects, name: "{{ aap_project }}"}
+        - {kind: inventories, name: "{{ aap_inventory }}"}
+      register: aap_ids
+
+    - name: Both found
+      ansible.builtin.assert:
+        that: aap_ids.results | map(attribute='json.count') | min > 0
+        fail_msg: "Project '{{ aap_project }}' or inventory '{{ aap_inventory }}' not found in AAP."
+
+    - name: Execution environment id
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/execution_environments/?name={{ aap_ee | urlencode }}"
+      register: aap_ee_q
+      when: aap_ee | length > 0
+
+    - name: Create or update the job templates
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_job_template.yml"
+      loop:
+        - name: vTM platform
+          playbook: vtm-config/playbooks/platform.yml
+          description: vTM API user, NTP, event syslog to Loki (+ Alloy listener), Analytics Export to Splunk HEC
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-platform.yml.j2') | from_yaml }}"
+        - name: vTM backup
+          playbook: vtm-config/playbooks/backup.yml
+          description: Full configuration backup on the vTM appliance, keeping the newest N
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-backup.yml.j2') | from_yaml }}"
+      loop_control:
+        loop_var: aap_jt
+        label: "{{ aap_jt.name }}"
+
+    - name: Daily backup schedule
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_schedule.yml"
+      vars:
+        aap_sched_template: vTM backup
+        aap_sched_name: "vTM backup daily ({{ vtm_target }})"
+        aap_sched_rrule: "{{ aap_backup_rrule }}"
+        aap_sched_extra: {vtm_target: "{{ vtm_target }}", vtm_backup_keep: "{{ vtm_backup_keep | int }}"}

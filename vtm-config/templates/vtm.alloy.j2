@@ -1,0 +1,13 @@
+// {{ vtm_owner_note }} (vtm-config). Ivanti vTM event syslog: UDP, RFC 5424.
+// Message body is tab-separated: LEVEL, object, event tag, text.
+loki.source.syslog "{{ vtm_alloy_job }}" {
+  listener {
+    address  = "0.0.0.0:{{ vtm_syslog_port }}"
+    protocol = "udp"
+    labels   = { job = "{{ vtm_alloy_job }}" }
+  }
+{% if vtm_alloy_relabel_rules | length > 0 %}
+  relabel_rules = {{ vtm_alloy_relabel_rules }}
+{% endif %}
+  forward_to    = [{{ vtm_alloy_forward_to }}]
+}

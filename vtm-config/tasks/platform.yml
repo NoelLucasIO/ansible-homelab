@@ -1,0 +1,61 @@
+---
+# NTP, event syslog and Analytics Export, over REST. Runs after connect.yml.
+
+# --- NTP on every traffic manager in the cluster ----------------------------------------
+- name: NTP servers
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: "traffic_managers/{{ vtm_tm }}"
+    vtm_body: {properties: {appliance: {ntpservers: "{{ vtm_ntp_servers }}"}}}
+  loop: "{{ vtm_tms.json.children | map(attribute='name') | list }}"
+  loop_control:
+    loop_var: vtm_tm
+
+# --- Event syslog -> Loki --------------------------------------------------------------------
+- name: Event syslog
+  when: vtm_syslog_enabled | bool
+  block:
+    - name: Syslog action
+      ansible.builtin.include_tasks: rest_put.yml
+      vars:
+        vtm_path: "actions/{{ vtm_syslog_action }}"
+        vtm_body:
+          properties:
+            basic: {type: syslog, note: "{{ vtm_owner_note }}"}
+            syslog: {sysloghost: "{{ vtm_syslog_host }}:{{ vtm_syslog_port }}"}
+
+    # The built-in "All Events" matches everything with a wildcard (type!*!event_tags) that REST
+    # doesn't show, so a copy made over REST would match nothing. Add the action to it instead,
+    # keeping any actions already there.
+    - name: Actions on the event type "{{ vtm_syslog_event_type }}"
+      ansible.builtin.uri:
+        url: "{{ vtm_api }}/config/active/event_types/{{ vtm_syslog_event_type | urlencode }}"
+      register: vtm_evtype
+
+    - name: Send those events to the syslog action
+      ansible.builtin.include_tasks: rest_put.yml
+      vars:
+        vtm_path: "event_types/{{ vtm_syslog_event_type }}"
+        vtm_body: >-
+          {{ {'properties': {'basic': {'actions': (vtm_evtype.json.properties.basic.actions + [vtm_syslog_action]) | unique}}} }}
+
+# --- Analytics Export -> Splunk HEC ------------------------------------------------------------
+- name: Analytics Export to Splunk HEC
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: global_settings
+    vtm_no_log: true          # the body carries the HEC token
+    vtm_body:
+      properties:
+        log_export:
+          enabled: true
+          endpoint: "{{ vtm_hec_endpoint }}"
+          auth_http: splunk
+          auth_hec_token: "{{ vtm_hec_token }}"
+          tls_verify: "{{ vtm_hec_tls_verify | bool }}"
+  when: vtm_hec_token | default('') | length > 0
+
+- name: Analytics Export skipped
+  ansible.builtin.debug:
+    msg: "No vtm_hec_token set: Analytics Export (Splunk HEC) left as it is."
+  when: vtm_hec_token | default('') | length == 0

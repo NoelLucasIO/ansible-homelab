@@ -1,0 +1,24 @@
+---
+# One schedule on a job template: create or update.
+- name: Template id, {{ aap_sched_template }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/?name={{ aap_sched_template | urlencode }}"
+  register: aap_sched_jt
+
+- name: Schedule exists?
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ aap_sched_jt.json.results[0].id }}/schedules/?name={{ aap_sched_name | urlencode }}"
+  register: aap_sched_q
+
+- name: Create or update the schedule, {{ aap_sched_name }}
+  ansible.builtin.uri:
+    url: >-
+      {{ aap_api ~ '/schedules/' ~ aap_sched_q.json.results[0].id ~ '/' if aap_sched_q.json.count
+         else aap_api ~ '/job_templates/' ~ aap_sched_jt.json.results[0].id ~ '/schedules/' }}
+    method: "{{ 'PATCH' if aap_sched_q.json.count else 'POST' }}"
+    body:
+      name: "{{ aap_sched_name }}"
+      rrule: "{{ aap_sched_rrule }}"
+      extra_data: "{{ aap_sched_extra }}"
+      enabled: true
+  changed_when: true

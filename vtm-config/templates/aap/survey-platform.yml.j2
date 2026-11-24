@@ -1,0 +1,29 @@
+- question_name: Appliance
+  question_description: FQDN of the vTM appliance (any member of a cluster)
+  variable: vtm_target
+  type: text
+  required: true
+  default: {{ vtm_target | to_json }}
+  min: 3
+  max: 253
+- question_name: Alloy host
+  question_description: Inventory host running Alloy (gets the UDP listener and is asked whether Loki has vTM events). Blank = neither.
+  variable: vtm_alloy_host
+  type: text
+  required: false
+  default: {{ vtm_alloy_host | default('') | to_json }}
+  max: 253
+- question_name: Send events to Loki (syslog)
+  variable: vtm_syslog_enabled
+  type: multiplechoice
+  required: true
+  default: {{ vtm_syslog_enabled | string | lower | to_json }}
+  choices: ["true", "false"]
+- question_name: NTP servers
+  question_description: Comma-separated
+  variable: vtm_ntp_servers_csv
+  type: text
+  required: true
+  default: {{ vtm_ntp_servers | join(',') | to_json }}
+  min: 1
+  max: 500

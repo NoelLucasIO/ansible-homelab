@@ -1,0 +1,58 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so inventory variables
+# (AAP inventory included), survey answers and -e all override them.
+# Documentation addresses (RFC 5737) and example.com: real values live in the inventory.
+
+# --- Which appliance -----------------------------------------------------------------
+vtm_target: vtm01.example.com       # the appliance (or any member of a cluster); REST runs from the controller
+vtm_rest_port: 9070
+vtm_admin_port: 9090                # SOAP (users) lives on the admin server
+vtm_rest_api_version: "8.6"         # used if the appliance offers it, else its newest
+vtm_validate_certs: false           # the appliance's own self-signed certificate until step 2 (certificates)
+
+# --- Accounts ------------------------------------------------------------------------
+# The playbooks log in as vtm_api_user. If that fails (first run, or a rebuilt appliance),
+# they log in once as admin and create it, or reset its password, over the SOAP control API:
+# REST 8.6 has no resource for local users.
+vtm_api_user: ansible
+vtm_admin_user: admin                # the account that may create users (admin group)
+vtm_api_group: admin
+# vtm_api_password: AAP credential / vault
+# vtm_admin_password: AAP credential / vault; only needed when the API user has to be (re)made
+
+# --- Ownership marker --------------------------------------------------------------------
+vtm_owner_note: "vtm-config: managed by AAP"   # put on objects this project creates
+
+# --- NTP -------------------------------------------------------------------------------
+# The AAP survey passes vtm_ntp_servers_csv ("a,b"); otherwise the baseline's servers, else a placeholder.
+vtm_ntp_servers: >-
+  {{ vtm_ntp_servers_csv.split(',') | map('trim') | select | list if vtm_ntp_servers_csv is defined
+     else baseline_ntp_servers | default(['192.0.2.1']) }}
+
+# --- Event syslog -> Alloy -> Loki -----------------------------------------------------------
+# vTM sends RFC 5424 over UDP only. Alloy (rootless) gets its own listener on vtm_syslog_port.
+vtm_syslog_enabled: true
+vtm_syslog_host: "{{ baseline_log_alloy | default('192.0.2.45') }}"
+vtm_syslog_port: 1518
+vtm_syslog_action: Syslog to Loki
+vtm_syslog_event_type: All Events     # built-in event type the action is added to (its other actions are kept)
+
+# vtm_alloy_host: inventory host running Alloy (e.g. fedora). Unset = no listener, no Loki check.
+vtm_alloy_config_dir: /etc/alloy    # host path mounted into the Alloy container (every *.alloy is loaded)
+vtm_alloy_owner: alloy              # user that owns the rootless Alloy service
+vtm_alloy_unit: alloy.service
+vtm_alloy_job: vtm                  # Loki label job=...
+# Components of the existing Alloy config the listener plugs into (blank relabel = none).
+vtm_alloy_relabel_rules: loki.relabel.syslog.rules
+vtm_alloy_forward_to: loki.write.local.receiver
+vtm_loki_url: http://127.0.0.1:3100 # queried from vtm_alloy_host to prove events arrive
+
+# --- Analytics Export -> Splunk HEC --------------------------------------------------------
+# Only configured when vtm_hec_token is set (AAP credential / vault). The index comes from the token.
+vtm_hec_endpoint: https://splunk.example.com:8088/services/collector/event
+vtm_hec_tls_verify: false
+
+# --- Backups (kept on the appliance) -------------------------------------------------------
+vtm_backup_prefix: vtm-config       # only backups with this prefix are pruned
+vtm_backup_keep: 14
+vtm_backup_before_change: true      # platform.yml takes one before it changes anything

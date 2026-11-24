@@ -1,0 +1,16 @@
+---
+# Copy to inventory.yml (git-ignored). In AAP these are inventory/host variables.
+# The REST plays run on the controller; the inventory only needs the Alloy host.
+all:
+  hosts:
+    fedora:
+      ansible_host: 192.0.2.45
+      ansible_python_interpreter: /usr/bin/python3
+  vars:
+    vtm_target: vtm01.example.com
+    vtm_alloy_host: fedora
+    vtm_alloy_config_dir: /srv/alloy/config     # host dir mounted into the Alloy container
+    vtm_alloy_owner: alloy                      # owner of the rootless Alloy user service
+    vtm_ntp_servers: [192.0.2.1]
+    vtm_syslog_host: 192.0.2.45
+    vtm_hec_endpoint: https://splunk.example.com:8088/services/collector/event

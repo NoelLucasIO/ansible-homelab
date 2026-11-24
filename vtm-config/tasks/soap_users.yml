@@ -1,0 +1,32 @@
+---
+# One call to the SOAP control API's Users interface, as vtm_admin_user.
+# In: vtm_soap_method, vtm_soap_args (already XML-escaped). Out: vtm_soap_items (listUsers).
+- name: SOAP Users.{{ vtm_soap_method }}
+  ansible.builtin.uri:
+    url: "https://{{ vtm_target }}:{{ vtm_admin_port }}/soap"
+    method: POST
+    user: "{{ vtm_admin_user }}"
+    password: "{{ vtm_admin_password }}"
+    body_format: raw
+    headers:
+      Content-Type: text/xml; charset=utf-8
+      SOAPAction: '"http://soap.zeus.com/zxtm/1.0/Users/{{ vtm_soap_method }}"'
+    body: >-
+      <?xml version="1.0" encoding="UTF-8"?><soap:Envelope
+      xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+      xmlns:u="http://soap.zeus.com/zxtm/1.0/Users/"><soap:Body><u:{{ vtm_soap_method }}>{{
+      vtm_soap_args }}</u:{{ vtm_soap_method }}></soap:Body></soap:Envelope>
+    status_code: [200, 500]
+  register: vtm_soap
+  no_log: "{{ vtm_soap_method != 'listUsers' }}"   # the request carries a password
+  changed_when: vtm_soap_method != 'listUsers' and vtm_soap.status == 200
+
+- name: SOAP fault?
+  ansible.builtin.assert:
+    that: vtm_soap.status == 200
+    fail_msg: "Users.{{ vtm_soap_method }} failed: {{ vtm_soap.content | regex_search('<faultstring>([^<]*)', '\\1') | default(['?'], true) | first }}"
+
+- name: Users on the appliance
+  ansible.builtin.set_fact:
+    vtm_soap_items: "{{ vtm_soap.content | regex_findall('<Item[^>]*>([^<]*)</Item>') }}"
+  when: vtm_soap_method == 'listUsers'

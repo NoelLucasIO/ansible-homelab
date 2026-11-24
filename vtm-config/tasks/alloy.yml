@@ -1,0 +1,51 @@
+---
+# A UDP syslog listener for vTM in the (rootless) Alloy on the log host.
+- name: Alloy owner's account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ vtm_alloy_owner }}"
+
+- name: Who are we on the log host?
+  ansible.builtin.command: id -un
+  register: vtm_whoami
+  changed_when: false
+
+- name: Run as the Alloy owner (rootless systemd user session)
+  ansible.builtin.set_fact:
+    # As root (AAP, become): runuser, which keeps root's environment, so HOME and the user bus
+    # must be the owner's. Already the owner (a CLI run without become): nothing to add.
+    vtm_runas: >-
+      {{ '' if vtm_whoami.stdout == vtm_alloy_owner else
+         'runuser -u ' ~ vtm_alloy_owner ~ ' -- env HOME=' ~ ansible_facts.getent_passwd[vtm_alloy_owner][4]
+         ~ ' XDG_RUNTIME_DIR=/run/user/' ~ ansible_facts.getent_passwd[vtm_alloy_owner][1]
+         ~ ' DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/' ~ ansible_facts.getent_passwd[vtm_alloy_owner][1] ~ '/bus' }}
+
+- name: Something else on udp/{{ vtm_syslog_port }}?
+  ansible.builtin.command: ss -Hlnup sport = :{{ vtm_syslog_port }}
+  register: vtm_port_users
+  changed_when: false
+
+- name: Port is free or already Alloy's
+  ansible.builtin.assert:
+    that: vtm_port_users.stdout | length == 0 or 'alloy' in vtm_port_users.stdout
+    fail_msg: "udp/{{ vtm_syslog_port }} on {{ inventory_hostname }} is in use: {{ vtm_port_users.stdout }}. Set vtm_syslog_port."
+
+- name: Listener drop-in
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/vtm.alloy.j2"
+    dest: "{{ vtm_alloy_config_dir }}/{{ vtm_alloy_job }}.alloy"
+    owner: "{{ vtm_alloy_owner }}"
+    group: "{{ ansible_facts.getent_passwd[vtm_alloy_owner][2] | int }}"
+    mode: "0644"
+  notify: Restart Alloy
+
+- name: Load the listener now
+  ansible.builtin.meta: flush_handlers
+
+- name: Alloy listening on udp/{{ vtm_syslog_port }}
+  ansible.builtin.command: ss -Hlnup sport = :{{ vtm_syslog_port }}
+  register: vtm_port_users
+  until: "'alloy' in vtm_port_users.stdout"
+  retries: 12
+  delay: 5
+  changed_when: false

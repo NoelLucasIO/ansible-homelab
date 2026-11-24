@@ -1,0 +1,83 @@
+---
+# Log in as the API user (creating or resetting it as admin if needed) and pick the REST version.
+- name: Check inputs
+  ansible.builtin.assert:
+    that:
+      - vtm_target | length > 0
+      - vtm_api_password is defined
+      - vtm_api_password | length >= 12
+    fail_msg: "Set vtm_target, and vtm_api_password (12+ characters) in the AAP credential or vault."
+  no_log: true
+
+- name: REST base URL
+  ansible.builtin.set_fact:
+    vtm_rest: "https://{{ vtm_target }}:{{ vtm_rest_port }}/api/tm"
+
+- name: Log in as the API user
+  ansible.builtin.uri:
+    url: "{{ vtm_rest }}/"
+    user: "{{ vtm_api_user }}"
+    password: "{{ vtm_api_password }}"
+    status_code: [200, 401]
+  register: vtm_login
+
+- name: Make or repair the API user (as admin, over SOAP)
+  when: vtm_login.status == 401
+  block:
+    - name: Admin password available?
+      ansible.builtin.assert:
+        that: vtm_admin_password | default('') | length > 0
+        fail_msg: >-
+          {{ vtm_api_user }} can't log in to {{ vtm_target }} (new or rebuilt appliance, or a changed password).
+          Supply vtm_admin_password once so the playbook can create or reset it.
+
+    - name: List users
+      ansible.builtin.include_tasks: soap_users.yml
+      vars:
+        vtm_soap_method: listUsers
+        vtm_soap_args: ""
+
+    - name: XML-escaped user, password, group
+      ansible.builtin.set_fact:
+        vtm_x: >-
+          {{ dict(['user', 'pass', 'group'] | zip([vtm_api_user, vtm_api_password, vtm_api_group]
+             | map('replace', '&', '&amp;') | map('replace', '<', '&lt;') | map('replace', '>', '&gt;')
+             | map('replace', '"', '&quot;'))) }}
+      no_log: true
+
+    - name: Create or reset the API user
+      ansible.builtin.include_tasks: soap_users.yml
+      vars:
+        vtm_soap_method: "{{ 'changePassword' if vtm_api_user in vtm_soap_items else 'addUser' }}"
+        vtm_soap_args: >-
+          <username>{{ vtm_x.user }}</username><password>{{ vtm_x.pass }}</password>{{
+          '' if vtm_api_user in vtm_soap_items else '<group>' ~ vtm_x.group ~ '</group>' }}
+
+    - name: Log in again as the API user
+      ansible.builtin.uri:
+        url: "{{ vtm_rest }}/"
+        user: "{{ vtm_api_user }}"
+        password: "{{ vtm_api_password }}"
+      register: vtm_relogin
+
+    - name: Use the new login
+      ansible.builtin.set_fact:
+        vtm_login: "{{ vtm_relogin }}"
+
+- name: REST API version
+  ansible.builtin.set_fact:
+    vtm_api: >-
+      {{ vtm_rest }}/{{ vtm_rest_api_version if vtm_rest_api_version in vtm_versions else vtm_versions | last }}
+  vars:
+    vtm_versions: "{{ vtm_login.json.children | map(attribute='name') | list }}"
+
+- name: Traffic managers in the cluster
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/traffic_managers/"
+  register: vtm_tms
+
+- name: Connected
+  ansible.builtin.debug:
+    msg: >-
+      {{ vtm_target }} as {{ vtm_api_user }}, REST {{ vtm_api | basename }},
+      traffic managers: {{ vtm_tms.json.children | map(attribute='name') | join(', ') }}

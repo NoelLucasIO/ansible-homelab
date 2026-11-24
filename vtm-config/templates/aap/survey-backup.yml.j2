@@ -1,0 +1,15 @@
+- question_name: Appliance
+  variable: vtm_target
+  type: text
+  required: true
+  default: {{ vtm_target | to_json }}
+  min: 3
+  max: 253
+- question_name: Backups to keep
+  question_description: Only backups this project made (name starts with {{ vtm_backup_prefix }}-) are pruned
+  variable: vtm_backup_keep
+  type: integer
+  required: true
+  default: {{ vtm_backup_keep | int }}
+  min: 1
+  max: 365

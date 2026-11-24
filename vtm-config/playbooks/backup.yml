@@ -1,0 +1,26 @@
+---
+# Full configuration backup on the appliance, keeping the newest vtm_backup_keep of ours.
+# Meant for an AAP schedule:  ansible-playbook playbooks/backup.yml -e vtm_target=vtm01.example.com
+- name: Configuration backup of the vTM appliance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vtm_api_user }}"
+      password: "{{ vtm_api_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ vtm_validate_certs | bool }}"
+      body_format: raw
+      return_content: true
+      timeout: 120
+  tasks:
+    - name: Connect
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/connect.yml"
+
+    - name: Backup
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backup.yml"
+      vars:
+        vtm_backup_reason: scheduled

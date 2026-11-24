@@ -1,0 +1,22 @@
+---
+# Idempotent PUT of part of a REST config resource.
+# In: vtm_path (relative to config/active, e.g. 'actions/Syslog to Loki'), vtm_body ({'properties': {...}}).
+# Reads the resource, merges vtm_body into it, and PUTs only when that changes something.
+- name: Read {{ vtm_path }}
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/{{ vtm_path | urlencode }}"
+    status_code: [200, 404]
+  register: vtm_cur
+
+- name: Write {{ vtm_path }}
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/{{ vtm_path | urlencode }}"
+    method: PUT
+    body_format: json
+    body: "{{ vtm_body }}"
+    status_code: [200, 201]
+  when: >-
+    vtm_cur.status == 404 or
+    (vtm_cur.json | combine(vtm_body, recursive=True)) != vtm_cur.json
+  changed_when: true
+  no_log: "{{ vtm_no_log | default(false) }}"

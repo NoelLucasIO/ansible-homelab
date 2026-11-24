@@ -1,0 +1,62 @@
+---
+# Platform settings for an Ivanti vTM appliance (built by vtm-vm or by hand), over its REST API.
+#   ansible-playbook playbooks/platform.yml -e vtm_target=vtm01.example.com -e vtm_alloy_host=fedora
+# 1. Alloy on the log host gets a UDP syslog listener for vTM (skipped when vtm_alloy_host is blank).
+# 2. The appliance: backup first, API user, NTP, event syslog to that listener, Analytics Export to
+#    Splunk HEC (when a token is set).
+# 3. Loki is asked whether vTM events arrive.
+
+- name: Alloy listener for vTM syslog
+  hosts: "{{ vtm_alloy_host | default('no_alloy_host_set') }}"
+  become: "{{ vtm_alloy_become | default(true) }}"   # false for a CLI run as the Alloy owner
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  tasks:
+    - name: Listener
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/alloy.yml"
+      when: vtm_syslog_enabled | bool
+  handlers:
+    - name: Restart Alloy
+      ansible.builtin.command:
+        cmd: "{{ vtm_runas }} systemctl --user restart {{ vtm_alloy_unit }}"
+        chdir: /
+      changed_when: true
+
+- name: Platform settings on the vTM appliance
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vtm_api_user }}"
+      password: "{{ vtm_api_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ vtm_validate_certs | bool }}"
+      body_format: raw          # GETs carry no body; PUTs set json themselves
+      return_content: true
+      timeout: 60
+  tasks:
+    - name: Connect (and make the API user if needed)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/connect.yml"
+
+    - name: Backup before changing anything
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backup.yml"
+      vars:
+        vtm_backup_reason: before platform.yml
+      when: vtm_backup_before_change | bool
+
+    - name: NTP, event syslog, Analytics Export
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/platform.yml"
+
+- name: Check Loki
+  hosts: "{{ vtm_alloy_host | default('no_alloy_host_set') }}"
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  tasks:
+    - name: Events from vTM in Loki
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/loki_check.yml"
+      when: vtm_syslog_enabled | bool
