@@ -1,0 +1,50 @@
+---
+# One weekly schedule on the "HCP certificate" job template for one HCP system. Its extra data
+# answers the template's survey; create or update by name.
+- name: Schedule inputs
+  ansible.builtin.assert:
+    that:
+      - aap_cs.cluster is match('^[a-z][a-z0-9-]{0,30}$')
+      - aap_cs.kvm_host | default('') | length > 0
+      - aap_cs.backend_ip | default('') is match('^(\\d{1,3}\\.){3}\\d{1,3}$')
+    fail_msg: "aap_cert_schedules entries need cluster, kvm_host and backend_ip (got {{ aap_cs }})."
+    quiet: true
+
+- name: Schedule name
+  ansible.builtin.set_fact:
+    aap_cs_name: "HCP certificate renewal: {{ aap_cs.cluster }}"
+
+- name: HCP certificate template
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/?name={{ 'HCP certificate' | urlencode }}"
+  register: aap_cs_jt
+
+- name: Existing schedule
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/schedules/?name={{ aap_cs_name | urlencode }}"
+  register: aap_cs_q
+
+- name: Create or update {{ aap_cs_name }}
+  ansible.builtin.uri:
+    url: >-
+      {{ aap_api }}/{{ ('schedules/' ~ aap_cs_q.json.results[0].id ~ '/') if aap_cs_q.json.count
+         else ('job_templates/' ~ aap_cs_jt.json.results[0].id ~ '/schedules/') }}
+    method: "{{ 'PATCH' if aap_cs_q.json.count else 'POST' }}"
+    body:
+      name: "{{ aap_cs_name }}"
+      description: Renews HCP's certificate from the lab CA when due; does nothing otherwise
+      enabled: true
+      rrule: >-
+        DTSTART;TZID={{ aap_cert_tz }}:{{ lookup('ansible.builtin.pipe', 'date -d tomorrow +%Y%m%d') }}T{{ aap_cert_time }}
+        {{ aap_cert_rrule }}
+      extra_data:
+        hcp_kvm_host: "{{ aap_cs.kvm_host }}"
+        hcp_cluster: "{{ aap_cs.cluster }}"
+        hcp_backend_ip: "{{ aap_cs.backend_ip }}"
+        hcp_pki_host: "{{ hcp_pki_host }}"
+        hcp_pki_issued_dir: "{{ hcp_pki_issued_dir }}"
+        hcp_cert_days: "{{ hcp_cert_days | int }}"
+        hcp_cert_extra_sans: "{{ aap_cs.extra_sans | default(hcp_cert_extra_sans) }}"
+        hcp_cert_force: "false"
+    status_code: [200, 201]
+  changed_when: true

@@ -30,6 +30,12 @@
     aap_machine_credential: ""            # name of the machine credential for the KVM hosts
     aap_ee: ""                            # execution environment name; blank = project/org default
     aap_sv: "{{ playbook_dir }}/../templates/aap"
+    # Weekly "HCP certificate" runs, one per system: [{cluster, kvm_host, backend_ip}]. The job
+    # renews only when due (30 days) or when a tenant's name is missing, so most runs do nothing.
+    aap_cert_schedules: []
+    aap_cert_rrule: "RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"   # Sundays...
+    aap_cert_time: "031700"                                  # ...at 03:17, aap_cert_tz
+    aap_cert_tz: America/New_York
   module_defaults:
     ansible.builtin.uri:
       # Token if given (AAP 2.5+ gateways may refuse Basic auth on the API), else Basic.
@@ -236,6 +242,14 @@
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"
+
+    # --- schedules: certificate renewal --------------------------------------------------
+    - name: Weekly certificate renewal per system
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_cert_schedule.yml"
+      loop: "{{ aap_cert_schedules }}"
+      loop_control:
+        loop_var: aap_cs
+        label: "{{ aap_cs.cluster }}"
 
     # --- workflow: deploy, then post-install ------------------------------------------
     - name: Workflow, deploy then first-login setup

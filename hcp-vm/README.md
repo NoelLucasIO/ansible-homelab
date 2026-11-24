@@ -127,7 +127,9 @@ HCP's self-signed one. AAP template **HCP certificate**.
   `admin jvm domain createPKCS12 <system>` over the back-end; HCP's older certificates for the
   domain are removed. The private key is removed from the container, hosts and controller at the end.
 * **Renewal:** a run does nothing while the served certificate has every name and is more than
-  `hcp_cert_renew_days` (30) from expiry, so it can run on a schedule. With
+  `hcp_cert_renew_days` (30) from expiry, so it runs on a schedule: `aap-setup.yml` creates a
+  weekly AAP schedule **HCP certificate renewal: <system>** (Sundays 03:17) for each entry in
+  `aap_cert_schedules` (`[{cluster, kvm_host, backend_ip}]`), about four tries inside the window. With
   `hcp_pki_issued_dir` set (`<pki_data>/issued`), the public certificate is recorded there and
   the pki stack's `PKIIssuedCertExpiring` alert covers it.
 * **Settings:** `hcp_cert_days` (365, the CA's limit), `hcp_cert_key` (RSA-2048),
