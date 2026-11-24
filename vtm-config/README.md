@@ -64,9 +64,11 @@ credential: runs log in as the API user and never touch `admin`.
 
 ## Status
 
-- **Tested against vtm01 (22.9r7) from the CLI:** creating the API user over SOAP, backup and
-  retention, NTP, the syslog action and All Events, the Alloy drop-in and restart, and the
-  Loki check (a real `flippernobackends` warning arrived as `{job="vtm",host="vtm01…",app="zeus.eventd"}`).
-  A repeat run changes only the backup.
-- **Not yet run:** Analytics Export with a real HEC token (endpoint path to confirm), and the
-  playbooks from AAP (`aap-setup.yml` is untested).
+- **Tested end to end from AAP 2.7** against vtm01 (22.9r7): the first run created the `ansible`
+  API user over SOAP, took a backup, and turned on Analytics Export (the exporter holds a connection
+  to Splunk HEC on 8088 and raises no errors); NTP, the syslog action, All Events and the Alloy
+  drop-in were already in place from CLI runs and were left unchanged. The Loki check passed
+  (real events arrive as `{job="vtm", host="vtm01…", app="zeus.eventd"}`).
+- **Also tested from the CLI:** creating the API user from scratch, backup retention, the Alloy
+  drop-in and restart. A repeat run changes only the backup.
+- `aap-setup.yml` created the credential type and both templates.

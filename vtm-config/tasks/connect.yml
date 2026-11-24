@@ -2,11 +2,20 @@
 # Log in as the API user (creating or resetting it as admin if needed) and pick the REST version.
 - name: Check inputs
   ansible.builtin.assert:
-    that:
-      - vtm_target | length > 0
-      - vtm_api_password is defined
-      - vtm_api_password | length >= 12
-    fail_msg: "Set vtm_target, and vtm_api_password (12+ characters) in the AAP credential or vault."
+    that: vtm_target | length > 0
+    fail_msg: Set vtm_target (the appliance's FQDN).
+
+- name: API password supplied?
+  ansible.builtin.assert:
+    that: (vtm_api_password | default('')) | length > 0
+    fail_msg: >-
+      No vtm_api_password. In AAP, attach a credential of type "vTM API" to this template
+      (aap-setup.yml with aap_secrets_credential, or Edit -> Credentials); on the CLI, the vault.
+
+- name: API password long enough?
+  ansible.builtin.assert:
+    that: vtm_api_password | length >= 12
+    fail_msg: vtm_api_password is shorter than 12 characters; set a longer one in the "vTM API" credential.
   no_log: true
 
 - name: REST base URL
