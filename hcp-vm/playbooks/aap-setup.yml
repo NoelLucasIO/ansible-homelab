@@ -2,7 +2,7 @@
 # Creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "HCP VM secrets" (NIOS API password, HCP root SSH key file)
 #   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (all post-install
-#     steps), and one per step: "HCP first-login", "HCP protocol defaults", "HCP Prometheus", "HCP tenant",
+#     steps), and one per step: "HCP first-login", "HCP protocol defaults", "HCP Prometheus", "HCP syslog", "HCP tenant",
 #     "HCP VM services", "HCP node_exporter" (each with a survey)
 #   * workflow "HCP VM deploy + post-install" (deploy, then all post-install steps on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
@@ -150,6 +150,9 @@
               'target': lookup('ansible.builtin.template', aap_sv ~ '/survey-target.yml.j2') | from_yaml,
               'first_login': lookup('ansible.builtin.template', aap_sv ~ '/survey-first-login.yml.j2') | from_yaml,
               'protocol_defaults': lookup('ansible.builtin.template', aap_sv ~ '/survey-protocol-defaults.yml.j2') | from_yaml,
+              'syslog': lookup('ansible.builtin.template', aap_sv ~ '/survey-syslog.yml.j2') | from_yaml,
+              'syslog_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-syslog.yml.j2',
+                                   template_vars={'chain': true}) | from_yaml,
               'prometheus': lookup('ansible.builtin.template', aap_sv ~ '/survey-prometheus.yml.j2') | from_yaml,
               'tenant': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2') | from_yaml,
               'tenant_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2',
@@ -165,7 +168,7 @@
         aap_s_workflow: "{{ dict(aap_wf | map(attribute='variable') | zip(aap_wf)).values() | list }}"
       vars:
         aap_post: >-
-          {{ aap_s.first_login + aap_s.protocol_defaults + aap_s.prometheus
+          {{ aap_s.first_login + aap_s.protocol_defaults + aap_s.prometheus + aap_s.syslog_opt
              + aap_s.tenant_opt + aap_s.node_exporter_opt + aap_s.prom_target }}
         aap_chain: "{{ aap_s.target + aap_post }}"
         aap_wf: "{{ aap_s.deploy + aap_post }}"
@@ -198,6 +201,10 @@
           playbook: hcp-vm/playbooks/prometheus.yml
           description: Turn HCP's built-in Prometheus on (or off)
           survey: "{{ aap_s.target + aap_s.prometheus }}"
+        - name: HCP syslog
+          playbook: hcp-vm/playbooks/syslog.yml
+          description: HCP syslog output (Monitoring > Syslog) to the listed servers
+          survey: "{{ aap_s.target + aap_s.syslog }}"
         - name: HCP tenant
           playbook: hcp-vm/playbooks/tenant.yml
           description: Create a tenant (quota, no namespace quota) and set its namespace defaults

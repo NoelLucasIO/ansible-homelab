@@ -50,7 +50,7 @@ Everything after the install is `post_install.yml` (below).
 
 ## post_install.yml and its steps
 
-`post_install.yml` runs six playbooks in order. Each is also a playbook (and an AAP job
+`post_install.yml` runs seven playbooks in order. Each is also a playbook (and an AAP job
 template) of its own, so any step can be rerun alone:
 
 | Playbook | Does | Skipped in post_install.yml when |
@@ -59,6 +59,7 @@ template) of its own, so any step can be rerun alone:
 | `protocol_defaults.yml` | system-wide defaults for new namespaces: cloud protocols only, unbalanced directories | never |
 | `vm_services.yml` | disables physical-node services a VM can't run (`hcp_vm_disable_units`, default `ipmi.service`: no BMC, so it fails every boot and shows as a failed unit) | `hcp_vm_disable_units` is empty |
 | `prometheus.yml` | Monitoring > Prometheus > *Enable Prometheus* | never (`hcp_prometheus=false` turns it off) |
+| `syslog.yml` | Monitoring > *Syslog*: servers, level, facility, extra event types | `hcp_syslog_servers` is empty |
 | `tenant.yml` | initial tenant, its quotas and namespace defaults | `hcp_tenant_name` is blank |
 | `node_exporter.yml` | node_exporter, firewalled, registered with Prometheus | `hcp_node_exporter_allow` is empty |
 
@@ -110,6 +111,27 @@ server on the node (`:9097`); the play waits for it to listen. Console:
 `hcp_prometheus_retention_gb`, default 300) is set first: HCP writes it into the server's command
 line when it starts it. If the running server still shows other values, the play turns it off and
 on again and checks the command line.
+
+### syslog.yml
+
+Monitoring > *Syslog* in the System Management Console. The page is cluster settings
+(`syslog.system_event_log.*`, `syslog.http_log.facility`, `syslog.mapi_log.facility`,
+`syslog.severity.enabled`), set with `admin jvm config set cluster`; syslog is switched on last.
+
+| Console setting | Variable | Default |
+|---|---|---|
+| Syslog server IP addresses | `hcp_syslog_servers` (`host:port`, UDP) | none: step skipped |
+| Send log messages at this level or higher | `hcp_syslog_level` | `NOTICE` |
+| Facility (administrator, HTTP access, management API access) | `hcp_syslog_facility` | `local0` |
+| Add severity information to syslog | `hcp_syslog_severity` | true |
+| Send security / compliance events | `hcp_syslog_security`, `hcp_syslog_compliance` | true |
+| HTTP-based data access / management API requests | `hcp_syslog_http_access`, `hcp_syslog_mapi_access` | true |
+
+HCP sends RFC 3164 with no hostname and a trailing NUL byte. Splunk's UDP input takes it as is;
+Grafana Alloy drops it. [`files/syslog-relay/`](files/syslog-relay/README.md) holds a small relay
+for the log host that fixes both and forwards to Alloy, so Loki gets `{job="hcp"}` with the
+node's DNS name as `host`. It is installed by hand for now (see its README). Check a run with
+*Test* on the console page.
 
 ### tenant.yml
 
@@ -175,7 +197,7 @@ the hcp-vm marker.
 
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
-   **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**,
+   **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**, **HCP syslog**,
    **HCP protocol defaults**, **HCP tenant**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
    every question once). Create a
@@ -206,10 +228,11 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP protocol defaults | cloud protocols only (true/false), unbalanced directories (true/false) |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
+| HCP syslog | servers (comma-separated `host:port`), level, extra event types |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
 | HCP VM services | nothing more (units: `hcp_vm_disable_units`, default `ipmi.service`) |
 | HCP node_exporter | allowed scrapers (comma-separated addresses/CIDRs), version, Prometheus server (inventory host) and its file_sd directory |
-| HCP post-install | all of the above once; a blank tenant name or allow list skips that step |
+| HCP post-install | all of the above once; a blank syslog server list, tenant name or allow list skips that step |
 
 **HCP VM destroy** also asks for the Prometheus server and file_sd directory, to remove the
 node's target. Defaults come from your site values: put `hcp_node_exporter_allow`,

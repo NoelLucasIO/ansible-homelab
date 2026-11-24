@@ -1,0 +1,12 @@
+# systemd user unit: ~/.config/systemd/user/hcp-syslog-relay.service
+[Unit]
+Description=HCP syslog relay (strip NUL, add hostname) udp/1517 -> Alloy udp/1599
+After=alloy.service
+
+[Service]
+ExecStart=/usr/bin/python3 %h/.local/bin/hcp-syslog-relay.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

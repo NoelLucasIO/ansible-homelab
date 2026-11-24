@@ -4,6 +4,7 @@
 #   protocol_defaults.yml  system-wide default protocol optimization and directory usage
 #   vm_services.yml    disable physical-node services a VM can't run (ipmi.service)
 #   prometheus.yml     Monitoring > Prometheus > Enable Prometheus (hcp_prometheus)
+#   syslog.yml         Monitoring > Syslog (skipped when hcp_syslog_servers is empty)
 #   tenant.yml         initial tenant + its namespace defaults (skipped when hcp_tenant_name is blank)
 #   node_exporter.yml  node_exporter + firewall chain (skipped when hcp_node_exporter_allow is empty)
 #   ansible-playbook playbooks/post_install.yml -e @my-hcp.yml
@@ -18,6 +19,10 @@
 
 - name: Prometheus
   ansible.builtin.import_playbook: prometheus.yml
+
+- name: Syslog
+  ansible.builtin.import_playbook: syslog.yml
+  when: hcp_syslog_servers | default([]) | length > 0
 
 - name: Initial tenant
   ansible.builtin.import_playbook: tenant.yml

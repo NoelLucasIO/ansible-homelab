@@ -81,6 +81,16 @@ hcp_backend_host_ip: ""                 # hypervisor's temporary back-end addres
 hcp_sys_cloud_optimized: true           # true = cloud protocols only, false = all protocols
 hcp_sys_unbalanced_dirs: true           # true = unbalanced, false = balanced
 
+# --- Syslog (syslog.yml): Monitoring > Syslog ----------------------------------------------
+hcp_syslog_servers: []                  # host:port (UDP), e.g. [192.0.2.45:1517]; empty = skip
+hcp_syslog_level: NOTICE                # NOTICE | WARNING | ERROR
+hcp_syslog_facility: local0             # administrator events, HTTP access and MAPI access
+hcp_syslog_severity: true               # "Add severity information to syslog"
+hcp_syslog_security: true               # also send security events
+hcp_syslog_compliance: true             # also send compliance events
+hcp_syslog_http_access: true            # also send HTTP data-access events
+hcp_syslog_mapi_access: true            # also send management API access events
+
 # --- Prometheus (prometheus.yml): Monitoring > Prometheus > Enable Prometheus ----------
 hcp_prometheus: true                    # false = turn it off
 hcp_prometheus_retention_days: 365      # TSDB retention time, 1-365 days (HCP default 15)

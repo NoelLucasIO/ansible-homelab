@@ -1,0 +1,111 @@
+---
+# HCP's syslog output: System Management Console > Monitoring > Syslog.
+#   ansible-playbook playbooks/syslog.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 \
+#     -e hcp_backend_ip=198.51.100.101 -e '{"hcp_syslog_servers": ["192.0.2.45:1517"]}'
+# The page is cluster settings (syslog.system_event_log.*), set with `admin jvm config set
+# cluster` over the back-end like the other steps: the server list, the level, the facility (for
+# administrator events, HTTP access and management API access alike), "add severity information",
+# and which extra event types to send (security, compliance, HTTP and management API access).
+# HCP sends UDP, RFC 3164, with no hostname and a trailing NUL byte; files/syslog-relay/ has the
+# relay that makes that palatable for Alloy/Loki (Splunk takes it as-is). Rerun-safe.
+- name: HCP syslog
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - hcp_vm_defaults
+  tasks:
+    # The server list may come as a list or comma/newline-separated text (AAP survey).
+    - name: Normalise the server list
+      ansible.builtin.set_fact:
+        hcp_sl_servers: >-
+          {{ (hcp_syslog_servers if hcp_syslog_servers is not string
+              else hcp_syslog_servers | regex_replace('[\s,]+', ',') | split(','))
+             | map('trim') | reject('equalto', '') | unique | list }}
+
+    # The AAP survey asks the four extras as one multiselect (newline-separated).
+    - name: Extra event types from the survey
+      ansible.builtin.set_fact:
+        hcp_syslog_security: "{{ 'security' in hcp_sl_extra }}"
+        hcp_syslog_compliance: "{{ 'compliance' in hcp_sl_extra }}"
+        hcp_syslog_http_access: "{{ 'http_access' in hcp_sl_extra }}"
+        hcp_syslog_mapi_access: "{{ 'mapi_access' in hcp_sl_extra }}"
+      vars:
+        hcp_sl_extra: >-
+          {{ (hcp_syslog_extra if hcp_syslog_extra is not string
+              else hcp_syslog_extra | regex_replace('[\s,]+', ',') | split(',')) | map('trim') | list }}
+      when: hcp_syslog_extra is defined
+
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - hcp_backend_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+          - hcp_root_key_file is defined
+          - hcp_sl_servers | length > 0
+          - hcp_sl_servers | reject('match', '^[A-Za-z0-9.-]+:\d{1,5}$') | list | length == 0
+          - hcp_syslog_level | upper in ['NOTICE', 'WARNING', 'ERROR']
+          - hcp_syslog_facility is match('^local[0-7]$')
+        fail_msg: >-
+          Need hcp_cluster, hcp_backend_ip, the HCP secrets credential, and hcp_syslog_servers as
+          host:port entries (got {{ hcp_sl_servers }}); level NOTICE, WARNING or ERROR; facility
+          local0-local7.
+        quiet: true
+
+    # Server list and options first, the on switch last.
+    - name: Wanted settings
+      ansible.builtin.set_fact:
+        hcp_sl_want:
+          - {key: syslog.system_event_log.server_list, value: "{{ hcp_sl_servers | join(', ') }}"}
+          - {key: syslog.system_event_log.level, value: "{{ hcp_syslog_level | upper }}"}
+          - {key: syslog.system_event_log.facility, value: "{{ hcp_syslog_facility }}"}
+          - {key: syslog.http_log.facility, value: "{{ hcp_syslog_facility }}"}
+          - {key: syslog.mapi_log.facility, value: "{{ hcp_syslog_facility }}"}
+          - {key: syslog.severity.enabled, value: "{{ hcp_syslog_severity | bool | string | lower }}"}
+          - {key: syslog.system_event_log.send_security_events, value: "{{ hcp_syslog_security | bool | string | lower }}"}
+          - {key: syslog.system_event_log.send_compliance_events, value: "{{ hcp_syslog_compliance | bool | string | lower }}"}
+          - {key: syslog.system_event_log.send_http_access_events, value: "{{ hcp_syslog_http_access | bool | string | lower }}"}
+          - {key: syslog.system_event_log.send_mapi_access_events, value: "{{ hcp_syslog_mapi_access | bool | string | lower }}"}
+          - {key: syslog.system_event_log.enabled, value: "true"}
+
+    - name: Set syslog over the back-end
+      block:
+        - name: Open a back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_open.yml"
+
+        - name: Current settings (waits for HCP to be up)
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' config get cluster ' ~ item.key] }}"
+          loop: "{{ hcp_sl_want }}"
+          loop_control:
+            label: "{{ item.key }}"
+          register: hcp_sl_cur
+          until: hcp_sl_cur.rc == 0 and hcp_sl_cur.stdout is search('configValue')
+          retries: 30
+          delay: 20
+          changed_when: false
+
+        # The value goes to the node's shell inside single quotes (the server list has spaces).
+        - name: Set what differs
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' config set cluster ' ~ item.item.key ~ ' '
+                 ~ item.item.value | quote] }}
+          loop: "{{ hcp_sl_cur.results }}"
+          loop_control:
+            label: "{{ item.item.key }}={{ item.item.value }}"
+          when: item.stdout is not search("'configValue'\\s*:\\s*'" ~ item.item.value | regex_escape ~ "'")
+          changed_when: true
+
+      always:
+        - name: Close the back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_close.yml"
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "{{ hcp_clname }}: syslog on, level {{ hcp_syslog_level | upper }}, facility {{ hcp_syslog_facility }}, to {{ hcp_sl_servers | join(', ') }} (UDP)."
+          - >-
+            Also sent: security {{ hcp_syslog_security | bool }}, compliance {{ hcp_syslog_compliance | bool }},
+            HTTP access {{ hcp_syslog_http_access | bool }}, MAPI access {{ hcp_syslog_mapi_access | bool }}.
+          - "Check: Monitoring > Syslog > Test in the console, then {job=\"hcp\"} in Grafana / index=hcp in Splunk."

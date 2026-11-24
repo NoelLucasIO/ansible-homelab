@@ -1,0 +1,26 @@
+# Survey questions for syslog.yml ("HCP syslog"). With chain=true the step is optional: a blank
+# server list skips it.
+{% set opt = chain | default(false) %}
+- question_name: Syslog servers
+  question_description: "host:port, comma-separated (UDP). Your relay for Loki and/or Splunk's UDP input.{{ ' Blank = no syslog.' if opt else '' }}"
+  variable: hcp_syslog_servers
+  type: text
+  required: {{ (not opt) | lower }}
+  default: {{ (hcp_syslog_servers if hcp_syslog_servers is string else hcp_syslog_servers | join(', ')) | to_json }}
+  min: {{ 0 if opt else 3 }}
+  max: 400
+- question_name: Syslog level
+  variable: hcp_syslog_level
+  type: multiplechoice
+  required: true
+  default: {{ hcp_syslog_level | upper | to_json }}
+  choices: ["NOTICE", "WARNING", "ERROR"]
+- question_name: Syslog also sends
+  question_description: Extra event types besides system events
+  variable: hcp_syslog_extra
+  type: multiselect
+  required: false
+  default: {{ ((['security'] if hcp_syslog_security | bool else []) + (['compliance'] if hcp_syslog_compliance | bool else [])
+              + (['http_access'] if hcp_syslog_http_access | bool else []) + (['mapi_access'] if hcp_syslog_mapi_access | bool else []))
+              | join('\n') | to_json }}
+  choices: ["security", "compliance", "http_access", "mapi_access"]

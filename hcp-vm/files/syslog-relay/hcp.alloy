@@ -1,0 +1,12 @@
+// HCP (Hitachi Content Platform) syslog, fed by hcp-syslog-relay.py (udp/1517).
+// HCP sends a trailing NUL and no hostname, which this parser would drop.
+loki.source.syslog "hcp" {
+  listener {
+    address       = "127.0.0.1:1599"
+    protocol      = "udp"
+    syslog_format = "rfc3164"
+    labels        = { job = "hcp" }
+  }
+  relabel_rules = loki.relabel.syslog.rules
+  forward_to    = [loki.write.local.receiver]
+}
