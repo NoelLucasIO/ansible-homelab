@@ -3,8 +3,11 @@
 #   ansible-playbook playbooks/tenant.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 \
 #     -e hcp_backend_ip=198.51.100.101 -e hcp_tenant_name=lab -e hcp_tenant_quota=100 \
 #     -e hcp_tenant_quota_unit=GB -e hcp_security_password=... -e hcp_tenant_admin_password=...
-# The tenant is made through MAPI as the system 'security' account (needs MAPI on, see
-# first_login.yml): MAPI is the documented way to say "namespace quota: none". HCP gives its
+# The tenant and its first user are made with HCP's own `admin jvm tenant create` over the
+# back-end. Not MAPI: MAPI takes that user's password in the URL, and HCP logs the URL as a
+# management API access event, which syslog then forwards. Quotas, including "namespace quota:
+# none", go through MAPI as the system 'security' account (needs MAPI on, see first_login.yml),
+# with no secret in the request. HCP gives its
 # first user (hcp_tenant_admin_user) only the Security role; the play then sets that user's
 # roles to hcp_tenant_admin_roles (Monitor, Administrator, Security, Compliance by default),
 # and lets system-level users manage the tenant and search its namespaces
@@ -78,51 +81,58 @@
           delegate_to: localhost
           become: false
 
+        # Created with HCP's own command over the back-end, not MAPI: MAPI takes the first user's
+        # password in the URL, and HCP logs that URL (management API access events, which syslog
+        # forwards). The namespace quota ("none") is set through MAPI right after, with no secret.
         - name: Create the tenant
-          ansible.builtin.uri:
-            url: >-
-              {{ hcp_mapi }}/tenants?username={{ hcp_tenant_admin_user | urlencode }}&password={{
-              hcp_tenant_admin_password | urlencode }}&forcePasswordChange=false
-            method: PUT
-            headers: {Authorization: "{{ hcp_mapi_auth }}", Accept: application/json}
-            body_format: json
-            body: >-
-              {{ {'name': hcp_tenant_name,
-                  'systemVisibleDescription': hcp_tenant_description,
-                  'hardQuota': hcp_quota_str,
-                  'softQuota': hcp_tenant_soft_quota | int,
-                  'namespaceQuota': 'None',
-                  'versioningConfigurationEnabled': hcp_tenant_versioning | bool,
-                  'complianceConfigurationEnabled': hcp_tenant_compliance | bool} }}
-            validate_certs: false
-            status_code: [200, 400, 403, 409]
+          ansible.builtin.command:
+            argv: >-
+              {{ hcp_bssh + [hcp_admin ~ ' tenant create ' ~ hcp_tenant_name ~ ' '
+                 ~ hcp_tenant_description | quote ~ ' ' ~ hcp_quota_bytes ~ ' '
+                 ~ hcp_tenant_soft_quota | int ~ ' ' ~ hcp_tenant_mask
+                 ~ ' --user ' ~ hcp_tenant_admin_user | quote ~ ' ' ~ hcp_tenant_admin_password | quote
+                 ~ ' --mapi' ~ (' --versioning' if hcp_tenant_versioning | bool else '')
+                 ~ (' --compliance' if hcp_tenant_compliance | bool else '')] }}
+          vars:
+            hcp_quota_bytes: "{{ (hcp_quota_gb | float * 1024 * 1024 * 1024) | round | int }}"
+            hcp_tenant_mask: bRrWwdpscP     # browse, read ACL, read, write ACL, write, delete, purge, search, chown, privileged
           register: hcp_t_new
+          no_log: true
+          changed_when: true
+          when: hcp_t.status == 404
+
+        - name: Tenant as HCP has it now
+          ansible.builtin.uri:
+            url: "{{ hcp_mapi }}/tenants/{{ hcp_tenant_name }}?verbose=true"
+            headers: {Authorization: "{{ hcp_mapi_auth }}", Accept: application/json}
+            validate_certs: false
+            status_code: [200, 404]
+          register: hcp_t_now
           delegate_to: localhost
           become: false
-          no_log: true
-          changed_when: hcp_t_new.status == 200
-          when: hcp_t.status == 404
 
         - name: Tenant created
           ansible.builtin.assert:
-            that: hcp_t_new.status == 200
-            fail_msg: "MAPI refused the tenant ({{ hcp_t_new.status }}): {{ hcp_t_new.x_hcp_errormessage | default('no detail') }}"
-          when: hcp_t.status == 404
+            that: hcp_t_now.status == 200
+            fail_msg: >-
+              The tenant wasn't created ({{ hcp_t_new.rc | default('?') }}):
+              {{ (hcp_t_new.stdout | default('') ~ ' ' ~ hcp_t_new.stderr | default(''))
+                 | replace(hcp_tenant_admin_password, '********') | trim | truncate(400) }}
 
-        # Existing tenant: compare in GB (MAPI reports "<n.nn> GB|TB").
-        - name: Quota changes for the existing tenant
+        # Compare in GB (MAPI reports "<n.nn> GB|TB"). A new tenant still has HCP's default
+        # namespace quota here.
+        - name: Quota changes
           ansible.builtin.set_fact:
             hcp_t_update: >-
               {{ {}
                  | combine({'hardQuota': hcp_quota_str}
-                           if (hcp_t.json.hardQuota.split()[0] | float
-                               * (1024 if hcp_t.json.hardQuota is search('TB') else 1)
+                           if (hcp_t_now.json.hardQuota.split()[0] | float
+                               * (1024 if hcp_t_now.json.hardQuota is search('TB') else 1)
                                - hcp_quota_gb | float) | abs > 0.01 else {})
                  | combine({'softQuota': hcp_tenant_soft_quota | int}
-                           if hcp_t.json.softQuota | int != hcp_tenant_soft_quota | int else {})
+                           if hcp_t_now.json.softQuota | int != hcp_tenant_soft_quota | int else {})
                  | combine({'namespaceQuota': 'None'}
-                           if hcp_t.json.namespaceQuota | default('None') | string != 'None' else {}) }}
-          when: hcp_t.status == 200
+                           if hcp_t_now.json.namespaceQuota | default('None') | string != 'None' else {}) }}
 
         - name: Update the tenant's quotas
           ansible.builtin.uri:
@@ -136,7 +146,7 @@
           delegate_to: localhost
           become: false
           changed_when: true
-          when: hcp_t.status == 200 and hcp_t_update | length > 0
+          when: hcp_t_update | length > 0
 
         # admin jvm prints Python literals; the node's python turns them into JSON.
         - name: Tenant user accounts

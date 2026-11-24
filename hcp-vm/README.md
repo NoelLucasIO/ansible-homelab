@@ -135,8 +135,10 @@ node's DNS name as `host`. It is installed by hand for now (see its README). Che
 
 ### tenant.yml
 
-Creates the tenant through MAPI as the security account (MAPI is the documented way to say
-*namespace quota: none*): name, description, hard quota (`hcp_tenant_quota` in GB or TB), soft
+Creates the tenant and its first user with `admin jvm tenant create` over the back-end, then sets
+its quotas through MAPI as the security account (MAPI is the documented way to say *namespace
+quota: none*). Not MAPI for the create: MAPI takes the first user's password in the URL, HCP logs
+that URL as a management API access event, and syslog forwards it. Name, description, hard quota (`hcp_tenant_quota` in GB or TB), soft
 quota (85%), namespace quota none, versioning allowed (`hcp_tenant_versioning`), retention
 compliance not (`hcp_tenant_compliance`; neither can be turned off later), and its first user
 (`hcp_tenant_admin_user`). HCP gives that user only the Security role, so the play sets its roles
@@ -273,3 +275,6 @@ default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from
   then turn Prometheus off and on.
 - An HCP node's `hostname` is already fully qualified (`hcp-node-101.<system>`).
 - Ansible's `find` `contains` matches from the start of each line: prefix the pattern with `.*`.
+- MAPI's tenant create (`PUT /mapi/tenants?username=…&password=…`) puts the first user's password
+  in the URL, and HCP's management API access log, forwarded by syslog, records the URL. Create
+  tenants with `admin jvm tenant create` instead.
