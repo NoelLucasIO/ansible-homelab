@@ -4,10 +4,12 @@ Deploys a single-node HCP (Hitachi Content Platform) VM on KVM from the HCP ISO,
 from an AAP job template whose survey carries every installer answer and the VM sizing, then
 does the post-install setup: first login, system-wide namespace defaults, physical-node services a
 VM can't run, HCP's Prometheus, syslog to Splunk and Loki, an initial tenant, and node_exporter.
-Namespaces (S3 buckets) and service-account data access have playbooks of their own.
+Namespaces (S3 buckets), service-account data access and HCP's certificate from the lab CA
+(renewed by a weekly AAP schedule) have playbooks of their own.
 Tested with HCP 10.1.1.14 (ISO `HS222_10.1.1.14.iso`): deploy, destroy and the full deploy +
-post-install workflow end to end; every post-install step, the namespace and the namespace-access
-playbooks also as separate jobs, the last two checked with an S3 client.
+post-install workflow end to end; every post-install step and the namespace, namespace-access
+and certificate playbooks also as separate jobs, the last three checked with an S3 client
+(verifying TLS against the lab root).
 
 ## What deploy.yml does
 
@@ -273,7 +275,8 @@ the hcp-vm marker.
    **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**, **HCP syslog**,
    **HCP protocol defaults**, **HCP tenant**, **HCP certificate**, **HCP namespace**, **HCP namespace access**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
-   every question once). Create a
+   every question once), and a weekly **HCP certificate renewal: <system>** schedule for each
+   `aap_cert_schedules` entry. Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
    AAP 2.5+ gateways may refuse Basic auth on the API ("Authentication credentials were not
    provided"): use `aap_token` (user menu, API tokens, write scope) instead of user/password.
