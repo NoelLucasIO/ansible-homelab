@@ -9,7 +9,9 @@
 # (hcp_namespace_owner); splitting admin and data-access users comes later.
 # Fixed at creation, can't be changed afterwards: protocol optimization once the namespace holds
 # objects or is unbalanced, directory usage, and retention type. A rerun on an existing namespace
-# updates quota, owner, versioning and the S3 overwrite option only, and says if a fixed one differs.
+# updates quota, owner, versioning, the S3 overwrite option and the protocols.
+# Protocols (the namespace's Protocols > HTTP(S) tab): HTTPS, HTTP, REST API and the Hitachi API for
+# Amazon S3, each authenticated-only unless set otherwise; S3 also turns on ACLs, as the console does.
 - name: HCP namespace
   hosts: "{{ hcp_kvm_host | default('fedora') }}"
   become: true
@@ -87,6 +89,7 @@
                  ~ (' --versioning' if hcp_namespace_versioning | bool else '')
                  ~ (' --deleteMarker true' if hcp_nsx_s3lock | bool else '')
                  ~ ' --s3UnversionedOverwrite ' ~ hcp_namespace_s3_overwrite | bool | string | lower
+                 ~ (' --enableACLs' if hcp_namespace_s3 | bool else '')
                  ~ (' --description ' ~ hcp_namespace_description | quote if hcp_namespace_description | length > 0 else '')] }}
           register: hcp_nsx_new
           changed_when: true
@@ -107,7 +110,8 @@
                  ~ ' --hardQuota ' ~ hcp_nsx_bytes ~ ' --softQuota ' ~ hcp_namespace_soft_quota | int
                  ~ ' --ownerLocal ' ~ hcp_nsx_owner | quote
                  ~ ' --versioning ' ~ hcp_namespace_versioning | bool | string | lower
-                 ~ ' --s3UnversionedOverwrite ' ~ hcp_namespace_s3_overwrite | bool | string | lower] }}
+                 ~ ' --s3UnversionedOverwrite ' ~ hcp_namespace_s3_overwrite | bool | string | lower
+                 ~ (' --enableACLs true' if hcp_namespace_s3 | bool else '')] }}
           register: hcp_nsx_upd
           changed_when: false
           failed_when: hcp_nsx_upd.rc != 0 or hcp_nsx_upd.stdout is search('(?i)exception|error|usage:|cannot|invalid')
@@ -118,6 +122,48 @@
             argv: "{{ hcp_bssh + [hcp_admin ~ ' namespace list --tenant ' ~ hcp_tenant_name ~ ' --namespace ' ~ hcp_namespace_name] }}"
           register: hcp_nsx_after
           changed_when: hcp_nsx_exists | bool and hcp_nsx_after.stdout != hcp_nsx_before.stdout
+
+        # Protocols tab > HTTP(S): settings of the namespace's own location (its UUID). The
+        # "allows.auth" keys mean anonymous access allowed (false = authenticated access only).
+        - name: Namespace UUID
+          ansible.builtin.set_fact:
+            hcp_nsx_uuid: "{{ hcp_nsx_after.stdout | regex_search(\"'uuid'\\s*:\\s*'([0-9a-f-]{36})'\", '\\1') | first }}"
+            hcp_nsx_proto:
+              - {key: gateway.https.enabled, value: "{{ hcp_namespace_https | bool | string | lower }}"}
+              - {key: gateway.http.enabled, value: "{{ hcp_namespace_http | bool | string | lower }}"}
+              - {key: gateway.rest.enabled, value: "{{ hcp_namespace_rest | bool | string | lower }}"}
+              - {key: gateway.http.allows.auth, value: "{{ hcp_namespace_rest_anonymous | bool | string | lower }}"}
+              - {key: gateway.s3.enabled, value: "{{ hcp_namespace_s3 | bool | string | lower }}"}
+              - {key: gateway.s3.allows.auth, value: "{{ hcp_namespace_s3_anonymous | bool | string | lower }}"}
+
+        - name: Protocol settings, current
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' config get ' ~ hcp_nsx_uuid ~ ' ' ~ item.key] }}"
+          loop: "{{ hcp_nsx_proto }}"
+          loop_control:
+            label: "{{ item.key }}"
+          register: hcp_nsx_pcur
+          changed_when: false
+          failed_when: false
+
+        - name: Protocol settings, set what differs
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' config set ' ~ hcp_nsx_uuid ~ ' ' ~ item.item.key ~ ' ' ~ item.item.value] }}"
+          loop: "{{ hcp_nsx_pcur.results }}"
+          loop_control:
+            label: "{{ item.item.key }}={{ item.item.value }}"
+          when: item.stdout is not search("'configValue'\\s*:\\s*'" ~ item.item.value ~ "'")
+          changed_when: true
+
+        - name: Protocol settings as HCP reports them
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_cmd | join('; ')] }}"
+          vars:
+            hcp_cmd:
+              - "{{ hcp_admin }} gateway s3_ssl status {{ hcp_nsx_uuid }}"
+              - "{{ hcp_admin }} gateway https status {{ hcp_nsx_uuid }} | grep -E 'rest.enabled|http.enabled|http.allows.auth'"
+          register: hcp_nsx_pnow
+          changed_when: false
 
       always:
         - name: Close the back-end session
@@ -135,4 +181,9 @@
             versioning {{ 'on' if hcp_namespace_versioning | bool else 'off' }},
             {{ 'S3 Object Lock' if hcp_nsx_s3lock | bool else 'HCP retention' }}{{
             ' (fixed at creation; not changed on this run)' if hcp_nsx_exists | bool else '' }}.
-          - "{{ hcp_nsx_after.stdout_lines }}"
+          - >-
+            HTTPS {{ hcp_namespace_https | bool }}, HTTP {{ hcp_namespace_http | bool }},
+            REST {{ hcp_namespace_rest | bool }}{{ ' (anonymous allowed)' if hcp_namespace_rest_anonymous | bool else '' }},
+            S3 {{ hcp_namespace_s3 | bool }}{{ ' (anonymous allowed)' if hcp_namespace_s3_anonymous | bool else '' }}:
+            https://{{ hcp_namespace_name }}.{{ hcp_tenant_name }}.{{ hcp_clname }}
+          - "{{ hcp_nsx_pnow.stdout_lines | unique }}"

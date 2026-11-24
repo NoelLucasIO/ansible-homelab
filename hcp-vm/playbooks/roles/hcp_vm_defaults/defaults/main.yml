@@ -134,6 +134,13 @@ hcp_namespace_directory_usage: unbalanced   # unbalanced (needs cloud) | balance
 hcp_namespace_versioning: false
 hcp_namespace_s3_overwrite: false       # allow overwrite via the S3 API when versioning is off
 hcp_namespace_retention: hcp            # hcp = HCP retention | s3 = S3 Object Lock (needs cloud + versioning)
+# Protocols > HTTP(S)
+hcp_namespace_https: true
+hcp_namespace_http: false
+hcp_namespace_rest: true                # REST API
+hcp_namespace_rest_anonymous: false     # false = authenticated access only
+hcp_namespace_s3: true                  # Hitachi API for Amazon S3 (turns on ACLs)
+hcp_namespace_s3_anonymous: false       # false = authenticated access only
 
 # --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
 hcp_node_exporter_allow: []             # addresses/CIDRs allowed to scrape it, e.g. [192.0.2.45]; empty = skip

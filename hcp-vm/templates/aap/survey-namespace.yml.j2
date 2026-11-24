@@ -69,3 +69,17 @@
   required: true
   default: {{ hcp_namespace_retention | lower | to_json }}
   choices: ["hcp", "s3"]
+- question_name: Enable Hitachi API for Amazon S3
+  question_description: Protocols > HTTP(S), over HTTPS, authenticated access only. Also turns on ACLs.
+  variable: hcp_namespace_s3
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_s3 | string | lower | to_json }}
+  choices: ["true", "false"]
+- question_name: Enable REST API
+  question_description: Protocols > HTTP(S), over HTTPS, authenticated access only
+  variable: hcp_namespace_rest
+  type: multiplechoice
+  required: true
+  default: {{ hcp_namespace_rest | string | lower | to_json }}
+  choices: ["true", "false"]

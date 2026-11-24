@@ -128,9 +128,15 @@ back-end (no tenant credentials needed). AAP template **HCP namespace**.
 | Versioning | `hcp_namespace_versioning` | off |
 | Allow S3 overwrite when versioning is off | `hcp_namespace_s3_overwrite` | off |
 | Retention type | `hcp_namespace_retention` (`hcp` / `s3` = S3 Object Lock, needs cloud + versioning) | HCP retention |
+| Protocols > HTTP(S): Enable HTTPS / HTTP | `hcp_namespace_https`, `hcp_namespace_http` | HTTPS on, HTTP off |
+| Enable REST API (authenticated only) | `hcp_namespace_rest` (`hcp_namespace_rest_anonymous`) | on (authenticated only) |
+| Enable Hitachi API for Amazon S3 (authenticated only) | `hcp_namespace_s3` (`hcp_namespace_s3_anonymous`) | on (authenticated only); turns on ACLs |
 
 Directory usage and retention type are fixed once the namespace exists. A rerun on an existing
-namespace updates quota, owner, versioning and the S3 overwrite option, and leaves the rest.
+namespace updates quota, owner, versioning, the S3 overwrite option and the protocols, and leaves
+the rest. The protocol checkboxes are settings of the namespace's own location, set with
+`admin jvm config set <namespace UUID> gateway.*` (`gateway.*.allows.auth` true = anonymous access
+allowed).
 
 ### syslog.yml
 
@@ -250,7 +256,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP protocol defaults | cloud protocols only (true/false), unbalanced directories (true/false) |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
-| HCP namespace | tenant, namespace name, owner, quota and unit, protocol optimization, directory usage, versioning, S3 overwrite, retention type |
+| HCP namespace | tenant, namespace name, owner, quota and unit, protocol optimization, directory usage, versioning, S3 overwrite, retention type, S3 API on/off, REST API on/off |
 | HCP syslog | servers (comma-separated `host:port`), level, extra event types |
 | HCP tenant | tenant name, hard quota and unit (GB/TB), tenant admin user, password and roles, allow system-level management, security account password (for MAPI) |
 | HCP VM services | nothing more (units: `hcp_vm_disable_units`, default `ipmi.service`) |
