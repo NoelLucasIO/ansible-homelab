@@ -1,0 +1,201 @@
+---
+# HCP's web/API certificate from the lab CA (pki/: step-ca), replacing HCP's self-signed one.
+#   ansible-playbook playbooks/certificate.yml -e hcp_kvm_host=fedora -e hcp_cluster=hcp02 \
+#     -e hcp_backend_ip=198.51.100.101 -e hcp_pki_host=fedora
+# SANs: <system>, *.<system> (admin., tenant consoles, tenant S3 endpoints) and *.<tenant>.<system>
+# for every tenant (namespace host names such as ns1.tenant1.<system>, S3 virtual-host buckets),
+# plus hcp_cert_extra_sans. Rerun after adding a tenant.
+# Issued inside the pki-ca container with the admin provisioner, as pki/playbooks/issue-pfx.yml
+# does, packed as PKCS#12 with a one-time password, and loaded with HCP's own
+# `admin jvm domain createPKCS12` over the back-end. The key exists only in the container's /tmp,
+# then briefly in transit (controller, hypervisor, node), and is removed everywhere after.
+# Skipped when the certificate HCP serves already has every SAN and isn't within
+# hcp_cert_renew_days of expiry, so rerunning it (or scheduling it) renews when due.
+- name: HCP certificate from the lab CA
+  hosts: "{{ hcp_kvm_host | default('fedora') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - hcp_vm_defaults
+  vars:
+    hcp_cert_keys:
+      RSA-2048: [--kty, RSA, --size, "2048"]
+      RSA-3072: [--kty, RSA, --size, "3072"]
+      RSA-4096: [--kty, RSA, --size, "4096"]
+      EC-P256: [--kty, EC, --crv, P-256]
+    hcp_to_json: >-
+      python -c 'import sys,ast,json; print(json.dumps(ast.literal_eval(sys.stdin.read())))'
+  tasks:
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - hcp_backend_ip is match('^(\d{1,3}\.){3}\d{1,3}$')
+          - hcp_root_key_file is defined
+          - hcp_pki_host | length > 0
+          - hcp_cert_days | int >= 1 and hcp_cert_days | int <= 365
+          - hcp_cert_renew_days | int >= 1 and hcp_cert_renew_days | int < hcp_cert_days | int
+          - hcp_cert_key in hcp_cert_keys
+        fail_msg: >-
+          Need hcp_cluster, hcp_backend_ip, the HCP secrets credential and hcp_pki_host (inventory
+          host running pki-ca); lifetime 1-365 days (the CA's limit), renewal window shorter than
+          that, key type one of {{ hcp_cert_keys.keys() | list }}.
+        quiet: true
+
+    - name: Certificate over the back-end
+      block:
+        - name: Open a back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_open.yml"
+
+        - name: Tenants
+          ansible.builtin.command:
+            argv: "{{ hcp_bssh + [hcp_admin ~ ' tenant list | ' ~ hcp_to_json] }}"
+          register: hcp_cert_tenants
+          until: hcp_cert_tenants.rc == 0
+          retries: 30
+          delay: 20
+          changed_when: false
+
+        - name: Names the certificate must cover
+          ansible.builtin.set_fact:
+            hcp_cert_sans: >-
+              {{ ([hcp_clname, '*.' ~ hcp_clname]
+                  + ((hcp_cert_tenants.stdout | from_json).values() | map(attribute='name', default='')
+                     | reject('equalto', '') | map('lower') | sort
+                     | map('regex_replace', '^(.*)$', '*.\1.' ~ hcp_clname) | list)
+                  + (hcp_cert_extra_sans | regex_findall('[^,\s]+'))) | unique }}
+            hcp_cert_pw: "{{ lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}"
+            hcp_cert_stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+          no_log: true
+
+        # From the hypervisor, which is on the front-end network: SNI for the admin name.
+        - name: Certificate HCP serves now
+          ansible.builtin.shell:
+            cmd: >-
+              set -o pipefail;
+              openssl s_client -connect {{ hcp_fe_ip }}:443 -servername admin.{{ hcp_clname }} </dev/null 2>/dev/null
+              | openssl x509 -noout -issuer -enddate -checkend {{ (hcp_cert_renew_days | int) * 86400 }} -ext subjectAltName
+            executable: /bin/bash
+          register: hcp_cert_now
+          changed_when: false
+          failed_when: hcp_cert_now.stdout is not search('notAfter=')
+
+        - name: Renew?
+          ansible.builtin.set_fact:
+            hcp_cert_missing: >-
+              {{ hcp_cert_sans | reject('in', hcp_cert_now.stdout | regex_findall('DNS:([^,\s]+)')) | list }}
+            hcp_cert_due: "{{ hcp_cert_now.stdout is search('Certificate will expire') }}"
+
+        - name: Issue and load a new certificate
+          when: hcp_cert_missing | length > 0 or hcp_cert_due | bool or hcp_cert_force | bool
+          block:
+            - name: Issue it on {{ hcp_pki_host }}
+              ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/cert_issue.yml"
+
+            - name: PKCS#12 to the hypervisor (0600, removed afterwards)
+              ansible.builtin.copy:
+                src: "{{ hcp_cert_local }}"
+                dest: "{{ hcp_log_dir }}/.hcp-cert.p12"
+                mode: "0600"
+              no_log: true
+
+            - name: PKCS#12 to the node
+              ansible.builtin.command:
+                argv: "{{ hcp_bscp + [hcp_log_dir ~ '/.hcp-cert.p12', 'root@' ~ hcp_backend_ip ~ ':/root/.hcp-cert.p12'] }}"
+              changed_when: true
+
+            - name: Domain certificates before
+              ansible.builtin.command:
+                argv: "{{ hcp_bssh + [hcp_admin ~ ' domain list | ' ~ hcp_to_json] }}"
+              register: hcp_cert_dom_before
+              changed_when: false
+
+            - name: Load it into HCP for {{ hcp_clname }}
+              ansible.builtin.command:
+                argv: >-
+                  {{ hcp_bssh + ['chmod 600 /root/.hcp-cert.p12; ' ~ hcp_admin ~ ' domain createPKCS12 '
+                     ~ hcp_clname ~ ' /root/.hcp-cert.p12 ' ~ hcp_cert_pw | quote ~ '; rc=$?; rm -f /root/.hcp-cert.p12; exit $rc'] }}
+              register: hcp_cert_load
+              no_log: true
+              changed_when: true
+              failed_when: false
+
+            - name: Loaded?
+              ansible.builtin.assert:
+                that: hcp_cert_load.rc == 0 and hcp_cert_load.stdout is not search('(?i)exception|error|usage:|cannot|invalid')
+                fail_msg: >-
+                  createPKCS12 failed ({{ hcp_cert_load.rc }}):
+                  {{ (hcp_cert_load.stdout ~ ' ' ~ hcp_cert_load.stderr) | replace(hcp_cert_pw, '********') | trim | truncate(400) }}
+                quiet: true
+
+            # The new mapping is the one that wasn't there before; the older ones for the
+            # domain are removed so HCP serves only the new certificate.
+            - name: Domain certificates after
+              ansible.builtin.command:
+                argv: "{{ hcp_bssh + [hcp_admin ~ ' domain list | ' ~ hcp_to_json] }}"
+              register: hcp_cert_dom_after
+              changed_when: false
+
+            - name: Older certificates for {{ hcp_clname }}
+              ansible.builtin.set_fact:
+                hcp_cert_old: >-
+                  {{ (hcp_cert_dom_after.stdout | from_json).values()
+                     | selectattr('domainName', 'equalto', hcp_clname) | rejectattr('isCSR')
+                     | rejectattr('isHidden') | map(attribute='uuid')
+                     | select('in', (hcp_cert_dom_before.stdout | from_json).keys() | list) | list }}
+                hcp_cert_new: >-
+                  {{ (hcp_cert_dom_after.stdout | from_json).keys()
+                     | reject('in', (hcp_cert_dom_before.stdout | from_json).keys() | list) | list }}
+
+            - name: A new mapping exists
+              ansible.builtin.assert:
+                that: hcp_cert_new | length > 0
+                fail_msg: "HCP lists no new certificate for {{ hcp_clname }} after createPKCS12."
+                quiet: true
+
+            - name: Remove the older ones
+              ansible.builtin.command:
+                argv: "{{ hcp_bssh + [hcp_admin ~ ' domain delete ' ~ item] }}"
+              loop: "{{ hcp_cert_old }}"
+              changed_when: true
+
+            - name: HCP serves the new certificate
+              ansible.builtin.shell:
+                cmd: >-
+                  set -o pipefail;
+                  openssl s_client -connect {{ hcp_fe_ip }}:443 -servername admin.{{ hcp_clname }} </dev/null 2>/dev/null
+                  | openssl x509 -noout -serial -issuer -enddate -ext subjectAltName
+                executable: /bin/bash
+              register: hcp_cert_after
+              until: hcp_cert_after.stdout | regex_findall('DNS:([^,\s]+)') | intersect(hcp_cert_sans) | length == hcp_cert_sans | length
+              retries: 18
+              delay: 10
+              changed_when: false
+
+          always:
+            - name: Remove the PKCS#12 from the hypervisor
+              ansible.builtin.file:
+                path: "{{ hcp_log_dir }}/.hcp-cert.p12"
+                state: absent
+
+            - name: Remove the controller copy
+              ansible.builtin.file:
+                path: "{{ hcp_cert_local | default('/nonexistent') | dirname }}"
+                state: absent
+              delegate_to: localhost
+              become: false
+              when: hcp_cert_local is defined
+
+      always:
+        - name: Close the back-end session
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backend_close.yml"
+
+    - name: Done
+      vars:
+        hcp_cert_loaded: "{{ hcp_cert_after is defined and hcp_cert_after is not skipped }}"
+      ansible.builtin.debug:
+        msg:
+          - "{{ hcp_clname }}: {{ 'new certificate loaded' if hcp_cert_loaded else 'certificate current, nothing to do' }}."
+          - "SANs: {{ hcp_cert_sans | join(', ') }}"
+          - "{{ hcp_cert_after.stdout_lines if hcp_cert_loaded else hcp_cert_now.stdout_lines }}"
+          - "Clients trust it through the lab root (pki trust); S3 clients can drop --no-verify-ssl."

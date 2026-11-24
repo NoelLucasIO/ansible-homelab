@@ -4,7 +4,7 @@
 #   * job templates "HCP VM deploy", "HCP VM destroy", "HCP post-install" (all post-install
 #     steps), and one per step: "HCP first-login", "HCP protocol defaults", "HCP Prometheus",
 #     "HCP syslog", "HCP tenant", "HCP VM services", "HCP node_exporter"; and on their own
-#     "HCP namespace", "HCP namespace access" (each with a survey)
+#     "HCP certificate", "HCP namespace", "HCP namespace access" (each with a survey)
 #   * workflow "HCP VM deploy + post-install" (deploy, then all post-install steps on success)
 # Idempotent: rerun after changing defaults to refresh the surveys.
 #
@@ -156,6 +156,7 @@
                                    template_vars={'chain': true}) | from_yaml,
               'namespace': lookup('ansible.builtin.template', aap_sv ~ '/survey-namespace.yml.j2') | from_yaml,
               'namespace_access': lookup('ansible.builtin.template', aap_sv ~ '/survey-namespace-access.yml.j2') | from_yaml,
+              'certificate': lookup('ansible.builtin.template', aap_sv ~ '/survey-certificate.yml.j2') | from_yaml,
               'prometheus': lookup('ansible.builtin.template', aap_sv ~ '/survey-prometheus.yml.j2') | from_yaml,
               'tenant': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2') | from_yaml,
               'tenant_opt': lookup('ansible.builtin.template', aap_sv ~ '/survey-tenant.yml.j2',
@@ -212,6 +213,10 @@
           playbook: hcp-vm/playbooks/tenant.yml
           description: Create a tenant (quota, no namespace quota) and set its namespace defaults
           survey: "{{ aap_s.target + aap_s.tenant }}"
+        - name: HCP certificate
+          playbook: hcp-vm/playbooks/certificate.yml
+          description: HCP's web/API certificate from the lab CA (renews when due; rerun after adding a tenant)
+          survey: "{{ aap_s.target + aap_s.certificate }}"
         - name: HCP namespace
           playbook: hcp-vm/playbooks/namespace.yml
           description: Create a namespace (S3 bucket) in a tenant, or update its quota, owner and versioning

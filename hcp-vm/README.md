@@ -114,6 +114,25 @@ server on the node (`:9097`); the play waits for it to listen. Console:
 line when it starts it. If the running server still shows other values, the play turns it off and
 on again and checks the command line.
 
+### certificate.yml (on its own)
+
+HCP's web and API certificate from the lab CA ([`pki/`](../pki/README.md), step-ca), replacing
+HCP's self-signed one. AAP template **HCP certificate**.
+
+* **Names:** `<system>`, `*.<system>` (admin, tenant consoles, tenant S3 endpoints) and
+  `*.<tenant>.<system>` for every tenant (namespace host names, S3 virtual-host buckets), plus
+  `hcp_cert_extra_sans`. Rerun after adding a tenant.
+* **How:** issued inside the `pki-ca` container on `hcp_pki_host` with the admin provisioner, as
+  `pki/playbooks/issue-pfx.yml` does; packed as PKCS#12 with a one-time password; loaded with
+  `admin jvm domain createPKCS12 <system>` over the back-end; HCP's older certificates for the
+  domain are removed. The private key is removed from the container, hosts and controller at the end.
+* **Renewal:** a run does nothing while the served certificate has every name and is more than
+  `hcp_cert_renew_days` (30) from expiry, so it can run on a schedule. With
+  `hcp_pki_issued_dir` set (`<pki_data>/issued`), the public certificate is recorded there and
+  the pki stack's `PKIIssuedCertExpiring` alert covers it.
+* **Settings:** `hcp_cert_days` (365, the CA's limit), `hcp_cert_key` (RSA-2048),
+  `hcp_cert_p12_legacy` (3DES PKCS#12 if HCP can't read the modern one), `hcp_cert_force`.
+
 ### namespace.yml (on its own, not part of post_install.yml)
 
 The tenant console's *Create Namespace* form, with HCP's own `admin jvm namespace create` over the
@@ -250,7 +269,7 @@ the hcp-vm marker.
    It creates the credential type **HCP VM secrets** (NIOS API password; HCP root SSH private
    key, injected as a 0600 file), the job templates **HCP VM deploy**, **HCP VM destroy**,
    **HCP post-install** (all steps) and one per step (**HCP first-login**, **HCP Prometheus**, **HCP syslog**,
-   **HCP protocol defaults**, **HCP tenant**, **HCP namespace**, **HCP namespace access**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
+   **HCP protocol defaults**, **HCP tenant**, **HCP certificate**, **HCP namespace**, **HCP namespace access**, **HCP VM services**, **HCP node_exporter**) with their surveys, and the workflow
    **HCP VM deploy + post-install** (post-install runs when deploy succeeds; its survey asks
    every question once). Create a
    credential of the new type, then rerun with `aap_secrets_credential` set so it gets attached.
@@ -280,6 +299,7 @@ The post-install templates all start with hypervisor, short name and back-end IP
 | HCP first-login | security account password (14+), roles, SSH on/off, MAPI on/off |
 | HCP protocol defaults | cloud protocols only (true/false), unbalanced directories (true/false) |
 | HCP Prometheus | enable on/off, TSDB retention days (default 365) and size GB (default 300) |
+| HCP certificate | lab CA host, issued-certificates directory, lifetime, extra SANs, force |
 | HCP namespace | tenant, namespace name, owner, quota and unit, protocol optimization, directory usage, versioning, S3 overwrite, retention type, S3 API on/off, REST API on/off |
 | HCP namespace access | tenant, service account name and password, namespaces, permissions, password hash scheme |
 | HCP syslog | servers (comma-separated `host:port`), level, extra event types |

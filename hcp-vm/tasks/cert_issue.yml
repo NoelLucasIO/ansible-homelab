@@ -1,0 +1,113 @@
+---
+# Issue the HCP certificate inside the pki-ca container on hcp_pki_host, as
+# pki/playbooks/issue-pfx.yml does, and fetch the PKCS#12 to the controller.
+# Needs hcp_clname, hcp_cert_sans, hcp_cert_pw, hcp_cert_stamp, hcp_cert_days, hcp_cert_key.
+# Sets hcp_cert_local (controller path of the .p12, in a directory the caller removes).
+- name: Owner of the rootless pki-ca container
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; ps -eo user:32=,args= | awk '/[c]onmon .* -n {{ hcp_pki_container }} /{print $1; exit}'
+    executable: /bin/bash
+  register: hcp_pki_owner
+  changed_when: false
+  failed_when: hcp_pki_owner.stdout | trim | length == 0
+  delegate_to: "{{ hcp_pki_host }}"
+
+- name: Its uid
+  ansible.builtin.command: id -u {{ hcp_pki_owner.stdout | trim }}
+  register: hcp_pki_uid
+  changed_when: false
+  delegate_to: "{{ hcp_pki_host }}"
+
+- name: In the container as {{ hcp_pki_owner.stdout | trim }}
+  delegate_to: "{{ hcp_pki_host }}"
+  become: true
+  become_user: "{{ hcp_pki_owner.stdout | trim }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ hcp_pki_uid.stdout | trim }}"
+  block:
+    - name: Scratch directory in the container
+      ansible.builtin.command:
+        cmd: podman exec {{ hcp_pki_container }} mktemp -d /tmp/hcp.XXXXXX
+        chdir: /
+      register: hcp_pki_tmp
+      changed_when: false
+
+    - name: Export password into it (stdin, mode 0600)
+      ansible.builtin.command:
+        argv: [podman, exec, -i, "{{ hcp_pki_container }}", sh, -c, "umask 077; cat > {{ hcp_pki_tmp.stdout }}/pw"]
+        stdin: "{{ hcp_cert_pw }}"
+        stdin_add_newline: false
+        chdir: /
+      changed_when: false
+      no_log: true
+
+    - name: Issue the certificate (admin provisioner)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['podman', 'exec', hcp_pki_container, 'step', 'ca', 'certificate', hcp_clname,
+              hcp_pki_tmp.stdout ~ '/c.crt', hcp_pki_tmp.stdout ~ '/c.key',
+              '--ca-url', 'https://127.0.0.1:' ~ hcp_pki_ca_port, '--root', '/home/step/certs/root_ca.crt',
+              '--provisioner', 'admin', '--provisioner-password-file', '/run/secrets/' ~ hcp_pki_name ~ '-admin-password',
+              '--not-after', ((hcp_cert_days | int) * 24) ~ 'h', '--force']
+             + (hcp_cert_sans | map('regex_replace', '^', '--san=') | list)
+             + hcp_cert_keys[hcp_cert_key] }}
+        chdir: /
+      changed_when: true
+
+    - name: Package as PKCS#12 (key, leaf and intermediate)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['podman', 'exec', hcp_pki_container, 'step', 'certificate', 'p12',
+              hcp_pki_tmp.stdout ~ '/c.p12', hcp_pki_tmp.stdout ~ '/c.crt', hcp_pki_tmp.stdout ~ '/c.key',
+              '--password-file', hcp_pki_tmp.stdout ~ '/pw', '--force']
+             + (['--legacy'] if hcp_cert_p12_legacy | bool else []) }}
+        chdir: /
+      changed_when: true
+
+    - name: Host scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: hcp-cert.
+      register: hcp_pki_htmp
+
+    - name: Copy the .p12 and the public certificate out of the container
+      ansible.builtin.command:
+        cmd: podman cp {{ hcp_pki_container }}:{{ hcp_pki_tmp.stdout }}/{{ item }} {{ hcp_pki_htmp.path }}/{{ item }}
+        chdir: /
+      loop: [c.p12, c.crt]
+      changed_when: true
+
+    # The pki metrics alert (PKIIssuedCertExpiring) watches <issued dir>/<name>/*.crt.
+    - name: Record the public certificate for expiry alerts
+      ansible.builtin.copy:
+        src: "{{ hcp_pki_htmp.path }}/c.crt"
+        dest: "{{ hcp_pki_issued_dir }}/hcp-{{ hcp_cluster }}/hcp-{{ hcp_cluster }}-{{ hcp_cert_stamp }}.crt"
+        remote_src: true
+        mode: "0600"
+      when: hcp_pki_issued_dir | length > 0
+
+    - name: Fetch the .p12 to the controller
+      ansible.builtin.fetch:
+        src: "{{ hcp_pki_htmp.path }}/c.p12"
+        dest: "/tmp/hcp-cert-{{ hcp_cert_stamp }}/c.p12"
+        flat: true
+      no_log: true
+
+  always:
+    - name: Remove the container scratch (key, password, bundle)
+      ansible.builtin.command:
+        cmd: podman exec {{ hcp_pki_container }} rm -rf {{ hcp_pki_tmp.stdout }}
+        chdir: /
+      when: hcp_pki_tmp.stdout | default('') is match('^/tmp/hcp\\.')
+      changed_when: false
+
+    - name: Remove the host scratch
+      ansible.builtin.file:
+        path: "{{ hcp_pki_htmp.path }}"
+        state: absent
+      when: hcp_pki_htmp.path is defined
+
+- name: Controller copy
+  ansible.builtin.set_fact:
+    hcp_cert_local: "/tmp/hcp-cert-{{ hcp_cert_stamp }}/c.p12"

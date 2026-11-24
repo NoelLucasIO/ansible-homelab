@@ -150,6 +150,19 @@ hcp_svc_namespaces: []                  # namespaces in hcp_tenant_name (list or
 hcp_svc_permissions: [browse, read, write, delete, search]  # browse read write delete purge search privileged read_acl write_acl change_owner
 hcp_svc_hash_scheme: MD5                # MD5 (HCP's default) | SHA-256: how the S3 secret key is derived
 
+# --- Certificate from the lab CA (certificate.yml, pki/ step-ca) --------------------------
+hcp_pki_host: fedora                    # inventory host running the pki-ca container
+hcp_pki_container: pki-ca
+hcp_pki_name: pki                       # pki_name: the admin provisioner's Podman secret is <name>-admin-password
+hcp_pki_ca_port: 9443
+hcp_pki_issued_dir: ""                  # <pki_data>/issued on that host: records the .crt for PKIIssuedCertExpiring; "" = don't
+hcp_cert_days: 365                      # lifetime; the CA's admin provisioner allows up to 365
+hcp_cert_renew_days: 30                 # a rerun renews within this many days of expiry
+hcp_cert_key: RSA-2048                  # RSA-2048 | RSA-3072 | RSA-4096 | EC-P256
+hcp_cert_extra_sans: ""                 # more names, comma-separated
+hcp_cert_p12_legacy: false              # 3DES/SHA1 PKCS#12, if HCP can't read the modern one
+hcp_cert_force: false                   # issue a new one even if the current one is fine
+
 # --- node_exporter on the HCP node (node_exporter.yml) ---------------------------------
 hcp_node_exporter_allow: []             # addresses/CIDRs allowed to scrape it, e.g. [192.0.2.45]; empty = skip
 hcp_node_exporter_version: "1.13.1"
