@@ -1,0 +1,116 @@
+---
+# Monitors, persistence class, pools, traffic IP network and group, virtual servers for one HCP
+# cluster, over REST (rest_put.yml: written only when they differ). Needs vtm_hcp_services,
+# vtm_hcp_vip_list and the certificate in the catalog.
+- name: Monitors
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: "monitors/{{ vtm_hcp_prefix }}_{{ svc.name }}"
+    vtm_body:
+      properties: >-
+        {{ {'basic': {'type': svc.monitor, 'scope': 'pernode', 'delay': 3, 'timeout': 3, 'failures': 3,
+                      'back_off': svc.back_off, 'use_ssl': svc.monitor == 'http',
+                      'note': vtm_owner_note ~ ': HCP ' ~ svc.name ~ ' health'}}
+           | combine({'http': {'path': svc.path, 'status_regex': svc.status, 'host_header': '',
+                               'authentication': '', 'body_regex': ''}} if svc.monitor == 'http' else {}) }}
+  loop: "{{ vtm_hcp_services }}"
+  loop_control:
+    loop_var: svc
+    label: "{{ vtm_hcp_prefix }}_{{ svc.name }}"
+
+- name: Persistence class (transparent session affinity), for the UI pools
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: "persistence/{{ vtm_hcp_prefix }}_Persistence"
+    vtm_body:
+      properties:
+        basic: {type: transparent, note: "{{ vtm_owner_note }}: HCP console sessions"}
+
+- name: Pools (least connections, TLS to the nodes)
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: "pools/{{ vtm_hcp_prefix }}_{{ svc.name }}"
+    vtm_body:
+      properties:
+        basic:
+          note: "{{ vtm_owner_note }}: HCP {{ svc.name }} ({{ vtm_hcp_fqdn }})"
+          monitors: ["{{ vtm_hcp_prefix }}_{{ svc.name }}"]
+          persistence_class: "{{ (vtm_hcp_prefix ~ '_Persistence') if svc.persist else '' }}"
+          nodes_table: >-
+            {{ vtm_hcp_nodes_l | product([svc.port | string]) | map('join', ':')
+               | map('regex_replace', '^', '{"state": "active", "weight": 1, "priority": 1, "node": "')
+               | map('regex_replace', '$', '"}') | map('from_json') | list }}
+        load_balancing: {algorithm: least_connections}
+        ssl:
+          enable: true
+          strict_verify: "{{ vtm_hcp_verify_backend | bool }}"
+          common_name_match: "{{ [vtm_hcp_fqdn] if vtm_hcp_verify_backend | bool else [] }}"
+          support_ssl3: disabled
+          support_tls1: disabled
+          support_tls1_1: disabled
+  loop: "{{ vtm_hcp_services }}"
+  loop_control:
+    loop_var: svc
+    label: "{{ vtm_hcp_prefix }}_{{ svc.name }}"
+
+# Traffic IP networks: on each traffic manager, the interface whose subnet is the VIP network.
+- name: Each traffic manager's interfaces
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/traffic_managers/{{ item | urlencode }}"
+  loop: "{{ vtm_tms.json.children | map(attribute='name') | list }}"
+  register: vtm_tm_cfg
+
+- name: Traffic IP network on each traffic manager
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_if: >-
+      {{ (tm.json.properties.appliance.ip | default([])
+          | selectattr('addr', 'ansible.utils.in_network', vtm_hcp_vip_network)
+          | map(attribute='name') | list + ['']) | first }}
+    vtm_tip: "{{ tm.json.properties.basic.trafficip | default([]) }}"
+    vtm_path: "traffic_managers/{{ tm.item }}"
+    vtm_body:
+      properties:
+        basic:
+          trafficip: >-
+            {{ (vtm_tip | rejectattr('name', 'equalto', vtm_if) | list)
+               + [{'name': vtm_if, 'networks': ((vtm_tip | selectattr('name', 'equalto', vtm_if)
+                   | map(attribute='networks') | first | default([])) + [vtm_hcp_vip_network | ansible.utils.ipaddr('network/prefix')])
+                   | unique | sort}] }}
+  loop: "{{ vtm_tm_cfg.results }}"
+  loop_control:
+    loop_var: tm
+    label: "{{ tm.item }}"
+  when: >-
+    (tm.json.properties.appliance.ip | default([]) | selectattr('addr', 'ansible.utils.in_network', vtm_hcp_vip_network) | list | length) > 0
+
+- name: Traffic IP group {{ vtm_hcp_fqdn }}
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: "traffic_ip_groups/{{ vtm_hcp_fqdn }}"
+    vtm_body:
+      properties:
+        basic:
+          enabled: true
+          mode: singlehosted
+          machines: "{{ vtm_tms.json.children | map(attribute='name') | sort }}"
+          ipaddresses: "{{ vtm_hcp_vip_list | sort }}"
+          note: "{{ vtm_owner_note }}: VIPs for {{ vtm_hcp_fqdn }}"
+
+- name: Virtual servers (TLS 1.2+, the cluster certificate, X-Forwarded-For)
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: "virtual_servers/{{ vtm_hcp_prefix }}_{{ svc.name }}"
+    vtm_body: >-
+      {{ {'properties': {
+            'basic': {'enabled': true, 'protocol': 'http', 'port': svc.port | int,
+                      'pool': vtm_hcp_prefix ~ '_' ~ svc.name, 'listen_on_any': false,
+                      'listen_on_traffic_ips': [vtm_hcp_fqdn], 'ssl_decrypt': true,
+                      'note': vtm_owner_note ~ ': HCP ' ~ svc.name ~ ' (' ~ vtm_hcp_fqdn ~ ')'},
+            'http': {'add_cluster_ip': false, 'add_x_forwarded_for': true},
+            'ssl': {'server_cert_default': vtm_hcp_fqdn, 'support_ssl3': 'disabled',
+                    'support_tls1': 'disabled', 'support_tls1_1': 'disabled'}}} }}
+  loop: "{{ vtm_hcp_services }}"
+  loop_control:
+    loop_var: svc
+    label: "{{ vtm_hcp_prefix }}_{{ svc.name }}"

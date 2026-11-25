@@ -1,0 +1,209 @@
+---
+# Opt-in DNS step for an HCP cluster behind vTM (after hcp.yml): point <cluster>.<domain> and
+# *.<cluster>.<domain> at the VIPs instead of letting HCP answer for its own zone.
+#   cutover: the NIOS delegation of <cluster>.<domain> to the HCP nodes is replaced by an
+#            authoritative zone (same primary/secondaries as the parent zone) with A records
+#            for the apex and the wildcard. The delegation's name servers are kept in the zone's
+#            comment so revert can restore it exactly.
+#   revert:  the zone is deleted (only if this playbook made it) and the delegation restored.
+#   ansible-playbook playbooks/hcp-dns.yml -e vtm_hcp_dns_action=cutover \
+#     -e vtm_hcp_cluster=hcp01 -e vtm_hcp_domain=example.com    (VIPs from NIOS or vtm_hcp_vips)
+# Clients follow once cached answers expire. HCP's own DNS settings are not changed.
+- name: DNS for an HCP cluster behind vTM
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  vars:
+    vtm_hcp_dns_action: ""            # cutover | revert
+    vtm_hcp_dns_ttl: 300
+    vtm_hcp_dns_tag: "vtm-config hcp-dns"
+    vtm_hcp_vip_lookup_only: true     # never allocate here: the VIPs are hcp.yml's
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password | default('') }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      timeout: 60
+  tasks:
+    - name: Cluster
+      ansible.builtin.set_fact:
+        vtm_hcp_fqdn: "{{ vtm_hcp_cluster }}.{{ vtm_hcp_domain }}"
+        vtm_hcp_parent: "{{ vtm_hcp_domain }}"
+
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - vtm_hcp_dns_action in ['cutover', 'revert']
+          - vtm_hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - nios_api_password | default('') | length > 0
+        fail_msg: >-
+          Set vtm_hcp_dns_action to cutover or revert, and attach the credential carrying
+          nios_api_password (homelab-secrets).
+        quiet: true
+
+    - name: Delegation now
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/zone_delegated?fqdn={{ vtm_hcp_fqdn }}&view={{ vtm_nios_view }}&_return_fields=fqdn,delegate_to,comment"
+      register: vtm_dns_deleg
+
+    - name: Authoritative zone now
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/zone_auth?fqdn={{ vtm_hcp_fqdn }}&view={{ vtm_nios_view }}&_return_fields=fqdn,comment"
+      register: vtm_dns_auth
+
+    - name: Ours?
+      ansible.builtin.assert:
+        that: >-
+          vtm_dns_auth.json | length == 0 or
+          (vtm_dns_auth.json[0].comment | default('')) is search(vtm_hcp_dns_tag)
+        fail_msg: >-
+          NIOS has an authoritative zone {{ vtm_hcp_fqdn }} that this playbook didn't make
+          (comment: {{ vtm_dns_auth.json[0].comment | default('') }}). Not touching it.
+        quiet: true
+
+    - name: Cut over to the VIPs
+      when: vtm_hcp_dns_action == 'cutover'
+      block:
+        - name: VIPs
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/hcp_vip.yml"
+
+        - name: Parent zone's name servers
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/zone_auth?fqdn={{ vtm_hcp_parent }}&view={{ vtm_nios_view }}&_return_fields=grid_primary,grid_secondaries"
+          register: vtm_dns_parent
+
+        - name: Parent zone found
+          ansible.builtin.assert:
+            that: vtm_dns_parent.json | length > 0
+            fail_msg: "NIOS has no authoritative zone {{ vtm_hcp_parent }} to take name servers from."
+            quiet: true
+
+        - name: What the delegation was (kept for revert)
+          ansible.builtin.set_fact:
+            vtm_dns_saved: >-
+              {{ (vtm_dns_deleg.json[0].delegate_to if vtm_dns_deleg.json | length > 0 else [])
+                 | map(attribute='name') | zip((vtm_dns_deleg.json[0].delegate_to if vtm_dns_deleg.json | length > 0 else [])
+                 | map(attribute='address')) | map('join', '=') | join(' ') }}
+
+        - name: Remove the delegation
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ vtm_dns_deleg.json[0]._ref }}"
+            method: DELETE
+          when: vtm_dns_deleg.json | length > 0
+          changed_when: true
+
+        - name: Authoritative zone {{ vtm_hcp_fqdn }}
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/zone_auth"
+            method: POST
+            status_code: [201]
+            body:
+              fqdn: "{{ vtm_hcp_fqdn }}"
+              view: "{{ vtm_nios_view }}"
+              grid_primary: "{{ vtm_dns_parent.json[0].grid_primary }}"
+              grid_secondaries: "{{ vtm_dns_parent.json[0].grid_secondaries | default([]) }}"
+              comment: "{{ vtm_hcp_dns_tag }}; was delegated to: {{ vtm_dns_saved | default('', true) }}"
+          when: vtm_dns_auth.json | length == 0
+          changed_when: true
+
+        - name: A records now
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:a?zone={{ vtm_hcp_fqdn }}&view={{ vtm_nios_view }}&_return_fields=name,ipv4addr"
+          register: vtm_dns_a
+
+        - name: Apex and wildcard to every VIP
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/record:a"
+            method: POST
+            status_code: [201]
+            body:
+              name: "{{ item.0 }}"
+              ipv4addr: "{{ item.1 }}"
+              view: "{{ vtm_nios_view }}"
+              ttl: "{{ vtm_hcp_dns_ttl | int }}"
+              use_ttl: true
+              comment: "{{ vtm_hcp_dns_tag }}"
+          loop: "{{ [vtm_hcp_fqdn, '*.' ~ vtm_hcp_fqdn] | product(vtm_hcp_vip_list) | list }}"
+          when: >-
+            vtm_dns_a.json | selectattr('name', 'equalto', item.0)
+            | selectattr('ipv4addr', 'equalto', item.1) | list | length == 0
+          changed_when: true
+
+        - name: Stale A records (addresses that are no longer VIPs)
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ item._ref }}"
+            method: DELETE
+          loop: "{{ vtm_dns_a.json | selectattr('name', 'in', [vtm_hcp_fqdn, '*.' ~ vtm_hcp_fqdn]) | rejectattr('ipv4addr', 'in', vtm_hcp_vip_list) | list }}"
+          loop_control:
+            label: "{{ item.name }} {{ item.ipv4addr }}"
+          changed_when: true
+
+    - name: Revert to the delegation
+      when: vtm_hcp_dns_action == 'revert'
+      block:
+        - name: Name servers to restore
+          ansible.builtin.set_fact:
+            vtm_dns_restore: >-
+              {{ (vtm_dns_auth.json[0].comment | default('')).split('was delegated to:')[1:] | join(' ')
+                 | regex_findall('(\S+)=(\S+)') }}
+
+        - name: Something to restore
+          ansible.builtin.assert:
+            that: vtm_dns_auth.json | length == 0 or vtm_dns_restore | length > 0
+            fail_msg: "The zone's comment doesn't say what the delegation was; restore it with hcp-vm's deploy instead."
+            quiet: true
+
+        - name: Delete the authoritative zone (and its records)
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/{{ vtm_dns_auth.json[0]._ref }}"
+            method: DELETE
+          when: vtm_dns_auth.json | length > 0
+          changed_when: true
+
+        - name: Restore the delegation
+          ansible.builtin.uri:
+            url: "{{ nios_wapi }}/zone_delegated"
+            method: POST
+            status_code: [201]
+            body:
+              fqdn: "{{ vtm_hcp_fqdn }}"
+              view: "{{ vtm_nios_view }}"
+              comment: "restored by {{ vtm_hcp_dns_tag }}"
+              delegate_to: >-
+                {{ vtm_dns_restore | map('join', '", "address": "') | map('regex_replace', '^', '{"name": "')
+                   | map('regex_replace', '$', '"}') | map('from_json') | list }}
+          when: vtm_dns_auth.json | length > 0 and vtm_dns_deleg.json | length == 0
+          changed_when: true
+
+    # A new zone is served only after the DNS service restarts; NIOS does it only if needed.
+    - name: Grid
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/grid"
+      register: vtm_dns_grid
+
+    - name: Restart DNS if NIOS needs it
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/{{ vtm_dns_grid.json[0]._ref }}?_function=restartservices"
+        method: POST
+        body: {restart_option: RESTART_IF_NEEDED, service_option: DNS}
+      changed_when: true
+
+    - name: What NIOS answers now
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ item }}"]
+      loop: ["{{ vtm_hcp_fqdn }}", "admin.{{ vtm_hcp_fqdn }}"]
+      register: vtm_dns_now
+      changed_when: false
+      failed_when: false
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: >-
+          {{ vtm_hcp_dns_action }}: {{ vtm_dns_now.results | map(attribute='item')
+             | zip(vtm_dns_now.results | map(attribute='stdout') | map('regex_findall', '(?m)^(\S+)')
+                   | map('unique') | map('join', ',')) | map('join', ' -> ') | join('; ') }}
+          (from the controller's resolver; caches may lag up to their TTL)

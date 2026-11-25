@@ -1,0 +1,15 @@
+- question_name: Appliance
+  variable: vtm_target
+  type: text
+  required: true
+  default: {{ vtm_target | to_json }}
+  min: 3
+  max: 253
+- question_name: Lab CA host
+  question_description: Inventory host running the pki-ca container
+  variable: vtm_pki_host
+  type: text
+  required: true
+  default: {{ vtm_pki_host | to_json }}
+  min: 1
+  max: 253

@@ -1,0 +1,129 @@
+- question_name: Appliance
+  question_description: Any traffic manager of the cluster
+  variable: vtm_target
+  type: text
+  required: true
+  default: {{ vtm_target | to_json }}
+  min: 3
+  max: 253
+- question_name: Lab CA host
+  question_description: Inventory host running the pki-ca container
+  variable: vtm_pki_host
+  type: text
+  required: true
+  default: {{ vtm_pki_host | to_json }}
+  min: 1
+  max: 253
+- question_name: Issued-certificates directory on that host
+  question_description: <pki_data>/issued, for PKIIssuedCertExpiring. Blank = don't record.
+  variable: vtm_pki_issued_dir
+  type: text
+  required: false
+  default: {{ vtm_pki_issued_dir | to_json }}
+  min: 0
+  max: 400
+- question_name: HCP system name
+  question_description: The cluster FQDN is <name>.<domain>
+  variable: vtm_hcp_cluster
+  type: text
+  required: true
+  default: {{ vtm_hcp_cluster | to_json }}
+  min: 1
+  max: 31
+- question_name: Domain
+  variable: vtm_hcp_domain
+  type: text
+  required: true
+  default: {{ vtm_hcp_domain | to_json }}
+  min: 1
+  max: 200
+- question_name: HCP nodes (front-end IPs)
+  question_description: Space or comma separated
+  variable: vtm_hcp_nodes
+  type: text
+  required: true
+  default: {{ (vtm_hcp_nodes if vtm_hcp_nodes is string else vtm_hcp_nodes | join(' ')) | to_json }}
+  min: 7
+  max: 1000
+- question_name: Object name prefix
+  question_description: <prefix>_Data, <prefix>_MAPI, ..., <prefix>_Persistence
+  variable: vtm_hcp_prefix
+  type: text
+  required: false
+  default: {{ vtm_hcp_prefix | to_json }}
+  min: 1
+  max: 31
+- question_name: VIPs
+  question_description: Space or comma separated. Blank = allocate from NIOS as <system>-vip<N>.<domain>
+  variable: vtm_hcp_vips
+  type: text
+  required: false
+  default: {{ vtm_hcp_vips | to_json }}
+  min: 0
+  max: 500
+- question_name: VIPs to allocate (when none are given)
+  variable: vtm_hcp_vip_count
+  type: integer
+  required: false
+  default: {{ vtm_hcp_vip_count | int }}
+  min: 1
+  max: 16
+- question_name: VIP network (NIOS network; also the traffic IP network)
+  variable: vtm_hcp_vip_network
+  type: text
+  required: false
+  default: {{ vtm_hcp_vip_network | to_json }}
+  min: 9
+  max: 43
+- question_name: Prometheus (9094)
+  variable: vtm_hcp_prometheus
+  type: multiplechoice
+  required: false
+  choices: ["true", "false"]
+  default: {{ (vtm_hcp_prometheus | bool | string | lower) | to_json }}
+- question_name: Search console (8888)
+  variable: vtm_hcp_search
+  type: multiplechoice
+  required: false
+  choices: ["true", "false"]
+  default: {{ (vtm_hcp_search | bool | string | lower) | to_json }}
+- question_name: Verify HCP's certificate (strict, lab CA)
+  variable: vtm_hcp_verify_backend
+  type: multiplechoice
+  required: false
+  choices: ["true", "false"]
+  default: {{ (vtm_hcp_verify_backend | bool | string | lower) | to_json }}
+- question_name: Extra certificate SANs
+  question_description: Besides <fqdn>, *.<fqdn> and the names HCP's own certificate has
+  variable: vtm_hcp_cert_extra_sans
+  type: text
+  required: false
+  default: {{ vtm_hcp_cert_extra_sans | to_json }}
+  min: 0
+  max: 1000
+- question_name: Certificate lifetime (days)
+  variable: vtm_cert_days
+  type: integer
+  required: false
+  default: {{ vtm_cert_days | int }}
+  min: 2
+  max: 365
+- question_name: Renew when fewer days than this are left
+  variable: vtm_cert_renew_days
+  type: integer
+  required: false
+  default: {{ vtm_cert_renew_days | int }}
+  min: 1
+  max: 364
+- question_name: Key type
+  variable: vtm_cert_key
+  type: multiplechoice
+  required: false
+  choices: [EC-P256, RSA-2048, RSA-3072, RSA-4096]
+  default: {{ vtm_cert_key | to_json }}
+- question_name: Issue a new certificate even if the current one is fine
+  variable: vtm_cert_force
+  type: multiplechoice
+  required: false
+  choices: ["false", "true"]
+  default: "false"

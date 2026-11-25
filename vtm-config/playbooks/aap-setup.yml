@@ -1,8 +1,10 @@
 ---
 # Syncs the project, then creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "vTM API" (API user password, admin password, Splunk HEC token)
-#   * job templates "vTM platform", "vTM backup" and "vTM certificate", with surveys
-#   * a daily schedule for "vTM backup" and a weekly one for "vTM certificate" (when vtm_pki_host is set)
+#   * job templates "vTM platform", "vTM backup", "vTM certificate", "vTM CA", "vTM HCP" and
+#     "vTM HCP DNS", with surveys
+#   * schedules: "vTM backup" daily; with vtm_pki_host set, "vTM certificate" weekly and "vTM CA"
+#     every 4 hours (step-ca's CRL lasts a day); "vTM HCP" weekly (certificate renewal, drift)
 # Idempotent: rerun after changing site values to refresh survey defaults.
 #
 #   ansible-playbook vtm-config/playbooks/aap-setup.yml -e @site-vars.yml \
@@ -23,9 +25,12 @@
     aap_inventory: homelab
     aap_machine_credential: ""     # SSH: Alloy host, lab CA host, appliance (REST restart)
     aap_secrets_credential: ""     # a credential of type "vTM API"
+    aap_nios_credential: ""        # carries nios_api_password (HCP VIPs, HCP DNS), e.g. homelab-secrets
     aap_ee: ""
     aap_backup_rrule: "DTSTART;TZID=America/New_York:20260101T024700 RRULE:FREQ=DAILY;INTERVAL=1"
     aap_cert_rrule: "DTSTART;TZID=America/New_York:20260101T033700 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"
+    aap_ca_rrule: "DTSTART;TZID=America/New_York:20260101T001300 RRULE:FREQ=HOURLY;INTERVAL=4"
+    aap_hcp_rrule: "DTSTART;TZID=America/New_York:20260101T035700 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"
   module_defaults:
     ansible.builtin.uri:
       user: "{{ aap_user }}"
@@ -119,6 +124,20 @@
           playbook: vtm-config/playbooks/certificate.yml
           description: Admin server certificate (UI, SOAP, REST) from the lab CA; renews when due
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-certificate.yml.j2') | from_yaml }}"
+        - name: vTM CA
+          playbook: vtm-config/playbooks/ca.yml
+          description: Lab CA root, intermediate and CRL in the vTM SSL catalogs (CA and admin CA)
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-ca.yml.j2') | from_yaml }}"
+        - name: vTM HCP
+          playbook: vtm-config/playbooks/hcp.yml
+          description: HCP cluster behind vTM (certificate, monitors, pools, VIP from NIOS, virtual servers)
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-hcp.yml.j2') | from_yaml }}"
+          credentials: ["{{ aap_secrets_credential }}", "{{ aap_nios_credential }}"]
+        - name: vTM HCP DNS
+          playbook: vtm-config/playbooks/hcp-dns.yml
+          description: "Opt-in: point an HCP cluster's DNS at its vTM VIPs (cutover) or back to HCP (revert)"
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-hcp-dns.yml.j2') | from_yaml }}"
+          credentials: ["{{ aap_nios_credential }}"]
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"
@@ -150,3 +169,30 @@
           vtm_cert_force: "false"
           vtm_cert_restart_rest: "{{ vtm_cert_restart_rest | bool | string | lower }}"
           vtm_ssh_user: "{{ vtm_ssh_user }}"
+
+    - name: CA and CRL refresh schedule
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_schedule.yml"
+      when: vtm_pki_host | length > 0
+      vars:
+        aap_sched_template: vTM CA
+        aap_sched_name: "vTM CA and CRL refresh ({{ vtm_target }})"
+        aap_sched_rrule: "{{ aap_ca_rrule }}"
+        aap_sched_extra:
+          vtm_target: "{{ vtm_target }}"
+          vtm_pki_host: "{{ vtm_pki_host }}"
+
+    - name: Weekly HCP schedule (certificate renewal, drift)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_schedule.yml"
+      when: vtm_pki_host | length > 0 and vtm_hcp_schedule | default(true) | bool
+      vars:
+        aap_sched_template: vTM HCP
+        aap_sched_name: "vTM HCP weekly ({{ vtm_hcp_cluster }}.{{ vtm_hcp_domain }})"
+        aap_sched_rrule: "{{ aap_hcp_rrule }}"
+        aap_sched_extra:
+          vtm_target: "{{ vtm_target }}"
+          vtm_pki_host: "{{ vtm_pki_host }}"
+          vtm_hcp_cluster: "{{ vtm_hcp_cluster }}"
+          vtm_hcp_domain: "{{ vtm_hcp_domain }}"
+          vtm_hcp_nodes: "{{ vtm_hcp_nodes if vtm_hcp_nodes is string else vtm_hcp_nodes | join(' ') }}"
+          vtm_pki_issued_dir: "{{ vtm_pki_issued_dir }}"
+          vtm_hcp_vip_network: "{{ vtm_hcp_vip_network }}"

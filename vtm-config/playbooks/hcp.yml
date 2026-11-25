@@ -1,0 +1,140 @@
+---
+# An HCP cluster behind vTM: lab CA and CRL in the SSL catalogs, the cluster certificate (lab CA),
+# monitors, pools (least connections, TLS to the nodes, HCP's certificate verified), a persistence
+# class for the console pools, a VIP from NIOS in a traffic IP group, and one virtual server per
+# service on that VIP (TLS 1.2+, SSL decryption, X-Forwarded-For).
+#   ansible-playbook playbooks/hcp.yml -e vtm_target=vtm01.example.com -e vtm_pki_host=fedora \
+#     -e vtm_hcp_cluster=hcp01 -e vtm_hcp_domain=example.com -e vtm_hcp_nodes=192.0.2.101
+# Services: Data 443, MAPI 9090, Management 8000, Prometheus 9094 (vtm_hcp_prometheus) and
+# Search 8888 (vtm_hcp_search). Session persistence only on the console pools, not on Data
+# (S3/REST) or MAPI. DNS is not touched: hcp-dns.yml points the cluster's names at the VIPs.
+# Rerunning changes only what differs, and renews the certificate when due.
+- name: HCP cluster behind vTM
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  vars:
+    vtm_cert_keys:
+      EC-P256: [--kty, EC, --crv, P-256]
+      RSA-2048: [--kty, RSA, --size, "2048"]
+      RSA-3072: [--kty, RSA, --size, "3072"]
+      RSA-4096: [--kty, RSA, --size, "4096"]
+    vtm_hcp_all_services:
+      - {name: Data, port: 443, monitor: http, path: /node_status, status: "204", back_off: false, persist: false, check: /node_status, expect: "204"}
+      - {name: MAPI, port: 9090, monitor: connect, back_off: false, persist: false, check: /, expect: "[1-5][0-9][0-9]"}
+      - {name: Management, port: 8000, monitor: http, path: /, status: "302", back_off: false, persist: true, check: /, expect: "302", host: admin}
+      - {name: Search, port: 8888, monitor: http, path: /, status: "302", back_off: true, persist: true, check: /, expect: "302"}
+      - {name: Prometheus, port: 9094, monitor: http, path: /-/ready, status: "200", back_off: false, persist: true, check: /-/ready, expect: "200"}
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vtm_api_user }}"
+      password: "{{ vtm_api_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ vtm_validate_certs | bool }}"
+      body_format: raw
+      return_content: true
+      timeout: 60
+  tasks:
+    - name: Cluster facts
+      ansible.builtin.set_fact:
+        vtm_hcp_fqdn: "{{ vtm_hcp_cluster }}.{{ vtm_hcp_domain }}"
+        vtm_hcp_nodes_l: "{{ (vtm_hcp_nodes if vtm_hcp_nodes is not string else vtm_hcp_nodes | regex_findall('[^,\\s]+')) | list }}"
+        vtm_hcp_services: >-
+          {{ vtm_hcp_all_services
+             | rejectattr('name', 'equalto', 'Search' if not vtm_hcp_search | bool else '-')
+             | rejectattr('name', 'equalto', 'Prometheus' if not vtm_hcp_prometheus | bool else '-') | list }}
+
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - vtm_hcp_cluster is match('^[a-z][a-z0-9-]{0,30}$')
+          - vtm_hcp_domain | length > 0
+          - vtm_hcp_nodes_l | length > 0
+          - vtm_hcp_nodes_l | select('match', '^(\d{1,3}\.){3}\d{1,3}$') | list | length == vtm_hcp_nodes_l | length
+          - vtm_hcp_prefix is match('^[A-Za-z][A-Za-z0-9_-]{0,30}$')
+          - vtm_pki_host | length > 0
+          - vtm_cert_days | int >= 1 and vtm_cert_days | int <= 365
+          - vtm_cert_renew_days | int >= 1 and vtm_cert_renew_days | int < vtm_cert_days | int
+          - vtm_cert_key in vtm_cert_keys
+        fail_msg: >-
+          Need the cluster name, its domain, the nodes' front-end IPv4 addresses, a name prefix,
+          vtm_pki_host (runs pki-ca), a lifetime of 1-365 days with a shorter renewal window, and a
+          key type of {{ vtm_cert_keys.keys() | list }}.
+        quiet: true
+
+    - name: Connect
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/connect.yml"
+
+    - name: Backup before changing anything
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/backup.yml"
+      vars:
+        vtm_backup_reason: before hcp.yml
+      when: vtm_backup_before_change | bool
+
+    - name: HCP configuration
+      block:
+        - name: Lab CA on the CA host
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/pki_owner.yml"
+
+        - name: CA and CRL catalogs
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/ca_catalog.yml"
+
+        - name: Cluster certificate
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/hcp_cert.yml"
+
+        - name: VIPs
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/hcp_vip.yml"
+
+        - name: Monitors, persistence, pools, traffic IP group, virtual servers
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/hcp_objects.yml"
+
+        # From the CA host: through the VIP, vTM's certificate checked against the lab root
+        # (the root is passed on stdin), expecting what each monitor expects from HCP. The
+        # console (8000) answers only for names it knows, so that check uses admin.<fqdn>.
+        - name: Each service answers through the VIP
+          ansible.builtin.command:
+            argv:
+              - curl
+              - -s
+              - -o
+              - /dev/null
+              - -w
+              - "%{http_code}"
+              - --max-time
+              - "10"
+              - --cacert
+              - /dev/stdin
+              - --resolve
+              - "{{ svc.host | default(svc.name | lower) }}.{{ vtm_hcp_fqdn }}:{{ svc.port }}:{{ vtm_hcp_vip_list[0] }}"
+              - "https://{{ svc.host | default(svc.name | lower) }}.{{ vtm_hcp_fqdn }}:{{ svc.port }}{{ svc.check }}"
+            stdin: "{{ vtm_pki_root.stdout }}"
+          register: vtm_hcp_check
+          until: vtm_hcp_check.stdout is match('^' ~ svc.expect ~ '$')
+          retries: 12
+          delay: 5
+          changed_when: false
+          delegate_to: "{{ vtm_pki_host }}"
+          loop: "{{ vtm_hcp_services }}"
+          loop_control:
+            loop_var: svc
+            label: "{{ vtm_hcp_prefix }}_{{ svc.name }} :{{ svc.port }}{{ svc.check }}"
+
+      always:
+        - name: Remove the controller copy of the root
+          ansible.builtin.file:
+            path: "{{ vtm_ca_file }}"
+            state: absent
+          when: vtm_ca_file is defined
+          changed_when: false
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "{{ vtm_hcp_fqdn }}: VIP {{ vtm_hcp_vip_list | join(', ') }} on {{ vtm_tms.json.children | map(attribute='name') | join(', ') }}"
+          - >-
+            Certificate: {{ ('new (' ~ vtm_hcp_cert_why | join('; ') ~ ')') if vtm_hcp_cert_why | length > 0 else 'current' }},
+            SANs {{ vtm_hcp_cert_sans | join(', ') }}
+          - "{{ vtm_hcp_check.results | map(attribute='svc') | map(attribute='name')
+               | zip(vtm_hcp_check.results | map(attribute='stdout')) | map('join', ': HTTP ') | list }}"
+          - "Clients reach it once DNS points {{ vtm_hcp_fqdn }} and *.{{ vtm_hcp_fqdn }} at the VIP (hcp-dns.yml)."

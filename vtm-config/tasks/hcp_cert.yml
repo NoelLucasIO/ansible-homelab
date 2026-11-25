@@ -1,0 +1,81 @@
+---
+# The certificate vTM serves for the HCP cluster, in the SSL server certificate catalog under the
+# cluster FQDN. SANs: <fqdn>, *.<fqdn>, whatever HCP's own certificate has (tenants), and
+# vtm_hcp_cert_extra_sans. Issued by the lab CA (cert_issue.yml); renewed like the admin one.
+# Needs pki_owner.yml first. Sets vtm_hcp_cert_why (empty = nothing to do).
+- name: SANs HCP's own certificate has
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; openssl s_client -connect {{ vtm_hcp_nodes_l[0] }}:443 -servername {{ vtm_hcp_fqdn }}
+      </dev/null 2>/dev/null | openssl x509 -noout -ext subjectAltName
+    executable: /bin/bash
+  register: vtm_hcp_served
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ vtm_pki_host }}"
+
+- name: Names the certificate must cover
+  ansible.builtin.set_fact:
+    vtm_hcp_cert_sans: >-
+      {{ ([vtm_hcp_fqdn, '*.' ~ vtm_hcp_fqdn]
+          + (vtm_hcp_served.stdout | default('') | regex_findall('DNS:([^,\s]+)'))
+          + (vtm_hcp_cert_extra_sans | regex_findall('[^,\s]+'))) | unique }}
+
+- name: Certificate in the catalog now
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/ssl/server_keys/{{ vtm_hcp_fqdn | urlencode }}"
+    status_code: [200, 404]
+  register: vtm_hcp_key_now
+
+- name: Its names and expiry
+  ansible.builtin.command:
+    cmd: openssl x509 -noout -ext subjectAltName -checkend {{ (vtm_cert_renew_days | int) * 86400 }}
+    stdin: "{{ vtm_hcp_key_now.json.properties.basic.public }}"
+  register: vtm_hcp_key_info
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ vtm_pki_host }}"
+  when: vtm_hcp_key_now.status == 200
+
+- name: Renew?
+  ansible.builtin.set_fact:
+    vtm_hcp_cert_why: >-
+      {{ (['not in the catalog'] if vtm_hcp_key_now.status == 404 else [])
+         + (['missing ' ~ (vtm_hcp_cert_sans | reject('in', vtm_hcp_key_info.stdout | default('') | regex_findall('DNS:([^,\s]+)')) | join(', '))]
+            if vtm_hcp_key_now.status == 200
+               and vtm_hcp_cert_sans | reject('in', vtm_hcp_key_info.stdout | default('') | regex_findall('DNS:([^,\s]+)')) | list | length > 0
+            else [])
+         + (['expires within ' ~ vtm_cert_renew_days ~ ' days']
+            if vtm_hcp_key_now.status == 200 and vtm_hcp_key_info.stdout | default('') is search('will expire') else [])
+         + (['forced'] if vtm_cert_force | bool else []) }}
+
+- name: Issue and store a new certificate
+  when: vtm_hcp_cert_why | length > 0
+  block:
+    - name: Issue it on the lab CA host
+      ansible.builtin.include_tasks: cert_issue.yml
+      vars:
+        vtm_cert_cn: "{{ vtm_hcp_fqdn }}"
+        vtm_cert_sans: "{{ vtm_hcp_cert_sans }}"
+        vtm_cert_stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+    - name: Store it (SSL server certificate catalog)
+      ansible.builtin.uri:
+        url: "{{ vtm_api }}/config/active/ssl/server_keys/{{ vtm_hcp_fqdn | urlencode }}"
+        method: PUT
+        body_format: json
+        body:
+          properties:
+            basic:
+              public: "{{ vtm_cert_chain }}"
+              private: "{{ vtm_cert_keypem }}"
+              note: "{{ vtm_owner_note }} (lab CA, {{ vtm_hcp_cert_why | join('; ') }})"
+        status_code: [200, 201]
+      changed_when: true
+      no_log: true
+
+  always:
+    - name: Forget the key
+      ansible.builtin.set_fact:
+        vtm_cert_keypem: ""
+      no_log: true

@@ -1,0 +1,57 @@
+---
+# Lab root, intermediate and the intermediate's CRL into vtm_ca_catalogs (cas, admin_cas).
+# Needs pki_owner.yml first (vtm_pki_owner, vtm_pki_uid, vtm_pki_root). Writes only what differs.
+- name: Intermediate certificate and current CRL from step-ca
+  delegate_to: "{{ vtm_pki_host }}"
+  become: true
+  become_user: "{{ vtm_pki_owner }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ vtm_pki_uid }}"
+  block:
+    - name: Intermediate certificate
+      ansible.builtin.command:
+        cmd: podman exec {{ vtm_pki_container }} cat /home/step/certs/intermediate_ca.crt
+        chdir: /
+      register: vtm_pki_int
+      changed_when: false
+
+    # step-ca serves the CRL as DER on its own port; vTM's catalog takes PEM.
+    - name: CRL (PEM)
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail; curl -sfk https://127.0.0.1:{{ vtm_pki_ca_port }}/crl
+          | openssl crl -inform DER -outform PEM
+        executable: /bin/bash
+        chdir: /
+      register: vtm_pki_crl
+      changed_when: false
+
+- name: Catalog files
+  ansible.builtin.set_fact:
+    vtm_ca_files:
+      - {name: "{{ vtm_ca_name }}-Root-CA.pem", content: "{{ vtm_pki_root.stdout | trim }}\n"}
+      - {name: "{{ vtm_ca_name }}-Intermediate-CA.pem", content: "{{ vtm_pki_int.stdout | trim }}\n"}
+      - {name: "{{ vtm_ca_name }}-Intermediate-CA.crl", content: "{{ vtm_pki_crl.stdout | trim }}\n"}
+
+- name: Current catalog entries
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/ssl/{{ item.0 }}/{{ item.1.name | urlencode }}"
+    status_code: [200, 404]
+  loop: "{{ vtm_ca_catalogs | product(vtm_ca_files) | list }}"
+  loop_control:
+    label: "{{ item.0 }}/{{ item.1.name }}"
+  register: vtm_ca_now
+
+- name: Write the ones that differ
+  ansible.builtin.uri:
+    url: "{{ vtm_api }}/config/active/ssl/{{ item.item.0 }}/{{ item.item.1.name | urlencode }}"
+    method: PUT
+    headers:
+      Content-Type: application/octet-stream
+    body: "{{ item.item.1.content }}"
+    status_code: [200, 201, 204]
+  loop: "{{ vtm_ca_now.results }}"
+  loop_control:
+    label: "{{ item.item.0 }}/{{ item.item.1.name }}"
+  when: item.status == 404 or (item.content | default('') | trim) != (item.item.1.content | trim)
+  changed_when: true

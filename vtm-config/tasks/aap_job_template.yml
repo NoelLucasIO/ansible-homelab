@@ -36,6 +36,6 @@
 
 - name: Attach credentials to {{ aap_jt.name }}
   ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_attach_credential.yml"
-  loop: "{{ [aap_machine_credential, aap_secrets_credential] | select | list }}"
+  loop: "{{ ([aap_machine_credential] + aap_jt.credentials | default([aap_secrets_credential])) | select | list }}"
   loop_control:
     loop_var: aap_cred_name

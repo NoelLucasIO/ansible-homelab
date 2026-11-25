@@ -1,0 +1,36 @@
+- question_name: Action
+  question_description: cutover = NIOS answers <fqdn> and *.<fqdn> with the VIPs; revert = restore the delegation to HCP
+  variable: vtm_hcp_dns_action
+  type: multiplechoice
+  required: true
+  choices: [cutover, revert]
+  default: cutover
+- question_name: HCP system name
+  variable: vtm_hcp_cluster
+  type: text
+  required: true
+  default: {{ vtm_hcp_cluster | to_json }}
+  min: 1
+  max: 31
+- question_name: Domain
+  variable: vtm_hcp_domain
+  type: text
+  required: true
+  default: {{ vtm_hcp_domain | to_json }}
+  min: 1
+  max: 200
+- question_name: VIPs
+  question_description: Blank = the NIOS host records <system>-vip<N>.<domain> that vTM HCP made
+  variable: vtm_hcp_vips
+  type: text
+  required: false
+  default: {{ vtm_hcp_vips | to_json }}
+  min: 0
+  max: 500
+- question_name: VIPs (count, when none are given)
+  variable: vtm_hcp_vip_count
+  type: integer
+  required: false
+  default: {{ vtm_hcp_vip_count | int }}
+  min: 1
+  max: 16

@@ -83,3 +83,32 @@ vtm_ssh_user: root
 vtm_admin_tls1: false
 vtm_admin_tls1_1: false
 vtm_admin_tls_restart: true
+
+# --- Lab CA in the SSL catalogs (ca.yml; also run by hcp.yml) --------------------------------
+# Root, intermediate and the intermediate's CRL from step-ca on vtm_pki_host, into the CA
+# catalog (backend verification) and the admin CA catalog. step-ca reissues the CRL daily, so
+# AAP reruns ca.yml every few hours; it writes only what changed.
+vtm_ca_catalogs: [cas, admin_cas]
+vtm_ca_name: Lab                    # catalog entries: <name>-Root-CA.pem, <name>-Intermediate-CA.pem, <name>-Intermediate-CA.crl
+
+# --- HCP behind vTM (hcp.yml) ----------------------------------------------------------------
+vtm_hcp_cluster: hcp01              # HCP system name; FQDN = <cluster>.<vtm_hcp_domain>
+vtm_hcp_domain: example.com
+vtm_hcp_nodes: [192.0.2.101]        # front-end IPs of the HCP nodes (list, or space/comma-separated)
+vtm_hcp_prefix: HCP                 # object names: <prefix>_Data, <prefix>_MAPI, ... and <prefix>_Persistence
+vtm_hcp_search: false               # HCP search console (8888)
+vtm_hcp_prometheus: true            # HCP's Prometheus (9094): runs on some nodes and fails over; the monitor finds it
+vtm_hcp_verify_backend: true        # verify HCP's certificate against the lab CA (strict), name = the cluster FQDN
+# VIPs: given here (space/comma-separated), else allocated from NIOS as host records
+# <cluster>-vip<N>.<vtm_hcp_domain> in vtm_hcp_vip_network.
+vtm_hcp_vips: ""
+vtm_hcp_vip_count: 1
+vtm_hcp_vip_network: 192.0.2.0/24
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam
+vtm_nios_view: default
+vtm_nios_candidates: 5
+# The certificate vTM serves for the cluster: issued by the lab CA (vtm_pki_host) with the SANs
+# HCP's own certificate has (read from node 1 on 443) plus these; renewed like the admin one.
+vtm_hcp_cert_extra_sans: ""

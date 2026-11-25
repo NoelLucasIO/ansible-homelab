@@ -1,0 +1,28 @@
+---
+# VIPs for the traffic IP group: vtm_hcp_vips if given, else NIOS host records
+# <cluster>-vip<N>.<domain> (reused on reruns, new ones from vtm_hcp_vip_network).
+# Sets vtm_hcp_vip_list.
+- name: Given VIPs
+  ansible.builtin.set_fact:
+    vtm_hcp_vip_list: "{{ vtm_hcp_vips | regex_findall('[^,\\s]+') }}"
+
+- name: VIPs from NIOS
+  when: vtm_hcp_vip_list | length == 0
+  block:
+    - name: NIOS password available?
+      ansible.builtin.assert:
+        that: nios_api_password | default('') | length > 0
+        fail_msg: >-
+          No VIPs given and no nios_api_password to allocate them. Attach the credential that
+          carries it (homelab-secrets), or set vtm_hcp_vips.
+        quiet: true
+
+    - name: Each VIP
+      ansible.builtin.include_tasks: hcp_vip_one.yml
+      loop: "{{ range(1, (vtm_hcp_vip_count | int) + 1) | list }}"
+      loop_control:
+        loop_var: vtm_vip_idx
+
+    - name: VIPs
+      ansible.builtin.set_fact:
+        vtm_hcp_vip_list: "{{ vtm_hcp_vip_acc }}"

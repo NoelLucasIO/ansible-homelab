@@ -1,0 +1,45 @@
+---
+# The lab CA (pki/: step-ca) in vTM's SSL catalogs: root, intermediate and the intermediate's
+# CRL, in the CA catalog (verifying backends such as HCP) and the admin CA catalog.
+#   ansible-playbook playbooks/ca.yml -e vtm_target=vtm01.example.com -e vtm_pki_host=fedora
+# step-ca reissues its CRL daily; AAP reruns this every few hours so vTM never holds an expired
+# one. Only entries that differ are written.
+- name: Lab CA and CRL in the vTM SSL catalogs
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vtm_api_user }}"
+      password: "{{ vtm_api_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ vtm_validate_certs | bool }}"
+      body_format: raw
+      return_content: true
+      timeout: 60
+  tasks:
+    - name: Check inputs
+      ansible.builtin.assert:
+        that: vtm_pki_host | length > 0
+        fail_msg: Need vtm_pki_host (inventory host running pki-ca).
+        quiet: true
+
+    - name: Connect
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/connect.yml"
+
+    - name: Catalogs
+      block:
+        - name: Lab CA on the CA host
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/pki_owner.yml"
+
+        - name: CA and CRL into the catalogs
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/ca_catalog.yml"
+
+      always:
+        - name: Remove the controller copy of the root
+          ansible.builtin.file:
+            path: "{{ vtm_ca_file }}"
+            state: absent
+          when: vtm_ca_file is defined
+          changed_when: false

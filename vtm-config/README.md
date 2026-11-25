@@ -5,7 +5,9 @@ example by [`vtm-vm`](../vtm-vm/README.md). Everything goes through the applianc
 (8.6 on 22.9) from the controller, except local users, which REST 8.6 doesn't expose: those
 use the SOAP control API, the same interface `zcli` talks to.
 
-This is steps 1 and 2 of 3: platform settings and the admin certificate. Services come next.
+Steps: 1. platform settings (`platform.yml`, `backup.yml`); 2. the admin certificate
+(`certificate.yml`) and the lab CA in the SSL catalogs (`ca.yml`); 3. an HCP cluster behind vTM
+(`hcp.yml`, with the opt-in DNS step `hcp-dns.yml`).
 
 ## platform.yml
 
@@ -49,6 +51,57 @@ secures the admin UI and SOAP (:9090) and REST (:9070).
 
 The weekly AAP schedule reruns it, so it renews itself a month before expiry.
 
+## ca.yml
+
+The lab CA's root and intermediate and the intermediate's CRL, from the `pki-ca` container on
+`vtm_pki_host`, into the CA catalog (what pools verify backends against) and the admin CA catalog,
+as `Lab-Root-CA.pem`, `Lab-Intermediate-CA.pem` and `Lab-Intermediate-CA.crl`. step-ca reissues
+the CRL every day with a one-day lifetime, so AAP reruns this every 4 hours; it writes only the
+entries that differ. `hcp.yml` runs the same tasks.
+
+## hcp.yml
+
+An HCP cluster behind vTM. Per service: a monitor, a pool and a virtual server named
+`<prefix>_<service>` (`vtm_hcp_prefix`, default `HCP`):
+
+| Service | Port | Monitor (per node, every 3 s, 3 failures) | Persistence |
+|---|---|---|---|
+| Data (S3, REST, namespace browser) | 443 | HTTPS `/node_status`, status `204` | none |
+| MAPI | 9090 | TCP connect | none |
+| Management (system and tenant consoles) | 8000 | HTTPS `/`, status `302` | `<prefix>_Persistence` |
+| Prometheus (`vtm_hcp_prometheus`, on) | 9094 | HTTPS `/-/ready`, status `200` | `<prefix>_Persistence` |
+| Search (`vtm_hcp_search`, off) | 8888 | HTTPS `/`, status `302`, back-off | `<prefix>_Persistence` |
+
+- **Pools:** the nodes' front-end addresses (`vtm_hcp_nodes`), least connections, TLS to the
+  nodes (1.2+). With `vtm_hcp_verify_backend` (on), HCP's certificate must chain to the lab CA and
+  carry the cluster FQDN (strict verification). HCP's Prometheus runs on some nodes and fails over;
+  its monitor marks the others down, so the pool follows it.
+- **Persistence:** `<prefix>_Persistence`, transparent session affinity (a cookie), only on the
+  console pools: S3 and API clients ignore cookies.
+- **Certificate:** issued by the lab CA under the cluster FQDN in the SSL server certificate
+  catalog, with `<fqdn>`, `*.<fqdn>`, the names HCP's own certificate has (so tenants are covered)
+  and `vtm_hcp_cert_extra_sans`; renewed when due like the admin certificate, and recorded for
+  `PKIIssuedCertExpiring`.
+- **VIPs:** `vtm_hcp_vips`, or allocated from NIOS as host records `<system>-vip<N>.<domain>` in
+  `vtm_hcp_vip_network` (reused on reruns). The traffic IP group, named after the cluster FQDN,
+  holds them on every traffic manager (single-hosted). Each traffic manager gets a traffic IP
+  network for that subnet on whichever of its interfaces is in it.
+- **Virtual servers:** on the traffic IP group, SSL decryption with the cluster certificate,
+  TLS 1.2+, X-Forwarded-For added, cluster IP header not.
+- **Proof:** from the CA host, each service is requested through the VIP with vTM's certificate
+  checked against the lab root, expecting what its monitor expects.
+
+DNS is not touched. Until it changes, clients reach HCP directly as before.
+
+## hcp-dns.yml (opt-in)
+
+`cutover` replaces the NIOS delegation of `<system>.<domain>` to the HCP nodes with an
+authoritative zone (same name servers as the parent zone) holding A records for `<fqdn>` and
+`*.<fqdn>` pointing at the VIPs, so DNS rather than HCP answers. The delegation's name servers are
+kept in the zone's comment; `revert` deletes the zone (only one this playbook made) and restores
+the delegation. Either restarts NIOS DNS only if NIOS needs it. It never allocates VIPs: those
+come from `hcp.yml`.
+
 ## What the appliance does, as found on 22.9r7
 
 - **Syslog** is an *action* attached to an *event type*, sent over UDP only, as RFC 5424:
@@ -68,6 +121,14 @@ The weekly AAP schedule reruns it, so it renews itself a month before expiry.
   connections. REST (`zeus.configd`) applies a change at once; the admin server only when it
   restarts (`$ZEUSHOME/admin/rc restart`, which leaves traffic alone). REST doesn't answer on
   127.0.0.1, so the probe connects by name.
+- **SSL catalogs:** the CA and admin CA catalogs (`ssl/cas`, `ssl/admin_cas`) are files: REST
+  `PUT` with `Content-Type: application/octet-stream` (certificates and CRLs, PEM). Server
+  certificates (`ssl/server_keys`) take `public` (the chain is served as given) and `private`.
+- **Pool `strict_verify`** checks the backend's chain against the CA catalog and its name against
+  `common_name_match`; the node is addressed by IP, so the cluster FQDN goes there. With a wrong
+  name vTM refuses the backend (clients get HTTP 500).
+- **Traffic IP networks** are `trafficip` (interface -> networks) on each traffic manager; its
+  interfaces and addresses are in `appliance.ip`.
 - **The admin server port** (System > Security, `port` in the `security` file; 9090 out of the box)
   is not in REST 8.6. If you change it, set `vtm_admin_port` to match: SOAP and the certificate
   checks use it.
@@ -106,11 +167,21 @@ The weekly AAP schedule reruns it, so it renews itself a month before expiry.
    `automation_pubkey` that `bootstrap-host.yml` installs) in root's `authorized_keys` on each
    traffic manager. Without it, the certificate still lands on :9090, the job fails at the restart,
    and :9070 keeps the old one until a reboot or a later run.
+5. **HCP:** pass `aap_nios_credential` (the credential with `nios_api_password`) and the cluster's
+   `vtm_hcp_cluster`, `vtm_hcp_domain`, `vtm_hcp_nodes` and `vtm_hcp_vip_network` to
+   `aap-setup.yml`; you get **vTM CA**, **vTM HCP** (weekly schedule) and **vTM HCP DNS**.
 
 The admin password only matters until the API user exists. After that you can blank it in the
 credential: runs log in as the API user and never touch `admin`.
 
 ## Status
+
+- **hcp.yml and ca.yml, tested from the CLI** against vtm01 and hcp01 (one node), with a VIP
+  given (NIOS allocation and hcp-dns.yml need the NIOS credential: AAP only so far): all objects
+  created, the VIP raised, Data `/node_status` 204, MAPI answers, Management 302 (as
+  `admin.<fqdn>`), Prometheus `/-/ready` 200, each through the VIP with vTM's certificate verified
+  against the lab root. Strict backend verification proven by a wrong `common_name_match` (HTTP 500),
+  which the next run corrected. Repeat runs change only the backup; ca.yml's second run nothing.
 
 - **Tested end to end from AAP 2.7** against vtm01 (22.9r7): the first run created the `ansible`
   API user over SOAP, took a backup, and turned on Analytics Export (the exporter holds a connection
