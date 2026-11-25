@@ -65,16 +65,20 @@
           changed_when: false
           failed_when: false
 
+        # ping exit 1 = no reply. 0 (answers) and 2 (ping error, e.g. none in the execution
+
+        # environment) both rule an address out, so a broken ping fails below instead of passing.
+
         - name: Pick the first silent one
           ansible.builtin.set_fact:
-            pbs_addr: "{{ (pbs_ping.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list | first) | default('') }}"
+            pbs_addr: "{{ (pbs_ping.results | selectattr('rc', 'equalto', 1) | map(attribute='item') | list | first) | default('') }}"
 
         - name: Need a free address
           ansible.builtin.assert:
             that: pbs_addr | length > 0
             fail_msg: >-
-              {{ 'The survey address ' ~ pbs_ip ~ ' answers ping.' if pbs_ip | length > 0
-                 else 'All ' ~ pbs_nios_candidates ~ ' addresses NIOS offered answer ping.' }}
+              {{ 'The survey address ' ~ pbs_ip ~ ' answers ping, or ping failed.' if pbs_ip | length > 0
+                 else 'All ' ~ pbs_nios_candidates ~ ' addresses NIOS offered answer ping, or ping failed (exit 2: is ping in the execution environment?).' }}
 
         - name: Host record (A + PTR)
           ansible.builtin.uri:

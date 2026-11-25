@@ -34,14 +34,20 @@
       changed_when: false
       failed_when: false
 
+    # ping exit 1 = no reply. 0 (answers) and 2 (ping error, e.g. none in the execution
+
+    # environment) both rule an address out, so a broken ping fails below instead of passing.
+
     - name: Pick the first silent one
       ansible.builtin.set_fact:
-        vm_ip: "{{ (vm_ping.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list | first) | default('') }}"
+        vm_ip: "{{ (vm_ping.results | selectattr('rc', 'equalto', 1) | map(attribute='item') | list | first) | default('') }}"
 
     - name: Need a free address
       ansible.builtin.assert:
         that: vm_ip | length > 0
-        fail_msg: "All {{ vm_candidates }} addresses NIOS offered answer ping. Run Discovery on {{ vm_network }} or raise vm_candidates."
+        fail_msg: >-
+          All {{ vm_candidates }} addresses NIOS offered answer ping, or ping failed (exit 2: is ping
+          in the execution environment?). Run Discovery on {{ vm_network }} or raise vm_candidates.
 
     - name: Host record body (Owner/Role extensible attributes when given)
       ansible.builtin.set_fact:
