@@ -92,8 +92,12 @@ The weekly AAP schedule reruns it, so it renews itself a month before expiry.
    added. You get the templates **vTM platform**, **vTM backup** and **vTM certificate**, a daily
    backup schedule for `vtm_target`, and, when `vtm_pki_host` is set (also pass
    `vtm_pki_issued_dir`), a weekly certificate renewal schedule (Sundays 03:37).
-4. **Certificate:** the machine credential must reach `vtm_pki_host` (the user running
-   `pki-ca`, with sudo) and `vtm_ssh_user`@ each traffic manager (for the REST restart).
+4. **Certificate:** the machine credential must reach `vtm_pki_host` (with sudo to the user
+   running `pki-ca`) and `vtm_ssh_user`@ each traffic manager, for the REST restart. The
+   appliance has no automation user, so put the machine credential's public key (the
+   `automation_pubkey` that `bootstrap-host.yml` installs) in root's `authorized_keys` on each
+   traffic manager. Without it, the certificate still lands on :9090, the job fails at the restart,
+   and :9070 keeps the old one until a reboot or a later run.
 
 The admin password only matters until the API user exists. After that you can blank it in the
 credential: runs log in as the API user and never touch `admin`.
@@ -112,4 +116,8 @@ credential: runs log in as the API user and never touch `admin`.
   self-signed certificate; a forced renewal issued, recorded and installed a new one, restarted
   only the REST daemon (traffic process ids unchanged) and verified both ports against the lab
   root; a repeat run changes nothing; a run after a REST daemon left on the old certificate
-  restarted just that. Not yet run from AAP.
+  restarted just that.
+- **certificate.yml, tested from AAP 2.7:** a forced run issued, recorded and installed a new
+  certificate; the following run found :9070 still on the old one, restarted only the REST daemon
+  over SSH and verified both ports (same serial on :9090 and :9070, traffic process ids unchanged).
+  `aap-setup.yml` syncs the project, then creates the template and the weekly schedule.
