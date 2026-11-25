@@ -1,5 +1,5 @@
 ---
-# Creates/updates in AAP (controller API, built-in modules only):
+# Syncs the project, then creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "vTM API" (API user password, admin password, Splunk HEC token)
 #   * job templates "vTM platform", "vTM backup" and "vTM certificate", with surveys
 #   * a daily schedule for "vTM backup" and a weekly one for "vTM certificate" (when vtm_pki_host is set)
@@ -74,6 +74,28 @@
       ansible.builtin.assert:
         that: aap_ids.results | map(attribute='json.count') | min > 0
         fail_msg: "Project '{{ aap_project }}' or inventory '{{ aap_inventory }}' not found in AAP."
+
+    # Templates name playbooks; AAP rejects one its last project sync didn't see.
+    - name: Sync the project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ aap_ids.results[0].json.results[0].id }}/update/"
+        method: POST
+      register: aap_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ aap_sync.json.id }}/"
+      register: aap_sync_job
+      until: aap_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+
+    - name: Sync succeeded
+      ansible.builtin.assert:
+        that: aap_sync_job.json.status == 'successful'
+        fail_msg: "Project sync {{ aap_sync_job.json.status }}; see project update {{ aap_sync.json.id }} in AAP."
+        quiet: true
 
     - name: Execution environment id
       ansible.builtin.uri:
