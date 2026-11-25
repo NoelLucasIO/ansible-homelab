@@ -1,0 +1,54 @@
+---
+# Who runs the rootless pki-ca container on vtm_pki_host, and the lab root certificate (for
+# verifying what the appliance serves). Sets vtm_pki_owner, vtm_pki_uid, vtm_ca_file (controller).
+- name: Owner of the rootless pki-ca container
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; ps -eo user:32=,args= | awk '/[c]onmon .* -n {{ vtm_pki_container }} /{print $1; exit}'
+    executable: /bin/bash
+  register: vtm_pki_owner_q
+  changed_when: false
+  failed_when: vtm_pki_owner_q.stdout | trim | length == 0
+  delegate_to: "{{ vtm_pki_host }}"
+
+- name: Its uid
+  ansible.builtin.command: id -u {{ vtm_pki_owner_q.stdout | trim }}
+  register: vtm_pki_uid_q
+  changed_when: false
+  delegate_to: "{{ vtm_pki_host }}"
+
+- name: Owner facts
+  ansible.builtin.set_fact:
+    vtm_pki_owner: "{{ vtm_pki_owner_q.stdout | trim }}"
+    vtm_pki_uid: "{{ vtm_pki_uid_q.stdout | trim }}"
+
+- name: Lab root certificate
+  ansible.builtin.command:
+    cmd: podman exec {{ vtm_pki_container }} cat /home/step/certs/root_ca.crt
+    chdir: /
+  register: vtm_pki_root
+  changed_when: false
+  delegate_to: "{{ vtm_pki_host }}"
+  become: true
+  become_user: "{{ vtm_pki_owner }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ vtm_pki_uid }}"
+
+- name: Controller copy of the root
+  ansible.builtin.tempfile:
+    state: file
+    prefix: vtm-root.
+    suffix: .crt
+  register: vtm_ca_tmp
+  changed_when: false
+
+- name: Write it
+  ansible.builtin.copy:
+    content: "{{ vtm_pki_root.stdout }}\n"
+    dest: "{{ vtm_ca_tmp.path }}"
+    mode: "0644"
+  changed_when: false
+
+- name: Root file
+  ansible.builtin.set_fact:
+    vtm_ca_file: "{{ vtm_ca_tmp.path }}"

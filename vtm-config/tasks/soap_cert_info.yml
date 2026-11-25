@@ -1,0 +1,29 @@
+---
+# SOAP System.Management.getAdminSSLCertificateInfo on one traffic manager, as the API user.
+# It reads the certificate file itself, so it is right even when REST (zeus.configd) is stale.
+# In: vtm_tm, vtm_ci_verify (check the served chain and name against the lab root).
+# Out: vtm_ci (fields of the answer), vtm_ci_ok.
+- name: Admin certificate on {{ vtm_tm }}
+  ansible.builtin.uri:
+    url: "https://{{ vtm_tm }}:{{ vtm_admin_port }}/soap"
+    method: POST
+    validate_certs: "{{ vtm_ci_verify | bool }}"
+    ca_path: "{{ vtm_ca_file if vtm_ci_verify | bool else omit }}"
+    headers:
+      Content-Type: text/xml; charset=utf-8
+      SOAPAction: '"http://soap.zeus.com/zxtm/1.0/System/Management/getAdminSSLCertificateInfo"'
+    body: >-
+      <?xml version="1.0" encoding="UTF-8"?><soap:Envelope
+      xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"
+      xmlns:m="http://soap.zeus.com/zxtm/1.0/System/Management/"><soap:Body><m:getAdminSSLCertificateInfo/></soap:Body></soap:Envelope>
+    status_code: [200]
+  register: vtm_ci_r
+  until: vtm_ci_r.status | default(-1) == 200
+  retries: "{{ vtm_ci_retries | default(0) }}"
+  delay: 5
+  failed_when: false
+
+- name: Parse it
+  ansible.builtin.set_fact:
+    vtm_ci_ok: "{{ vtm_ci_r.status | default(-1) == 200 }}"
+    vtm_ci: "{{ dict(vtm_ci_r.content | default('') | regex_findall('<(\\w+) xsi:type=\"[^\"]*\">([^<]*)<')) }}"

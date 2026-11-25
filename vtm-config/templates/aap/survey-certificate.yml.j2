@@ -1,0 +1,78 @@
+- question_name: Appliance
+  question_description: Any traffic manager of the cluster; every one gets its own certificate
+  variable: vtm_target
+  type: text
+  required: true
+  default: {{ vtm_target | to_json }}
+  min: 3
+  max: 253
+- question_name: Lab CA host
+  question_description: Inventory host running the pki-ca container
+  variable: vtm_pki_host
+  type: text
+  required: true
+  default: {{ vtm_pki_host | to_json }}
+  min: 1
+  max: 253
+- question_name: Issued-certificates directory on that host
+  question_description: <pki_data>/issued, so PKIIssuedCertExpiring warns 30 days ahead. Blank = don't record.
+  variable: vtm_pki_issued_dir
+  type: text
+  required: false
+  default: {{ vtm_pki_issued_dir | to_json }}
+  min: 0
+  max: 400
+- question_name: Lifetime (days)
+  variable: vtm_cert_days
+  type: integer
+  required: true
+  default: {{ vtm_cert_days | int }}
+  min: 2
+  max: 365
+- question_name: Renew when fewer days than this are left
+  variable: vtm_cert_renew_days
+  type: integer
+  required: true
+  default: {{ vtm_cert_renew_days | int }}
+  min: 1
+  max: 364
+- question_name: Key type
+  variable: vtm_cert_key
+  type: multiplechoice
+  required: true
+  choices: [EC-P256, RSA-2048, RSA-3072, RSA-4096]
+  default: {{ vtm_cert_key | to_json }}
+- question_name: Add the IPv4 address(es) from DNS as SANs
+  variable: vtm_cert_ip_san
+  type: multiplechoice
+  required: true
+  choices: ["true", "false"]
+  default: {{ (vtm_cert_ip_san | bool | string | lower) | to_json }}
+- question_name: Extra SANs
+  question_description: Besides the traffic manager's name (and IPs); comma-separated
+  variable: vtm_cert_extra_sans
+  type: text
+  required: false
+  default: {{ vtm_cert_extra_sans | to_json }}
+  min: 0
+  max: 1000
+- question_name: Issue a new one even if the current one is fine
+  variable: vtm_cert_force
+  type: multiplechoice
+  required: true
+  choices: ["false", "true"]
+  default: "false"
+- question_name: Restart the REST daemon over SSH so :9070 serves it too
+  question_description: As this user, with the machine credential; only zeus.configd restarts
+  variable: vtm_cert_restart_rest
+  type: multiplechoice
+  required: true
+  choices: ["true", "false"]
+  default: {{ (vtm_cert_restart_rest | bool | string | lower) | to_json }}
+- question_name: SSH user on the appliance
+  variable: vtm_ssh_user
+  type: text
+  required: true
+  default: {{ vtm_ssh_user | to_json }}
+  min: 1
+  max: 64

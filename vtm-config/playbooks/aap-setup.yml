@@ -1,8 +1,8 @@
 ---
 # Creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "vTM API" (API user password, admin password, Splunk HEC token)
-#   * job templates "vTM platform" and "vTM backup", with surveys
-#   * a daily schedule for "vTM backup"
+#   * job templates "vTM platform", "vTM backup" and "vTM certificate", with surveys
+#   * a daily schedule for "vTM backup" and a weekly one for "vTM certificate" (when vtm_pki_host is set)
 # Idempotent: rerun after changing site values to refresh survey defaults.
 #
 #   ansible-playbook vtm-config/playbooks/aap-setup.yml -e @site-vars.yml \
@@ -21,10 +21,11 @@
     aap_api: "{{ aap_url }}/api/controller/v2"
     aap_project: ansible-homelab
     aap_inventory: homelab
-    aap_machine_credential: ""     # for the play on the Alloy host
+    aap_machine_credential: ""     # SSH: Alloy host, lab CA host, appliance (REST restart)
     aap_secrets_credential: ""     # a credential of type "vTM API"
     aap_ee: ""
     aap_backup_rrule: "DTSTART;TZID=America/New_York:20260101T024700 RRULE:FREQ=DAILY;INTERVAL=1"
+    aap_cert_rrule: "DTSTART;TZID=America/New_York:20260101T033700 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"
   module_defaults:
     ansible.builtin.uri:
       user: "{{ aap_user }}"
@@ -91,6 +92,10 @@
           playbook: vtm-config/playbooks/backup.yml
           description: Full configuration backup on the vTM appliance, keeping the newest N
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-backup.yml.j2') | from_yaml }}"
+        - name: vTM certificate
+          playbook: vtm-config/playbooks/certificate.yml
+          description: Admin server certificate (UI, SOAP, REST) from the lab CA; renews when due
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-certificate.yml.j2') | from_yaml }}"
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"
@@ -102,3 +107,16 @@
         aap_sched_name: "vTM backup daily ({{ vtm_target }})"
         aap_sched_rrule: "{{ aap_backup_rrule }}"
         aap_sched_extra: {vtm_target: "{{ vtm_target }}", vtm_backup_keep: "{{ vtm_backup_keep | int }}"}
+
+    - name: Weekly certificate renewal schedule
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/aap_schedule.yml"
+      when: vtm_pki_host | length > 0
+      vars:
+        aap_sched_template: vTM certificate
+        aap_sched_name: "vTM certificate renewal ({{ vtm_target }})"
+        aap_sched_rrule: "{{ aap_cert_rrule }}"
+        aap_sched_extra:
+          vtm_target: "{{ vtm_target }}"
+          vtm_pki_host: "{{ vtm_pki_host }}"
+          vtm_pki_issued_dir: "{{ vtm_pki_issued_dir }}"
+          vtm_cert_force: "false"

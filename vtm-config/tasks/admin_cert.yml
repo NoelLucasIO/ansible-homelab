@@ -1,0 +1,149 @@
+---
+# Admin server certificate for one traffic manager (vtm_tm): check, renew when due, prove it is
+# served on :9090 (admin server, SOAP) and :9070 (REST) with a chain the lab root verifies.
+- name: Names for {{ vtm_tm }}
+  ansible.builtin.set_fact:
+    vtm_cert_cn: "{{ vtm_tm }}"
+    vtm_cert_sans: >-
+      {{ ([vtm_tm]
+          + ((lookup('ansible.builtin.pipe', 'getent ahostsv4 ' ~ (vtm_tm | quote) ~ ' || true')
+              | regex_findall('(?m)^(\S+)')) if vtm_cert_ip_san | bool else [])
+          + (vtm_cert_extra_sans | regex_findall('[^,\s]+'))) | unique }}
+    vtm_cert_stamp: "{{ lookup('ansible.builtin.pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+- name: Current certificate
+  ansible.builtin.include_tasks: soap_cert_info.yml
+  vars:
+    vtm_ci_verify: false
+
+- name: Read?
+  ansible.builtin.assert:
+    that: vtm_ci_ok and vtm_ci.valid_until is defined
+    fail_msg: "getAdminSSLCertificateInfo on {{ vtm_tm }} failed (HTTP {{ vtm_ci_r.status | default('?') }}): {{ vtm_ci_r.msg | default('') }}"
+    quiet: true
+
+- name: Renew?
+  ansible.builtin.set_fact:
+    vtm_cert_have: "{{ vtm_ci.alt_name | regex_findall('(?:dnsName:|IP Address: ?)([^,\\s]+)') }}"
+    vtm_cert_left_days: >-
+      {{ (((vtm_ci.valid_until | to_datetime('%a, %d %b %Y %H:%M:%S GMT'))
+           - (now(utc=true, fmt='%Y-%m-%d %H:%M:%S') | to_datetime)).total_seconds() / 86400) | int }}
+
+- name: Reasons
+  ansible.builtin.set_fact:
+    vtm_cert_why: >-
+      {{ (['self-signed'] if vtm_ci.self_signed | int == 1 else [])
+         + (['missing ' ~ (vtm_cert_sans | reject('in', vtm_cert_have) | join(', '))]
+            if vtm_cert_sans | reject('in', vtm_cert_have) | list | length > 0 else [])
+         + (['expires in ' ~ vtm_cert_left_days ~ ' days'] if vtm_cert_left_days | int < vtm_cert_renew_days | int else [])
+         + (['forced'] if vtm_cert_force | bool else []) }}
+
+- name: Issue and install a new certificate on {{ vtm_tm }}
+  when: vtm_cert_why | length > 0
+  block:
+    - name: Issue it on the lab CA host
+      ansible.builtin.include_tasks: cert_issue.yml
+
+    # REST runs the same installer as System > Security, then restarts the admin server.
+    - name: Install it (REST admin_ssl_certificate?import)
+      ansible.builtin.uri:
+        url: "https://{{ vtm_tm }}:{{ vtm_rest_port }}/api/tm/{{ vtm_api | basename }}/status/local_tm/admin_ssl_certificate?import"
+        method: PUT
+        body_format: json
+        body:
+          properties:
+            admin_ssl:
+              public_cert: "{{ vtm_cert_chain }}"
+              private_key: "{{ vtm_cert_keypem }}"
+        status_code: [200]
+      register: vtm_cert_put
+      changed_when: true
+      no_log: true
+
+    - name: Installed?
+      ansible.builtin.assert:
+        that: vtm_cert_put.json.properties.admin_ssl.subject is search('CN=' ~ vtm_tm ~ '$')
+        fail_msg: "{{ vtm_tm }} reports {{ vtm_cert_put.json.properties.admin_ssl | default(vtm_cert_put.content | default('?')) }}"
+        quiet: true
+
+  always:
+    - name: Forget the key
+      ansible.builtin.set_fact:
+        vtm_cert_keypem: ""
+      no_log: true
+
+- name: Admin server serves a chain the lab root verifies
+  ansible.builtin.include_tasks: soap_cert_info.yml
+  vars:
+    vtm_ci_verify: true
+    vtm_ci_retries: 12
+
+- name: Admin server verified?
+  ansible.builtin.assert:
+    that:
+      - vtm_ci_ok
+      - vtm_ci.self_signed | int == 0
+      - "vtm_cert_sans | reject('in', vtm_ci.alt_name | regex_findall('(?:dnsName:|IP Address: ?)([^,\\\\s]+)')) | list | length == 0"
+    fail_msg: "{{ vtm_tm }}:{{ vtm_admin_port }} doesn't verify against the lab root: {{ vtm_ci_r.msg | default(vtm_ci) }}"
+    quiet: true
+
+# zeus.configd loads the certificate only when it starts, and an older lab certificate would
+# still verify, so compare fingerprints: what :9070 serves (openssl on the lab CA host) against
+# the installed one (SOAP above).
+- name: Fingerprint REST serves
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail; openssl s_client -connect {{ vtm_tm }}:{{ vtm_rest_port }} -servername {{ vtm_tm }}
+      </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha1 | sed 's/.*=//'
+    executable: /bin/bash
+  register: vtm_rest_fp
+  changed_when: false
+  failed_when: false
+  delegate_to: "{{ vtm_pki_host }}"
+
+- name: Restart zeus.configd so REST serves it
+  when: vtm_rest_fp.stdout | trim | upper != vtm_ci.fingerprint | upper and vtm_cert_restart_rest | bool
+  block:
+    - name: Restart only the REST daemon (traffic is not touched) on {{ vtm_tm }}
+      ansible.builtin.command:
+        cmd: /opt/zeus/zxtm/rc.configd restart
+      delegate_to: "{{ vtm_tm }}"
+      become: false
+      vars:
+        ansible_user: "{{ vtm_ssh_user }}"
+      changed_when: true
+
+    - name: REST serves the installed certificate
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail; openssl s_client -connect {{ vtm_tm }}:{{ vtm_rest_port }} -servername {{ vtm_tm }}
+          </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha1 | sed 's/.*=//'
+        executable: /bin/bash
+      register: vtm_rest_fp_after
+      until: vtm_rest_fp_after.stdout | trim | upper == vtm_ci.fingerprint | upper
+      retries: 24
+      delay: 5
+      changed_when: false
+      delegate_to: "{{ vtm_pki_host }}"
+
+- name: Fingerprint REST serves now
+  ansible.builtin.set_fact:
+    vtm_rest_fp_now: "{{ (vtm_rest_fp_after.stdout if vtm_rest_fp_after.stdout is defined else vtm_rest_fp.stdout | default('')) | trim | upper }}"
+
+- name: REST verified against the lab root (chain and name)
+  ansible.builtin.uri:
+    url: "https://{{ vtm_tm }}:{{ vtm_rest_port }}/api/tm/"
+    validate_certs: true
+    ca_path: "{{ vtm_ca_file }}"
+  register: vtm_rest_tls
+  failed_when: false
+
+- name: Result for {{ vtm_tm }}
+  ansible.builtin.set_fact:
+    vtm_cert_results: >-
+      {{ vtm_cert_results | default([]) + [vtm_tm ~ ': '
+         ~ ('new certificate (' ~ vtm_cert_why | join('; ') ~ ')' if vtm_cert_why | length > 0 else 'current')
+         ~ ', ' ~ vtm_ci.issuer | default('?') ~ ', until ' ~ vtm_ci.valid_until | default('?')
+         ~ ', SANs ' ~ vtm_ci.alt_name | default('?')
+         ~ ('' if vtm_rest_tls.status | default(-1) == 200 and vtm_rest_fp_now == vtm_ci.fingerprint | upper
+            else '; REST :' ~ vtm_rest_port ~ ' does not serve it yet (restart zeus.configd or reboot)')] }}

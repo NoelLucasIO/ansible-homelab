@@ -5,7 +5,7 @@ example by [`vtm-vm`](../vtm-vm/README.md). Everything goes through the applianc
 (8.6 on 22.9) from the controller, except local users, which REST 8.6 doesn't expose: those
 use the SOAP control API, the same interface `zcli` talks to.
 
-This is step 1 of 3: platform settings. Certificates and services come next.
+This is steps 1 and 2 of 3: platform settings and the admin certificate. Services come next.
 
 ## platform.yml
 
@@ -24,6 +24,30 @@ A full configuration backup on the appliance (`vtm-config-<UTC timestamp>`), the
 beyond `vtm_backup_keep` (default 14). Backups taken by hand or by anything else are never
 touched. Backups stay on the appliance: they don't survive a destroy and rebuild by vtm-vm.
 
+## certificate.yml
+
+Replaces vTM's self-signed admin server certificate (`CN=zxtm`) with one from the lab CA
+([`pki/`](../pki/README.md), step-ca), on every traffic manager in the cluster. One certificate
+secures the admin UI and SOAP (:9090) and REST (:9070).
+
+1. Asks each traffic manager over SOAP (`getAdminSSLCertificateInfo`) for its current
+   certificate. It renews when that is self-signed, lacks a SAN, is within
+   `vtm_cert_renew_days` (30) of expiry, or `vtm_cert_force` is set; otherwise nothing changes.
+2. Issues the certificate inside the `pki-ca` container on `vtm_pki_host` with the admin
+   provisioner: SANs are the traffic manager's name, its IPv4 address(es) from DNS
+   (`vtm_cert_ip_san`) and `vtm_cert_extra_sans`; `vtm_cert_days` (90), `vtm_cert_key` (EC-P256).
+   The public certificate is recorded under `vtm_pki_issued_dir`/vtm-<name>/ for the
+   `PKIIssuedCertExpiring` alert.
+3. Installs it with REST `status/local_tm/admin_ssl_certificate?import`, the same installer as
+   *System > Security*, which restarts the admin server. The key goes from the container straight
+   into that request: it is never written to disk on the controller or the CA host.
+4. Proves the result: :9090 must verify against the lab root (chain and host name), and the
+   certificate :9070 serves (checked with openssl from the CA host) must have the installed
+   fingerprint. If it doesn't, it restarts only the REST daemon over SSH as `vtm_ssh_user`
+   (`vtm_cert_restart_rest`), then checks again.
+
+The weekly AAP schedule reruns it, so it renews itself a month before expiry.
+
 ## What the appliance does, as found on 22.9r7
 
 - **Syslog** is an *action* attached to an *event type*, sent over UDP only, as RFC 5424:
@@ -40,6 +64,15 @@ touched. Backups stay on the appliance: they don't survive a destroy and rebuild
 - **Local users** are not a REST 8.6 resource; SOAP `Users.addUser` / `changePassword` /
   `listUsers` on `https://<appliance>:9090/soap` handle them.
 - **NTP** is `appliance.ntpservers` on each traffic manager (out of the box: `zeus.pool.ntp.org`).
+- The **admin server certificate** is `$ZEUSHOME/admin/etc/admin.public` / `admin.private`,
+  per traffic manager, outside the replicated configuration. REST 8.6 imports it
+  (`status/local_tm/admin_ssl_certificate?import`, fields `public_cert` (the chain is served as
+  given) and `private_key`: PEM, unencrypted, RSA/DSA/EC); SOAP has the same as
+  `System.Management.importAdminSSLCertificate`. Either restarts the admin server (:9090), but
+  REST itself is served by `zeus.configd`, which reads the file only at start and ignores HUP:
+  until `$ZEUSHOME/zxtm/rc.configd restart` (or a reboot) :9070 keeps the old certificate, and
+  its status then reports an empty fingerprint. Restarting configd leaves the traffic processes
+  (`zeus.zxtm`) running. The UI upload has the same gap.
 
 ## Setup
 
@@ -56,8 +89,11 @@ touched. Backups stay on the appliance: they don't survive a destroy and rebuild
    ```
    That creates the credential type **vTM API**. Create a credential of that type (API password,
    admin password, optional HEC token), then rerun with `"aap_secrets_credential": "<its name>"`
-   added. You get the templates **vTM platform** and **vTM backup**, and a daily backup schedule
-   for `vtm_target`.
+   added. You get the templates **vTM platform**, **vTM backup** and **vTM certificate**, a daily
+   backup schedule for `vtm_target`, and, when `vtm_pki_host` is set (also pass
+   `vtm_pki_issued_dir`), a weekly certificate renewal schedule (Sundays 03:37).
+4. **Certificate:** the machine credential must reach `vtm_pki_host` (the user running
+   `pki-ca`, with sudo) and `vtm_ssh_user`@ each traffic manager (for the REST restart).
 
 The admin password only matters until the API user exists. After that you can blank it in the
 credential: runs log in as the API user and never touch `admin`.
@@ -72,3 +108,8 @@ credential: runs log in as the API user and never touch `admin`.
 - **Also tested from the CLI:** creating the API user from scratch, backup retention, the Alloy
   drop-in and restart. A repeat run changes only the backup.
 - `aap-setup.yml` created the credential type and both templates.
+- **certificate.yml, tested from the CLI** against vtm01 with the lab CA on fedora: replaced the
+  self-signed certificate; a forced renewal issued, recorded and installed a new one, restarted
+  only the REST daemon (traffic process ids unchanged) and verified both ports against the lab
+  root; a repeat run changes nothing; a run after a REST daemon left on the old certificate
+  restarted just that. Not yet run from AAP.

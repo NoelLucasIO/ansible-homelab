@@ -56,3 +56,21 @@ vtm_hec_tls_verify: false
 vtm_backup_prefix: vtm-config       # only backups with this prefix are pruned
 vtm_backup_keep: 14
 vtm_backup_before_change: true      # platform.yml takes one before it changes anything
+
+# --- Admin server certificate from the lab CA (certificate.yml; pki/: step-ca) ---------------
+# One certificate per traffic manager, for its admin UI/SOAP (:9090) and REST (:9070).
+vtm_pki_host: ""                    # inventory host running the pki-ca container (required)
+vtm_pki_container: pki-ca
+vtm_pki_name: pki                   # pki_name: the admin provisioner's Podman secret is <name>-admin-password
+vtm_pki_ca_port: 9443
+vtm_pki_issued_dir: ""              # <pki_data>/issued on that host, for PKIIssuedCertExpiring; "" = don't record
+vtm_cert_days: 90                   # lifetime; the CA's admin provisioner allows up to 365
+vtm_cert_renew_days: 30             # a rerun renews within this many days of expiry
+vtm_cert_key: EC-P256               # EC-P256 | RSA-2048 | RSA-3072 | RSA-4096
+vtm_cert_ip_san: true               # add the traffic manager's IPv4 address(es) from DNS
+vtm_cert_extra_sans: ""             # more names, comma-separated
+vtm_cert_force: false               # issue a new one even if the current one is fine
+# zeus.configd (REST, :9070) reads the certificate only at start; restart it over SSH so REST
+# serves the new one too. Only the REST daemon restarts; traffic is not touched.
+vtm_cert_restart_rest: true
+vtm_ssh_user: root

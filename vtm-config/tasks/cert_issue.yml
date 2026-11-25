@@ -1,0 +1,76 @@
+---
+# Issue one certificate inside the pki-ca container on vtm_pki_host (admin provisioner), as
+# pki/playbooks/issue-pfx.yml does. The key is read from the container straight into a fact
+# (never written to disk outside the container's scratch directory, which is removed).
+# Needs vtm_pki_owner, vtm_pki_uid (pki_owner.yml), vtm_cert_cn, vtm_cert_sans, vtm_cert_stamp.
+# Sets vtm_cert_chain (leaf + intermediate, PEM) and vtm_cert_keypem.
+- name: In the container as {{ vtm_pki_owner }}
+  delegate_to: "{{ vtm_pki_host }}"
+  become: true
+  become_user: "{{ vtm_pki_owner }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ vtm_pki_uid }}"
+  block:
+    - name: Scratch directory in the container
+      ansible.builtin.command:
+        cmd: podman exec {{ vtm_pki_container }} mktemp -d /tmp/vtm.XXXXXX
+        chdir: /
+      register: vtm_pki_tmp
+      changed_when: false
+
+    - name: Issue the certificate for {{ vtm_cert_cn }}
+      ansible.builtin.command:
+        argv: >-
+          {{ ['podman', 'exec', vtm_pki_container, 'step', 'ca', 'certificate', vtm_cert_cn,
+              vtm_pki_tmp.stdout ~ '/c.crt', vtm_pki_tmp.stdout ~ '/c.key',
+              '--ca-url', 'https://127.0.0.1:' ~ vtm_pki_ca_port, '--root', '/home/step/certs/root_ca.crt',
+              '--provisioner', 'admin', '--provisioner-password-file', '/run/secrets/' ~ vtm_pki_name ~ '-admin-password',
+              '--not-after', ((vtm_cert_days | int) * 24) ~ 'h', '--force']
+             + (vtm_cert_sans | map('regex_replace', '^', '--san=') | list)
+             + vtm_cert_keys[vtm_cert_key] }}
+        chdir: /
+      changed_when: true
+
+    - name: Certificate chain
+      ansible.builtin.command:
+        cmd: podman exec {{ vtm_pki_container }} cat {{ vtm_pki_tmp.stdout }}/c.crt
+        chdir: /
+      register: vtm_cert_crt
+      changed_when: false
+
+    - name: Private key
+      ansible.builtin.command:
+        cmd: podman exec {{ vtm_pki_container }} cat {{ vtm_pki_tmp.stdout }}/c.key
+        chdir: /
+      register: vtm_cert_key_out
+      changed_when: false
+      no_log: true
+
+    # The pki metrics alert (PKIIssuedCertExpiring) watches <issued dir>/<name>/*.crt.
+    - name: Directory for its records
+      ansible.builtin.file:
+        path: "{{ vtm_pki_issued_dir }}/vtm-{{ vtm_cert_cn }}"
+        state: directory
+        mode: "0700"
+      when: vtm_pki_issued_dir | length > 0
+
+    - name: Record the public certificate for expiry alerts
+      ansible.builtin.copy:
+        content: "{{ vtm_cert_crt.stdout }}\n"
+        dest: "{{ vtm_pki_issued_dir }}/vtm-{{ vtm_cert_cn }}/vtm-{{ vtm_cert_cn }}-{{ vtm_cert_stamp }}.crt"
+        mode: "0600"
+      when: vtm_pki_issued_dir | length > 0
+
+  always:
+    - name: Remove the container scratch (key included)
+      ansible.builtin.command:
+        cmd: podman exec {{ vtm_pki_container }} rm -rf {{ vtm_pki_tmp.stdout }}
+        chdir: /
+      when: vtm_pki_tmp.stdout | default('') is match('^/tmp/vtm\\.')
+      changed_when: false
+
+- name: Certificate and key
+  ansible.builtin.set_fact:
+    vtm_cert_chain: "{{ vtm_cert_crt.stdout }}\n"
+    vtm_cert_keypem: "{{ vtm_cert_key_out.stdout }}\n"
+  no_log: true

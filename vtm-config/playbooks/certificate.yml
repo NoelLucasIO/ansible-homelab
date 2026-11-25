@@ -1,0 +1,69 @@
+---
+# Admin server certificate from the lab CA (pki/: step-ca), replacing vTM's self-signed one on
+# every traffic manager in the cluster. It secures the admin UI and SOAP (:9090) and REST (:9070).
+#   ansible-playbook playbooks/certificate.yml -e vtm_target=vtm01.example.com -e vtm_pki_host=fedora
+# SANs: the traffic manager's name, its IPv4 address(es) from DNS, and vtm_cert_extra_sans.
+# Issued inside the pki-ca container with the admin provisioner; the key goes from there straight
+# into the appliance's REST import (admin_ssl_certificate?import) and is written nowhere else.
+# vTM restarts its admin server itself; REST (zeus.configd) reads the certificate only at start,
+# so it is restarted over SSH as vtm_ssh_user (REST only; traffic keeps flowing).
+# Skipped when the current certificate is CA-signed, has every SAN and isn't within
+# vtm_cert_renew_days of expiry, so rerunning it (or scheduling it) renews when due.
+- name: Admin server certificate for vTM from the lab CA
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  vars:
+    vtm_cert_keys:
+      EC-P256: [--kty, EC, --crv, P-256]
+      RSA-2048: [--kty, RSA, --size, "2048"]
+      RSA-3072: [--kty, RSA, --size, "3072"]
+      RSA-4096: [--kty, RSA, --size, "4096"]
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vtm_api_user }}"
+      password: "{{ vtm_api_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ vtm_validate_certs | bool }}"
+      body_format: raw
+      return_content: true
+      timeout: 60
+  tasks:
+    - name: Check inputs
+      ansible.builtin.assert:
+        that:
+          - vtm_pki_host | length > 0
+          - vtm_cert_days | int >= 1 and vtm_cert_days | int <= 365
+          - vtm_cert_renew_days | int >= 1 and vtm_cert_renew_days | int < vtm_cert_days | int
+          - vtm_cert_key in vtm_cert_keys
+        fail_msg: >-
+          Need vtm_pki_host (inventory host running pki-ca); lifetime 1-365 days (the CA's limit),
+          renewal window shorter than that, key type one of {{ vtm_cert_keys.keys() | list }}.
+        quiet: true
+
+    - name: Connect
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/connect.yml"
+
+    - name: Certificates
+      block:
+        - name: Lab CA on {{ vtm_pki_host }}
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/pki_owner.yml"
+
+        - name: Each traffic manager
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/admin_cert.yml"
+          loop: "{{ vtm_tms.json.children | map(attribute='name') | list }}"
+          loop_control:
+            loop_var: vtm_tm
+
+      always:
+        - name: Remove the controller copy of the root
+          ansible.builtin.file:
+            path: "{{ vtm_ca_file }}"
+            state: absent
+          when: vtm_ca_file is defined
+          changed_when: false
+
+    - name: Done
+      ansible.builtin.debug:
+        msg: "{{ vtm_cert_results + ['Clients trust it through the lab root (pki trust).'] }}"
