@@ -96,12 +96,14 @@ DNS is not touched. Until it changes, clients reach HCP directly as before.
 ## hcp-dns.yml (opt-in)
 
 `cutover` replaces the NIOS delegation of `<system>.<domain>` to the HCP nodes with an
-authoritative zone (same name servers as the parent zone) holding A records for `<fqdn>` and
-`*.<fqdn>` pointing at the VIPs, so DNS rather than HCP answers. The delegation's name servers are
+authoritative zone (same name servers as the parent zone) holding `*.<fqdn>` A records pointing
+at the VIPs, so DNS rather than HCP answers. The bare `<fqdn>` gets one too only with
+`vtm_hcp_dns_apex`: HCP's own DNS doesn't answer for it, and NIOS wants a separate permission for
+such "blank" (zone apex) records. The delegation's name servers are
 kept in the zone's comment; `revert` deletes the zone (only one this playbook made) and restores
 the delegation. Either restarts DNS, only if NIOS needs it and only on the members serving the
-parent zone. It never allocates VIPs: those come from `hcp.yml`. If creating the zone fails, the
-delegation is put back before the job stops.
+parent zone. It never allocates VIPs: those come from `hcp.yml`. The cutover is all or nothing: if
+any step fails, the zone it made is deleted and the delegation put back before the job stops.
 
 NIOS requires restart permission on the DNS member to create a zone, which an IPAM account
 shouldn't have. Give this step its own NIOS account: an admin group with read/write on the grid
