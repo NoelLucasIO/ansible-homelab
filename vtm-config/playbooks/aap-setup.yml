@@ -142,4 +142,11 @@
           vtm_target: "{{ vtm_target }}"
           vtm_pki_host: "{{ vtm_pki_host }}"
           vtm_pki_issued_dir: "{{ vtm_pki_issued_dir }}"
+          # AAP wants every required survey answer on a schedule.
+          vtm_cert_days: "{{ vtm_cert_days | int }}"
+          vtm_cert_renew_days: "{{ vtm_cert_renew_days | int }}"
+          vtm_cert_key: "{{ vtm_cert_key }}"
+          vtm_cert_ip_san: "{{ vtm_cert_ip_san | bool | string | lower }}"
           vtm_cert_force: "false"
+          vtm_cert_restart_rest: "{{ vtm_cert_restart_rest | bool | string | lower }}"
+          vtm_ssh_user: "{{ vtm_ssh_user }}"
