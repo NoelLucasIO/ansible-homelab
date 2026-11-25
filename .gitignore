@@ -10,3 +10,6 @@ ee/context/
 .ansible/
 __pycache__/
 *.retry
+
+# OPNsense script secrets: only the *.example is committed
+porkbun-ddns.env
