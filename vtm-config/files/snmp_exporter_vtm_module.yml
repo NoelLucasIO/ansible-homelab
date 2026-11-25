@@ -1,0 +1,694 @@
+# snmp_exporter module for Ivanti vTM (ZXTM-MIB, enterprise 1.3.6.1.4.1.7146.1.2), written for
+# vtm-config. Metric names are the MIB object names. OIDs, types and index encodings were checked
+# against vTM 22.9r7 (snmpwalk). Units: memory MB, *Response*/*QueueTime* ms, upTime 1/100 s.
+# Enumerations: poolState 1 active, 2 disabled, 3 draining, 4 unused, 5 unknown;
+#   perPoolNodeState 1 alive, 2 dead, 3 unknown, 4 draining, 5 drainingtodelete;
+#   trafficIPInet46State 1 raised, 2 lowered; virtualserverProtocol 1 http, 2 https, ... (see the MIB).
+modules:
+  vtm:
+    get:
+      - 1.3.6.1.4.1.7146.1.2.6.10.0          # trafficIPNumberInet46
+      - 1.3.6.1.4.1.7146.1.2.6.11.0          # trafficIPNumberRaisedInet46
+      - 1.3.6.1.4.1.7146.1.2.1.1.0          # version
+      - 1.3.6.1.4.1.7146.1.2.1.3.0          # upTime
+      - 1.3.6.1.4.1.7146.1.2.1.2.0          # numberChildProcesses
+      - 1.3.6.1.4.1.7146.1.2.1.64.0          # totalBytesIn
+      - 1.3.6.1.4.1.7146.1.2.1.65.0          # totalBytesOut
+      - 1.3.6.1.4.1.7146.1.2.1.9.0          # totalCurrentConn
+      - 1.3.6.1.4.1.7146.1.2.1.10.0          # totalConn
+      - 1.3.6.1.4.1.7146.1.2.1.127.0          # totalRequests
+      - 1.3.6.1.4.1.7146.1.2.1.128.0          # totalTransactions
+      - 1.3.6.1.4.1.7146.1.2.1.63.0          # totalBackendServerErrors
+      - 1.3.6.1.4.1.7146.1.2.1.139.0          # totalCurrentHTTPRequests
+      - 1.3.6.1.4.1.7146.1.2.1.56.0          # numIdleConnections
+      - 1.3.6.1.4.1.7146.1.2.1.46.0          # sysCPUBusyPercent
+      - 1.3.6.1.4.1.7146.1.2.1.47.0          # sysCPUUserBusyPercent
+      - 1.3.6.1.4.1.7146.1.2.1.48.0          # sysCPUSystemBusyPercent
+      - 1.3.6.1.4.1.7146.1.2.1.50.0          # sysMemTotal
+      - 1.3.6.1.4.1.7146.1.2.1.51.0          # sysMemFree
+      - 1.3.6.1.4.1.7146.1.2.1.52.0          # sysMemInUse
+      - 1.3.6.1.4.1.7146.1.2.1.54.0          # sysMemSwapped
+      - 1.3.6.1.4.1.7146.1.2.1.49.0          # sysFDsFree
+      - 1.3.6.1.4.1.7146.1.2.1.15.0          # numberSNMPUnauthorisedRequests
+    walk:
+      - 1.3.6.1.4.1.7146.1.2.6.12.1.3          # trafficIPInet46State
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.2          # virtualserverPort
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.3          # virtualserverProtocol
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.9          # virtualserverCurrentConn
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.10          # virtualserverMaxConn
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.31          # virtualserverBytesIn
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.32          # virtualserverBytesOut
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.40          # virtualserverTotalRequests
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.43          # virtualserverTotalHTTPRequests
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.184          # virtualserverCurrentHTTPRequests
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.12          # virtualserverDiscard
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.14          # virtualserverConnectTimedOut
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.15          # virtualserverDataTimedOut
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.16          # virtualserverKeepaliveTimedOut
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.29          # virtualserverConnectionErrors
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.30          # virtualserverConnectionFailures
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.121          # virtualserverHTTP1xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.124          # virtualserverHTTP2xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.127          # virtualserverHTTP3xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.130          # virtualserverHTTP4xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.133          # virtualserverHTTP5xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.172          # virtualserverHTTPServer5xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.145          # virtualserverHTTPGenerated5xxResponses
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.64          # virtualserverSslNewSession
+      - 1.3.6.1.4.1.7146.1.2.2.2.1.76          # virtualserverSslCacheResumed
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.3          # poolNodes
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.4          # poolDraining
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.13          # poolDisabled
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.14          # poolState
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.48          # poolCurrentConn
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.10          # poolTotalConn
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.22          # poolBytesIn
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.23          # poolBytesOut
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.17          # poolConnsQueued
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.18          # poolQueueTimeouts
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.21          # poolMeanQueueTime
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.33          # poolHTTP2xxResponses
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.36          # poolHTTP3xxResponses
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.39          # poolHTTP4xxResponses
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.42          # poolHTTP5xxResponses
+      - 1.3.6.1.4.1.7146.1.2.3.2.1.45          # poolHTTP503Retries
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.6          # perPoolNodeState
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.21          # perPoolNodeCurrentConn
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.11          # perPoolNodeCurrentRequests
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.12          # perPoolNodeTotalConn
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.15          # perPoolNodeNewConn
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.13          # perPoolNodePooledConn
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.20          # perPoolNodeIdleConns
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.14          # perPoolNodeFailures
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.16          # perPoolNodeErrors
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.19          # perPoolNodeResponseMean
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.18          # perPoolNodeResponseMax
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.22          # perPoolNodeBytesToNode
+      - 1.3.6.1.4.1.7146.1.2.4.6.1.23          # perPoolNodeBytesFromNode
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.11          # interfaceRxBytes
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.12          # interfaceTxBytes
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.2          # interfaceRxPackets
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.3          # interfaceTxPackets
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.4          # interfaceRxErrors
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.5          # interfaceTxErrors
+      - 1.3.6.1.4.1.7146.1.2.12.2.1.6          # interfaceCollisions
+    metrics:
+      - name: trafficIPNumberInet46
+        oid: 1.3.6.1.4.1.7146.1.2.6.10
+        type: gauge
+        help: "The number of traffic IP addresses on this system (IPv4 and IPv6)."
+      - name: trafficIPNumberRaisedInet46
+        oid: 1.3.6.1.4.1.7146.1.2.6.11
+        type: gauge
+        help: "The number of traffic IP addresses currently raised on this system (IPv4 and IPv6)."
+      - name: trafficIPInet46State
+        oid: 1.3.6.1.4.1.7146.1.2.6.12.1.3
+        type: gauge
+        help: "Whether this traffic IP address is currently being hosted by this traffic manager: 1 raised, 2 lowered."
+        indexes:
+          - labelname: trafficIPInet46AddressType
+            type: gauge
+          - labelname: trafficIPInet46Address
+            type: InetAddress
+      - name: version
+        oid: 1.3.6.1.4.1.7146.1.2.1.1
+        type: DisplayString
+        help: "The Pulse Secure Virtual Traffic Manager version."
+      - name: upTime
+        oid: 1.3.6.1.4.1.7146.1.2.1.3
+        type: gauge
+        help: "The time (in hundredths of a second) that vTM software has been operational for (this value will wrap if it has been running for more than 497 days)."
+      - name: numberChildProcesses
+        oid: 1.3.6.1.4.1.7146.1.2.1.2
+        type: gauge
+        help: "The number of traffic manager child processes."
+      - name: totalBytesIn
+        oid: 1.3.6.1.4.1.7146.1.2.1.64
+        type: counter
+        help: "Bytes received by the traffic manager from clients."
+      - name: totalBytesOut
+        oid: 1.3.6.1.4.1.7146.1.2.1.65
+        type: counter
+        help: "Bytes sent by the traffic manager to clients."
+      - name: totalCurrentConn
+        oid: 1.3.6.1.4.1.7146.1.2.1.9
+        type: gauge
+        help: "Number of TCP connections currently established."
+      - name: totalConn
+        oid: 1.3.6.1.4.1.7146.1.2.1.10
+        type: counter
+        help: "Total number of TCP connections received."
+      - name: totalRequests
+        oid: 1.3.6.1.4.1.7146.1.2.1.127
+        type: counter
+        help: "Total number of TCP requests received."
+      - name: totalTransactions
+        oid: 1.3.6.1.4.1.7146.1.2.1.128
+        type: counter
+        help: "Total number of TCP requests being processed, after applying TPS limits."
+      - name: totalBackendServerErrors
+        oid: 1.3.6.1.4.1.7146.1.2.1.63
+        type: counter
+        help: "Total errors returned from the backend servers."
+      - name: totalCurrentHTTPRequests
+        oid: 1.3.6.1.4.1.7146.1.2.1.139
+        type: gauge
+        help: "Number of HTTP requests the traffic manager is currently serving or waiting on"
+      - name: numIdleConnections
+        oid: 1.3.6.1.4.1.7146.1.2.1.56
+        type: gauge
+        help: "Total number of idle HTTP connections to all nodes (used for future HTTP requests)."
+      - name: sysCPUBusyPercent
+        oid: 1.3.6.1.4.1.7146.1.2.1.46
+        type: gauge
+        help: "Percentage of time that the CPUs are busy."
+      - name: sysCPUUserBusyPercent
+        oid: 1.3.6.1.4.1.7146.1.2.1.47
+        type: gauge
+        help: "Percentage of time that the CPUs are busy running user-space code."
+      - name: sysCPUSystemBusyPercent
+        oid: 1.3.6.1.4.1.7146.1.2.1.48
+        type: gauge
+        help: "Percentage of time that the CPUs are busy running system code."
+      - name: sysMemTotal
+        oid: 1.3.6.1.4.1.7146.1.2.1.50
+        type: gauge
+        help: "Total memory (MBytes)."
+      - name: sysMemFree
+        oid: 1.3.6.1.4.1.7146.1.2.1.51
+        type: gauge
+        help: "Free memory (MBytes)."
+      - name: sysMemInUse
+        oid: 1.3.6.1.4.1.7146.1.2.1.52
+        type: gauge
+        help: "Memory used (MBytes)."
+      - name: sysMemSwapped
+        oid: 1.3.6.1.4.1.7146.1.2.1.54
+        type: gauge
+        help: "Amount of swap space in use (MBytes)."
+      - name: sysFDsFree
+        oid: 1.3.6.1.4.1.7146.1.2.1.49
+        type: gauge
+        help: "Number of free file descriptors."
+      - name: numberSNMPUnauthorisedRequests
+        oid: 1.3.6.1.4.1.7146.1.2.1.15
+        type: counter
+        help: "SNMP requests dropped due to access restrictions."
+      - name: virtualserverPort
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.2
+        type: gauge
+        help: "The port the virtual server listens on."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverProtocol
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.3
+        type: gauge
+        help: "The protocol the virtual server is operating."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverCurrentConn
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.9
+        type: gauge
+        help: "TCP connections currently established to this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverMaxConn
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.10
+        type: gauge
+        help: "Maximum number of simultaneous TCP connections this virtual server has processed at any one time."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverBytesIn
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.31
+        type: counter
+        help: "Bytes received by this virtual server from clients."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverBytesOut
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.32
+        type: counter
+        help: "Bytes sent by this virtual server to clients."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverTotalRequests
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.40
+        type: counter
+        help: "Requests received by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverTotalHTTPRequests
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.43
+        type: counter
+        help: "HTTP Requests received by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverCurrentHTTPRequests
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.184
+        type: gauge
+        help: "Number of HTTP requests this virtual server is currently serving or waiting on"
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverDiscard
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.12
+        type: counter
+        help: "Connections discarded by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverConnectTimedOut
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.14
+        type: counter
+        help: "Connections closed by this virtual server because the 'connect_timeout' interval was exceeded."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverDataTimedOut
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.15
+        type: counter
+        help: "Connections closed by this virtual server because the 'timeout' interval was exceeded."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverKeepaliveTimedOut
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.16
+        type: counter
+        help: "Connections closed by this virtual server because the 'keepalive_timeout' interval was exceeded."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverConnectionErrors
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.29
+        type: counter
+        help: "Number of transaction or protocol errors in this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverConnectionFailures
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.30
+        type: counter
+        help: "Number of connection failures in this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTP1xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.121
+        type: counter
+        help: "Number of HTTP 1xx responses returned by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTP2xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.124
+        type: counter
+        help: "Number of HTTP 2xx responses returned by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTP3xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.127
+        type: counter
+        help: "Number of HTTP 3xx responses returned by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTP4xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.130
+        type: counter
+        help: "Number of HTTP 4xx responses returned by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTP5xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.133
+        type: counter
+        help: "Number of HTTP 5xx responses returned by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTPServer5xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.172
+        type: counter
+        help: "Number of HTTP 5xx responses returned from a backend server or TrafficScript rule by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverHTTPGenerated5xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.145
+        type: counter
+        help: "Number of HTTP 5xx responses generated by this virtual server."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverSslNewSession
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.64
+        type: counter
+        help: "Number of times a new SSL session was created."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: virtualserverSslCacheResumed
+        oid: 1.3.6.1.4.1.7146.1.2.2.2.1.76
+        type: counter
+        help: "Number of times an SSL session was resumed from the cache."
+        indexes:
+          - labelname: virtualserverName
+            type: DisplayString
+      - name: poolNodes
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.3
+        type: gauge
+        help: "The number of nodes registered with this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolDraining
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.4
+        type: gauge
+        help: "The number of nodes in this pool which are draining."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolDisabled
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.13
+        type: gauge
+        help: "The number of nodes in this pool that are disabled."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolState
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.14
+        type: gauge
+        help: "The state of this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolCurrentConn
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.48
+        type: gauge
+        help: "Number of connections currently using this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolTotalConn
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.10
+        type: counter
+        help: "Requests sent to this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolBytesIn
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.22
+        type: counter
+        help: "Bytes received by this pool from nodes."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolBytesOut
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.23
+        type: counter
+        help: "Bytes sent by this pool to nodes."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolConnsQueued
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.17
+        type: gauge
+        help: "Total connections currently queued to this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolQueueTimeouts
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.18
+        type: counter
+        help: "Total connections that timed-out while queued."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolMeanQueueTime
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.21
+        type: gauge
+        help: "Mean time, measured in milliseconds, for which a connection was queued over the last second."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolHTTP2xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.33
+        type: counter
+        help: "Number of HTTP 2xx responses returned by this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolHTTP3xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.36
+        type: counter
+        help: "Number of HTTP 3xx responses returned by this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolHTTP4xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.39
+        type: counter
+        help: "Number of HTTP 4xx responses returned by this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolHTTP5xxResponses
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.42
+        type: counter
+        help: "Number of HTTP 5xx responses returned by this pool."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: poolHTTP503Retries
+        oid: 1.3.6.1.4.1.7146.1.2.3.2.1.45
+        type: counter
+        help: "Number of times the pool received an HTTP 503 response from a node and retried it against a different node."
+        indexes:
+          - labelname: poolName
+            type: DisplayString
+      - name: perPoolNodeState
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.6
+        type: gauge
+        help: "The state of this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeCurrentConn
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.21
+        type: gauge
+        help: "Current connections established to a node, includes idle connections and connections being established."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeCurrentRequests
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.11
+        type: gauge
+        help: "Active connections established to this node, does not include idle connections."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeTotalConn
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.12
+        type: counter
+        help: "Requests sent to this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeNewConn
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.15
+        type: counter
+        help: "Requests that created a new connection to this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodePooledConn
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.13
+        type: counter
+        help: "Requests that reused an existing pooled/keepalive connection rather than creating a new TCP connection."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeIdleConns
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.20
+        type: gauge
+        help: "Number of idle HTTP connections to this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeFailures
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.14
+        type: counter
+        help: "Failures of this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeErrors
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.16
+        type: counter
+        help: "Number of timeouts, connection problems and other errors for this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeResponseMean
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.19
+        type: gauge
+        help: "Mean response time (ms) in the last second for this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeResponseMax
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.18
+        type: gauge
+        help: "Maximum response time (ms) in the last second for this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeBytesToNode
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.22
+        type: counter
+        help: "Bytes sent to this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: perPoolNodeBytesFromNode
+        oid: 1.3.6.1.4.1.7146.1.2.4.6.1.23
+        type: counter
+        help: "Bytes received from this node."
+        indexes:
+          - labelname: perPoolNodePoolName
+            type: DisplayString
+          - labelname: perPoolNodeNodeAddressType
+            type: gauge
+          - labelname: perPoolNodeNodeAddress
+            type: InetAddress
+          - labelname: perPoolNodeNodePort
+            type: gauge
+      - name: interfaceRxBytes
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.11
+        type: counter
+        help: "Bytes received by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString
+      - name: interfaceTxBytes
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.12
+        type: counter
+        help: "Bytes transmitted by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString
+      - name: interfaceRxPackets
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.2
+        type: counter
+        help: "The number of packets received by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString
+      - name: interfaceTxPackets
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.3
+        type: counter
+        help: "The number of packets transmitted by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString
+      - name: interfaceRxErrors
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.4
+        type: counter
+        help: "The number of receive errors reported by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString
+      - name: interfaceTxErrors
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.5
+        type: counter
+        help: "The number of transmit errors reported by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString
+      - name: interfaceCollisions
+        oid: 1.3.6.1.4.1.7146.1.2.12.2.1.6
+        type: counter
+        help: "The number of collisions reported by this interface."
+        indexes:
+          - labelname: interfaceName
+            type: DisplayString

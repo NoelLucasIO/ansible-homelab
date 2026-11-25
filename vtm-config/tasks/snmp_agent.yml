@@ -1,0 +1,41 @@
+---
+# vTM's SNMP agent on every traffic manager: SNMPv3 authPriv (DES is the only privacy protocol it
+# offers), answering only the monitoring host. Runs after connect.yml.
+- name: Who may query the agent
+  ansible.builtin.set_fact:
+    vtm_snmp_allow_l: >-
+      {{ vtm_snmp_allow if vtm_snmp_allow | length > 0 else
+         (lookup('ansible.builtin.pipe', 'getent ahostsv4 ' ~ (vtm_mon_host | quote) ~ ' || true')
+          | regex_findall('(?m)^(\S+)') | unique) }}
+
+- name: Agent settings
+  ansible.builtin.assert:
+    that:
+      - vtm_snmp_allow_l | length > 0
+      - vtm_snmp_auth_password | default('') | length >= 8
+      - vtm_snmp_priv_password | default('') | length >= 8
+      - vtm_snmp_hash in ['sha1', 'md5']
+    fail_msg: >-
+      Need the SNMP auth and privacy passwords (8+ characters; AAP credential "vTM SNMP"), and
+      an address for {{ vtm_mon_host }} (or vtm_snmp_allow).
+    quiet: true
+
+- name: SNMP agent on each traffic manager
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_no_log: true
+    vtm_path: "traffic_managers/{{ vtm_tm }}"
+    vtm_body:
+      properties:
+        snmp:
+          enabled: true
+          security_level: authpriv
+          hash_algorithm: "{{ vtm_snmp_hash }}"
+          username: "{{ vtm_snmp_user }}"
+          auth_password: "{{ vtm_snmp_auth_password }}"
+          priv_password: "{{ vtm_snmp_priv_password }}"
+          community: ""
+          allow: "{{ vtm_snmp_allow_l | sort }}"
+  loop: "{{ vtm_tms.json.children | map(attribute='name') | list }}"
+  loop_control:
+    loop_var: vtm_tm

@@ -112,3 +112,24 @@ vtm_nios_candidates: 5
 # The certificate vTM serves for the cluster: issued by the lab CA (vtm_pki_host) with the SANs
 # HCP's own certificate has (read from node 1 on 443) plus these; renewed like the admin one.
 vtm_hcp_cert_extra_sans: ""
+
+# --- Monitoring (monitoring.yml): SNMPv3 -> snmp_exporter -> Prometheus -> Grafana ----------------
+# vTM's agent offers SHA1 or MD5 for authentication and DES only for privacy (AES fails on 22.9r7).
+vtm_snmp_user: prometheus
+vtm_snmp_hash: sha1                 # sha1 | md5
+# vtm_snmp_auth_password, vtm_snmp_priv_password: AAP credential "vTM SNMP" (or the vault), 8+ chars
+vtm_snmp_allow: []                  # who may query the agent; [] = the monitoring host's address(es)
+vtm_mon_host: ""                    # inventory host running snmp_exporter, Prometheus and Grafana
+vtm_mon_owner: monitor              # user owning those rootless containers
+vtm_snmp_exporter_unit: snmp-exporter          # quadlet <name>.container in ~/.config/containers/systemd
+vtm_snmp_exporter_url: http://127.0.0.1:9116
+vtm_snmp_exporter_conf_dir: .config/snmp_exporter   # relative to the owner's home; mounted at /etc/snmp_exporter
+vtm_prom_config: /srv/prometheus/config        # host side of /etc/prometheus (scrape.d, rules.d)
+vtm_prom_container: prometheus
+vtm_prom_url: http://127.0.0.1:9090
+vtm_grafana_provisioning: /srv/grafana-provisioning   # host side of /etc/grafana/provisioning
+vtm_grafana_unit: grafana.service
+vtm_grafana_folder: Network
+vtm_scrape_interval: 30s
+# Pools whose nodes may be down by design (HCP's Prometheus runs on only some nodes): no VtmNodeDown.
+vtm_alert_node_down_ignore_pools: ".*_Prometheus"

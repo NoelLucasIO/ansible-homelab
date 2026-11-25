@@ -1,0 +1,1658 @@
+{
+ "uid": "vtm-overview",
+ "title": "vTM (Ivanti Virtual Traffic Manager)",
+ "tags": [
+  "vtm",
+  "load balancer",
+  "snmp"
+ ],
+ "timezone": "browser",
+ "schemaVersion": 39,
+ "version": 1,
+ "editable": true,
+ "refresh": "30s",
+ "time": {
+  "from": "now-6h",
+  "to": "now"
+ },
+ "graphTooltip": 1,
+ "panels": [
+  {
+   "type": "row",
+   "title": "Traffic managers",
+   "id": 1,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   },
+   "panels": []
+  },
+  {
+   "type": "stat",
+   "title": "SNMP",
+   "id": 2,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 0,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "UP",
+         "color": "green",
+         "index": 0
+        },
+        "0": {
+         "text": "DOWN",
+         "color": "red",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "auto",
+    "justifyMode": "auto",
+    "orientation": "auto"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "up{job=\"vtm-snmp\",instance=~\"$instance\"}",
+     "legendFormat": "{{instance}}",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Version",
+   "id": 3,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 4,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "blue",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "name",
+    "justifyMode": "auto",
+    "orientation": "auto"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "version{instance=~\"$instance\"}",
+     "legendFormat": "{{version}}",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "vTM uptime",
+   "id": 4,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 8,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 600
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "auto",
+    "justifyMode": "auto",
+    "orientation": "auto"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "upTime{instance=~\"$instance\"} / 100",
+     "legendFormat": "{{instance}}",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "CPU busy",
+   "id": 5,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 12,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 70
+       },
+       {
+        "color": "red",
+        "value": 90
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "auto",
+    "justifyMode": "auto",
+    "orientation": "auto"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "sysCPUBusyPercent{instance=~\"$instance\"}",
+     "legendFormat": "{{instance}}",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Memory in use",
+   "id": 6,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 16,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percent",
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "orange",
+        "value": 80
+       },
+       {
+        "color": "red",
+        "value": 95
+       }
+      ]
+     },
+     "decimals": 1
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "auto",
+    "justifyMode": "auto",
+    "orientation": "auto"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "100 * sysMemInUse{instance=~\"$instance\"} / sysMemTotal{instance=~\"$instance\"}",
+     "legendFormat": "{{instance}}",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Traffic IPs raised",
+   "id": 7,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 4,
+    "w": 4,
+    "x": 20,
+    "y": 1
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "mappings": [],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "blue",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "colorMode": "background",
+    "graphMode": "none",
+    "textMode": "auto",
+    "justifyMode": "auto",
+    "orientation": "auto"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "trafficIPNumberRaisedInet46{instance=~\"$instance\"}",
+     "legendFormat": "{{instance}}",
+     "instant": true
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Requests / s",
+   "id": 8,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 5
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "rate(totalRequests{instance=~\"$instance\"}[$__rate_interval])",
+     "legendFormat": "{{instance}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Throughput",
+   "id": 9,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 5
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "8 * rate(totalBytesIn{instance=~\"$instance\"}[$__rate_interval])",
+     "legendFormat": "in {{instance}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "8 * rate(totalBytesOut{instance=~\"$instance\"}[$__rate_interval])",
+     "legendFormat": "out {{instance}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Connections",
+   "id": 10,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 5
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "totalCurrentConn{instance=~\"$instance\"}",
+     "legendFormat": "current {{instance}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "numIdleConnections{instance=~\"$instance\"}",
+     "legendFormat": "idle to nodes {{instance}}"
+    }
+   ]
+  },
+  {
+   "type": "row",
+   "title": "Virtual servers",
+   "id": 11,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 13
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Requests / s by virtual server",
+   "id": 12,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 14
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "sum by (virtualserverName) (rate(virtualserverTotalRequests{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "{{virtualserverName}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "HTTP responses by class",
+   "id": 13,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 14
+   },
+   "description": "All selected virtual servers. 5xx includes responses vTM generated itself (no node available, errors).",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 60,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "sum(rate(virtualserverHTTP1xxResponses{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "1xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "sum(rate(virtualserverHTTP2xxResponses{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "2xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "C",
+     "expr": "sum(rate(virtualserverHTTP3xxResponses{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "3xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "D",
+     "expr": "sum(rate(virtualserverHTTP4xxResponses{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "4xx"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "E",
+     "expr": "sum(rate(virtualserverHTTP5xxResponses{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "5xx"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Current connections by virtual server",
+   "id": 14,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 22
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "sum by (virtualserverName) (virtualserverCurrentConn{instance=~\"$instance\",virtualserverName=~\"$vs\"})",
+     "legendFormat": "{{virtualserverName}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Throughput by virtual server",
+   "id": 15,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 22
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "8 * sum by (virtualserverName) (rate(virtualserverBytesIn{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "in {{virtualserverName}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "8 * sum by (virtualserverName) (rate(virtualserverBytesOut{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval]))",
+     "legendFormat": "out {{virtualserverName}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Errors and timeouts / s",
+   "id": 16,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 22
+   },
+   "description": "Only non-zero series are drawn.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "sum by (virtualserverName) (rate(virtualserverConnectionErrors{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval])) > 0",
+     "legendFormat": "conn errors {{virtualserverName}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "sum by (virtualserverName) (rate(virtualserverConnectionFailures{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval])) > 0",
+     "legendFormat": "conn failures {{virtualserverName}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "C",
+     "expr": "sum by (virtualserverName) (rate(virtualserverConnectTimedOut{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval])) > 0",
+     "legendFormat": "connect timeout {{virtualserverName}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "D",
+     "expr": "sum by (virtualserverName) (rate(virtualserverDataTimedOut{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval])) > 0",
+     "legendFormat": "data timeout {{virtualserverName}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "E",
+     "expr": "sum by (virtualserverName) (rate(virtualserverHTTPGenerated5xxResponses{instance=~\"$instance\",virtualserverName=~\"$vs\"}[$__rate_interval])) > 0",
+     "legendFormat": "vTM-generated 5xx {{virtualserverName}}"
+    }
+   ]
+  },
+  {
+   "type": "row",
+   "title": "Pools and nodes",
+   "id": 17,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 30
+   },
+   "panels": []
+  },
+  {
+   "type": "table",
+   "title": "Node state",
+   "id": 18,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 31
+   },
+   "description": "Health monitor verdict per pool and node. HCP's Prometheus pool shows nodes not running Prometheus as dead by design.",
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "alive",
+         "color": "green",
+         "index": 0
+        },
+        "2": {
+         "text": "dead",
+         "color": "red",
+         "index": 1
+        },
+        "3": {
+         "text": "unknown",
+         "color": "orange",
+         "index": 2
+        },
+        "4": {
+         "text": "draining",
+         "color": "yellow",
+         "index": 3
+        },
+        "5": {
+         "text": "draining to delete",
+         "color": "yellow",
+         "index": 4
+        }
+       }
+      }
+     ],
+     "custom": {
+      "cellOptions": {
+       "type": "color-background"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "perPoolNodeState{instance=~\"$instance\",perPoolNodePoolName!=\"\",perPoolNodePoolName=~\"$pool\"}",
+     "format": "table",
+     "instant": true
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true,
+       "cluster": true,
+       "perPoolNodeNodeAddressType": true
+      },
+      "renameByName": {
+       "perPoolNodePoolName": "Pool",
+       "perPoolNodeNodeAddress": "Node",
+       "perPoolNodeNodePort": "Port",
+       "instance": "Seen from",
+       "Value": "State"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "table",
+   "title": "Pool state",
+   "id": 19,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 12,
+    "y": 31
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "active",
+         "color": "green",
+         "index": 0
+        },
+        "2": {
+         "text": "disabled",
+         "color": "text",
+         "index": 1
+        },
+        "3": {
+         "text": "draining",
+         "color": "yellow",
+         "index": 2
+        },
+        "4": {
+         "text": "unused",
+         "color": "text",
+         "index": 3
+        },
+        "5": {
+         "text": "unknown",
+         "color": "orange",
+         "index": 4
+        }
+       }
+      }
+     ],
+     "custom": {
+      "cellOptions": {
+       "type": "color-background"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "poolState{instance=~\"$instance\",poolName=~\"$pool\"}",
+     "format": "table",
+     "instant": true
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true,
+       "cluster": true
+      },
+      "renameByName": {
+       "poolName": "Pool",
+       "instance": "Seen from",
+       "Value": "State"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "table",
+   "title": "Traffic IPs",
+   "id": 20,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 6,
+    "x": 18,
+    "y": 31
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "1": {
+         "text": "raised",
+         "color": "green",
+         "index": 0
+        },
+        "2": {
+         "text": "lowered",
+         "color": "text",
+         "index": 1
+        }
+       }
+      }
+     ],
+     "custom": {
+      "cellOptions": {
+       "type": "color-background"
+      }
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "trafficIPInet46State{instance=~\"$instance\"}",
+     "format": "table",
+     "instant": true
+    }
+   ],
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "__name__": true,
+       "job": true,
+       "cluster": true,
+       "trafficIPInet46AddressType": true
+      },
+      "renameByName": {
+       "trafficIPInet46Address": "Traffic IP",
+       "instance": "On",
+       "Value": "State"
+      }
+     }
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Node response time (mean, last second)",
+   "id": 21,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 39
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ms",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "perPoolNodeResponseMean{instance=~\"$instance\",perPoolNodePoolName!=\"\",perPoolNodePoolName=~\"$pool\"}",
+     "legendFormat": "{{perPoolNodePoolName}} {{perPoolNodeNodeAddress}}:{{perPoolNodeNodePort}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Node current connections",
+   "id": 22,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 39
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "perPoolNodeCurrentConn{instance=~\"$instance\",perPoolNodePoolName!=\"\",perPoolNodePoolName=~\"$pool\"}",
+     "legendFormat": "{{perPoolNodePoolName}} {{perPoolNodeNodeAddress}}:{{perPoolNodeNodePort}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Node failures and errors / s",
+   "id": 23,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 39
+   },
+   "description": "Only non-zero series are drawn.",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "ops",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "rate(perPoolNodeFailures{instance=~\"$instance\",perPoolNodePoolName!=\"\",perPoolNodePoolName=~\"$pool\"}[$__rate_interval]) > 0",
+     "legendFormat": "failures {{perPoolNodePoolName}} {{perPoolNodeNodeAddress}}:{{perPoolNodeNodePort}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "rate(perPoolNodeErrors{instance=~\"$instance\",perPoolNodePoolName!=\"\",perPoolNodePoolName=~\"$pool\"}[$__rate_interval]) > 0",
+     "legendFormat": "errors {{perPoolNodePoolName}} {{perPoolNodeNodeAddress}}:{{perPoolNodeNodePort}}"
+    }
+   ]
+  },
+  {
+   "type": "row",
+   "title": "Network and events",
+   "id": 24,
+   "collapsed": false,
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 47
+   },
+   "panels": []
+  },
+  {
+   "type": "timeseries",
+   "title": "Interface throughput",
+   "id": 25,
+   "datasource": {
+    "type": "prometheus",
+    "uid": "${prom}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 48
+   },
+   "description": "",
+   "fieldConfig": {
+    "defaults": {
+     "unit": "bps",
+     "custom": {
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "showPoints": "never"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "calcs": [
+      "lastNotNull",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "A",
+     "expr": "8 * rate(interfaceRxBytes{instance=~\"$instance\"}[$__rate_interval])",
+     "legendFormat": "rx {{instance}} {{interfaceName}}"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "${prom}"
+     },
+     "refId": "B",
+     "expr": "8 * rate(interfaceTxBytes{instance=~\"$instance\"}[$__rate_interval])",
+     "legendFormat": "tx {{instance}} {{interfaceName}}"
+    }
+   ]
+  },
+  {
+   "type": "logs",
+   "title": "vTM events (syslog via Alloy to Loki)",
+   "id": 26,
+   "datasource": {
+    "type": "loki",
+    "uid": "${loki}"
+   },
+   "gridPos": {
+    "h": 8,
+    "w": 16,
+    "x": 8,
+    "y": 48
+   },
+   "options": {
+    "showTime": true,
+    "wrapLogMessage": true,
+    "sortOrder": "Descending",
+    "enableLogDetails": true,
+    "dedupStrategy": "none"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "loki",
+      "uid": "${loki}"
+     },
+     "refId": "A",
+     "expr": "{job=\"vtm\"}"
+    }
+   ]
+  }
+ ],
+ "description": "Managed by vtm-config (monitoring.yml): SNMPv3 -> snmp_exporter (module vtm) -> Prometheus; events from Loki.",
+ "templating": {
+  "list": [
+   {
+    "name": "prom",
+    "label": "Prometheus",
+    "type": "datasource",
+    "query": "prometheus",
+    "hide": 0
+   },
+   {
+    "name": "loki",
+    "label": "Loki",
+    "type": "datasource",
+    "query": "loki",
+    "hide": 0
+   },
+   {
+    "name": "instance",
+    "label": "Traffic manager",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${prom}"
+    },
+    "query": {
+     "query": "label_values(up{job=\"vtm-snmp\"}, instance)",
+     "refId": "i"
+    },
+    "definition": "label_values(up{job=\"vtm-snmp\"}, instance)",
+    "multi": true,
+    "includeAll": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2,
+    "sort": 1
+   },
+   {
+    "name": "vs",
+    "label": "Virtual server",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${prom}"
+    },
+    "query": {
+     "query": "label_values(virtualserverCurrentConn{instance=~\"$instance\"}, virtualserverName)",
+     "refId": "v"
+    },
+    "definition": "label_values(virtualserverCurrentConn{instance=~\"$instance\"}, virtualserverName)",
+    "multi": true,
+    "includeAll": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2,
+    "sort": 1
+   },
+   {
+    "name": "pool",
+    "label": "Pool",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "${prom}"
+    },
+    "query": {
+     "query": "label_values(poolState{instance=~\"$instance\"}, poolName)",
+     "refId": "p"
+    },
+    "definition": "label_values(poolState{instance=~\"$instance\"}, poolName)",
+    "multi": true,
+    "includeAll": true,
+    "current": {
+     "text": "All",
+     "value": "$__all"
+    },
+    "refresh": 2,
+    "sort": 1
+   }
+  ]
+ },
+ "annotations": {
+  "list": []
+ },
+ "links": []
+}

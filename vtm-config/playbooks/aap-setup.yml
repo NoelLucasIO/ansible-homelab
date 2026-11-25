@@ -2,7 +2,7 @@
 # Syncs the project, then creates/updates in AAP (controller API, built-in modules only):
 #   * credential type "vTM API" (API user password, admin password, Splunk HEC token)
 #   * job templates "vTM platform", "vTM backup", "vTM certificate", "vTM CA", "vTM HCP" and
-#     "vTM HCP DNS", with surveys
+#     "vTM HCP DNS", "vTM monitoring", with surveys
 #   * schedules: "vTM backup" daily; with vtm_pki_host set, "vTM certificate" weekly and "vTM CA"
 #     every 4 hours (step-ca's CRL lasts a day); "vTM HCP" weekly (certificate renewal, drift)
 # Idempotent: rerun after changing site values to refresh survey defaults.
@@ -29,6 +29,7 @@
     # HCP DNS creates zones, which needs restart rights on the DNS member: a separate NIOS account
     # in a credential of type "NIOS API" (user + password), so the IPAM account stays least-privilege.
     aap_nios_dns_credential: ""
+    aap_snmp_credential: ""        # a credential of type "vTM SNMP" (SNMPv3 passwords)
     aap_ee: ""
     aap_backup_rrule: "DTSTART;TZID=America/New_York:20260101T024700 RRULE:FREQ=DAILY;INTERVAL=1"
     aap_cert_rrule: "DTSTART;TZID=America/New_York:20260101T033700 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"
@@ -92,6 +93,30 @@
             extra_vars:
               nios_api_user: "{% raw %}{{ nios_api_user }}{% endraw %}"
               nios_api_password: "{% raw %}{{ nios_api_password }}{% endraw %}"
+      changed_when: true
+
+    - name: Credential type "vTM SNMP" exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ 'vTM SNMP' | urlencode }}"
+      register: aap_ct_snmp
+
+    - name: Create or update the "vTM SNMP" credential type
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/{{ (aap_ct_snmp.json.results[0].id ~ '/') if aap_ct_snmp.json.count else '' }}"
+        method: "{{ 'PATCH' if aap_ct_snmp.json.count else 'POST' }}"
+        body:
+          name: vTM SNMP
+          kind: cloud
+          description: SNMPv3 passwords for vTM's agent and snmp_exporter (vtm-config monitoring.yml)
+          inputs:
+            fields:
+              - {id: vtm_snmp_auth_password, label: Authentication password (8+), type: string, secret: true}
+              - {id: vtm_snmp_priv_password, label: Privacy password (8+), type: string, secret: true}
+            required: [vtm_snmp_auth_password, vtm_snmp_priv_password]
+          injectors:
+            extra_vars:
+              vtm_snmp_auth_password: "{% raw %}{{ vtm_snmp_auth_password }}{% endraw %}"
+              vtm_snmp_priv_password: "{% raw %}{{ vtm_snmp_priv_password }}{% endraw %}"
       changed_when: true
 
     - name: Project and inventory ids
@@ -165,6 +190,11 @@
           description: "Opt-in: point an HCP cluster's DNS at its vTM VIPs (cutover) or back to HCP (revert)"
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-hcp-dns.yml.j2') | from_yaml }}"
           credentials: ["{{ aap_nios_dns_credential or aap_nios_credential }}"]
+        - name: vTM monitoring
+          playbook: vtm-config/playbooks/monitoring.yml
+          description: vTM SNMPv3 agent, snmp_exporter module, Prometheus scrape and alerts, Grafana dashboard
+          survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-monitoring.yml.j2') | from_yaml }}"
+          credentials: ["{{ aap_secrets_credential }}", "{{ aap_snmp_credential }}"]
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"

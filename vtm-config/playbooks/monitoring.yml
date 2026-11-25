@@ -1,0 +1,48 @@
+---
+# vTM in Prometheus and Grafana, over SNMPv3 (vTM 22.9 has no Prometheus endpoint).
+#   ansible-playbook playbooks/monitoring.yml -e vtm_target=vtm01.example.com -e vtm_mon_host=fedora
+# 1. Each traffic manager's SNMP agent: SNMPv3 authPriv (SHA1/DES, the strongest it offers),
+#    answering only the monitoring host.
+# 2. On the monitoring host (rootless containers of vtm_mon_owner): a "vtm" module and "vtm_v3"
+#    auth for the existing snmp_exporter (extra config file via a quadlet drop-in), a Prometheus
+#    scrape job and alert rules, and a Grafana dashboard. Each step is checked: the exporter
+#    answers with vTM data, Prometheus scrapes every traffic manager.
+- name: SNMP agent on the vTM cluster
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ vtm_api_user }}"
+      password: "{{ vtm_api_password }}"
+      force_basic_auth: true
+      validate_certs: "{{ vtm_validate_certs | bool }}"
+      body_format: raw
+      return_content: true
+      timeout: 60
+  tasks:
+    - name: Check inputs
+      ansible.builtin.assert:
+        that: vtm_mon_host | length > 0
+        fail_msg: Need vtm_mon_host (inventory host running snmp_exporter, Prometheus and Grafana).
+        quiet: true
+
+    - name: Connect
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/connect.yml"
+
+    - name: SNMP agent
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/snmp_agent.yml"
+
+    - name: Traffic managers to scrape
+      ansible.builtin.set_fact:
+        vtm_mon_tms: "{{ vtm_tms.json.children | map(attribute='name') | sort }}"
+
+- name: Exporter, Prometheus and Grafana on the monitoring host
+  hosts: "{{ vtm_mon_host | default('no_monitoring_host_set', true) }}"
+  gather_facts: false
+  roles:
+    - vtm_config_defaults
+  tasks:
+    - name: Monitoring for vTM
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/mon_host.yml"

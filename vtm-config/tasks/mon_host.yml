@@ -1,0 +1,201 @@
+---
+# On the monitoring host, as the owner of the rootless containers: the vTM module and SNMPv3 auth
+# for snmp_exporter (an extra config file through a quadlet drop-in; the exporter's own files and
+# unit are not edited), the Prometheus scrape and rules, and the Grafana dashboard.
+- name: Owner's account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ vtm_mon_owner }}"
+
+- name: Owner facts
+  ansible.builtin.set_fact:
+    vtm_mon_home: "{{ getent_passwd[vtm_mon_owner][4] }}"
+    vtm_mon_uid: "{{ getent_passwd[vtm_mon_owner][1] }}"
+    vtm_mon_tms: "{{ hostvars['localhost'].vtm_mon_tms }}"
+    vtm_target: "{{ hostvars['localhost'].vtm_target }}"
+
+- name: As {{ vtm_mon_owner }}
+  become: "{{ (ansible_user | default('')) != vtm_mon_owner }}"   # AAP's automation user sudo's to the owner
+  become_user: "{{ vtm_mon_owner }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ vtm_mon_uid }}"
+  block:
+    # --- snmp_exporter -------------------------------------------------------------------
+    # Python, not Jinja: the unit's Exec= may span lines ending in a backslash.
+    - name: The exporter's current arguments (its quadlet's Exec=, continuation lines joined)
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json, re, sys
+            text = open(sys.argv[1]).read()
+            text = re.sub(r'\\\n\s*', ' ', text)
+            m = re.search(r'(?m)^Exec=(.*)$', text)
+            args = m.group(1).split() if m else []
+            print(json.dumps([a for a in args if a != '--config.file=/etc/snmp_exporter/vtm.yml']))
+          - "{{ vtm_mon_home }}/.config/containers/systemd/{{ vtm_snmp_exporter_unit }}.container"
+      register: vtm_se_exec
+      changed_when: false
+
+    - name: Arguments
+      ansible.builtin.set_fact:
+        vtm_se_args: "{{ vtm_se_exec.stdout | from_json }}"
+
+    - name: Config directory
+      ansible.builtin.file:
+        path: "{{ vtm_mon_home }}/{{ vtm_snmp_exporter_conf_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: The vTM module and SNMPv3 auth (vtm.yml, 0600)
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/snmp_exporter_vtm.yml.j2"
+        dest: "{{ vtm_mon_home }}/{{ vtm_snmp_exporter_conf_dir }}/vtm.yml"
+        mode: "0600"
+      no_log: true
+      register: vtm_se_conf
+
+    - name: Drop-in directory
+      ansible.builtin.file:
+        path: "{{ vtm_mon_home }}/.config/containers/systemd/{{ vtm_snmp_exporter_unit }}.container.d"
+        state: directory
+        mode: "0755"
+
+    - name: Drop-in (mount vtm.yml, add it as a config file)
+      ansible.builtin.copy:
+        dest: "{{ vtm_mon_home }}/.config/containers/systemd/{{ vtm_snmp_exporter_unit }}.container.d/vtm-config.conf"
+        mode: "0644"
+        content: |
+          # Managed by vtm-config (monitoring.yml). Delete this file to undo.
+          # Exec= repeats the unit's own arguments (read when this was written) plus vtm.yml.
+          [Container]
+          Volume=%h/{{ vtm_snmp_exporter_conf_dir }}/vtm.yml:/etc/snmp_exporter/vtm.yml:ro,Z
+          Exec={{ (vtm_se_args + ['--config.file=/etc/snmp_exporter/vtm.yml']) | join(' ') }}
+      register: vtm_se_dropin
+
+    # If the exporter doesn't come back with the vTM module, take the drop-in out again and
+    # restart it on its own config, so the other SNMP targets it serves keep working.
+    - name: Restart the exporter, roll back if it fails
+      block:
+        - name: Restart the exporter
+          ansible.builtin.systemd_service:
+            name: "{{ vtm_snmp_exporter_unit }}.service"
+            scope: user
+            daemon_reload: true
+            state: restarted
+          when: vtm_se_conf is changed or vtm_se_dropin is changed  # noqa: no-handler
+
+        - name: The exporter answers for each traffic manager with the vTM module
+          ansible.builtin.uri:
+            url: "{{ vtm_snmp_exporter_url }}/snmp?target={{ item | urlencode }}&module=vtm&auth=vtm_v3"
+            return_content: true
+          register: vtm_se_probe
+          until: vtm_se_probe.status | default(0) == 200 and 'virtualserverCurrentConn' in vtm_se_probe.content | default('')
+          retries: 12
+          delay: 5
+          loop: "{{ vtm_mon_tms }}"
+
+      rescue:
+        - name: Exporter log
+          ansible.builtin.command:
+            cmd: journalctl --user -u {{ vtm_snmp_exporter_unit }} -n 30 --no-pager -o cat
+          register: vtm_se_log
+          changed_when: false
+          failed_when: false
+
+        - name: Remove the drop-in
+          ansible.builtin.file:
+            path: "{{ vtm_mon_home }}/.config/containers/systemd/{{ vtm_snmp_exporter_unit }}.container.d/vtm-config.conf"
+            state: absent
+
+        - name: Restart the exporter on its own config
+          ansible.builtin.systemd_service:
+            name: "{{ vtm_snmp_exporter_unit }}.service"
+            scope: user
+            daemon_reload: true
+            state: restarted
+
+        - name: Rolled back
+          ansible.builtin.fail:
+            msg: >-
+              snmp_exporter didn't serve the vTM module, so the drop-in was removed and the exporter
+              restarted on its own config. Its log: {{ vtm_se_log.stdout_lines | select('search', '(?i)error|level=warn')
+              | list | join(' | ') | truncate(800) }}
+
+    # --- Prometheus ----------------------------------------------------------------------
+    - name: Scrape config and alert rules
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/{{ item.src }}"
+        dest: "{{ vtm_prom_config }}/{{ item.dest }}"
+        mode: "0644"
+      loop:
+        - {src: prometheus-scrape-vtm.yml.j2, dest: scrape.d/vtm.yml}
+        - {src: prometheus-rules-vtm.yml.j2, dest: rules.d/vtm.yml}
+      register: vtm_prom_files
+
+    - name: Prometheus config and rules are valid
+      ansible.builtin.command:
+        cmd: >-
+          podman exec {{ vtm_prom_container }} sh -c 'promtool check config /etc/prometheus/prometheus.yml
+          && promtool check rules /etc/prometheus/rules.d/vtm.yml'
+        chdir: /
+      changed_when: false
+      when: vtm_prom_files is changed  # noqa: no-handler
+
+    - name: Reload Prometheus
+      ansible.builtin.uri:
+        url: "{{ vtm_prom_url }}/-/reload"
+        method: POST
+      when: vtm_prom_files is changed  # noqa: no-handler
+
+    - name: Prometheus scrapes the traffic managers
+      ansible.builtin.uri:
+        url: "{{ vtm_prom_url }}/api/v1/query?query={{ 'count(up{job=\"vtm-snmp\"} == 1)' | urlencode }}"
+        return_content: true
+      register: vtm_prom_up
+      until: >-
+        vtm_prom_up.json.data.result | default([]) | length > 0
+        and vtm_prom_up.json.data.result[0].value[1] | int == vtm_mon_tms | length
+      retries: 18
+      delay: 10
+
+    # --- Grafana -------------------------------------------------------------------------
+    - name: Dashboard directory
+      ansible.builtin.file:
+        path: "{{ vtm_grafana_provisioning }}/dashboards/vtm"
+        state: directory
+        mode: "0755"
+
+    - name: Dashboard provider
+      ansible.builtin.copy:
+        dest: "{{ vtm_grafana_provisioning }}/dashboards/vtm.yaml"
+        mode: "0644"
+        content: |
+          # Managed by vtm-config (monitoring.yml)
+          apiVersion: 1
+          providers:
+            - name: vtm
+              folder: {{ vtm_grafana_folder | to_json }}
+              type: file
+              disableDeletion: true
+              allowUiUpdates: true
+              updateIntervalSeconds: 60
+              options:
+                path: /etc/grafana/provisioning/dashboards/vtm
+                foldersFromFilesStructure: false
+      register: vtm_graf_provider
+
+    - name: Dashboard
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/files/vtm-overview.json"
+        dest: "{{ vtm_grafana_provisioning }}/dashboards/vtm/vtm-overview.json"
+        mode: "0644"
+
+    # A new provider needs a restart; dashboard edits are picked up every 60 s.
+    - name: Restart Grafana to load the new provider
+      ansible.builtin.systemd_service:
+        name: "{{ vtm_grafana_unit }}"
+        scope: user
+        state: restarted
+      when: vtm_graf_provider is changed  # noqa: no-handler

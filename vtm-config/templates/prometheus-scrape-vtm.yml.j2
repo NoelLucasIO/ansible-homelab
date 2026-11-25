@@ -1,0 +1,20 @@
+# {{ ansible_managed }} (vtm-config monitoring.yml)
+# Loaded via scrape_config_files: /etc/prometheus/scrape.d/*.yml
+scrape_configs:
+  - job_name: vtm-snmp
+    scrape_interval: {{ vtm_scrape_interval }}
+    scrape_timeout: 25s
+    metrics_path: /snmp
+    params:
+      module: [vtm]
+      auth: [vtm_v3]
+    static_configs:
+      - targets: {{ vtm_mon_tms | to_json }}
+        labels: { cluster: {{ vtm_target | to_json }} }
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: {{ vtm_snmp_exporter_url | urlsplit('netloc') }}

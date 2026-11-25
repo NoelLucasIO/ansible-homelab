@@ -1,0 +1,42 @@
+# {{ ansible_managed }} (vtm-config monitoring.yml)
+groups:
+  - name: vtm
+    rules:
+      - alert: VtmDown
+        expr: up{job="vtm-snmp"} == 0
+        for: 5m
+        labels: { severity: critical }
+        annotations:
+          summary: "vTM {{ '{{' }} $labels.instance {{ '}}' }} doesn't answer SNMP"
+          description: Traffic manager down, its SNMP agent off, or the credentials changed.
+      - alert: VtmPoolNoHealthyNode
+        expr: >-
+          count by (cluster, perPoolNodePoolName) (perPoolNodeState{perPoolNodePoolName!=""})
+          unless count by (cluster, perPoolNodePoolName) (perPoolNodeState{perPoolNodePoolName!=""} == 1)
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "vTM pool {{ '{{' }} $labels.perPoolNodePoolName {{ '}}' }} has no healthy node"
+          description: Every node of the pool is dead, draining or unknown on all traffic managers.
+      - alert: VtmNodeDown
+        expr: perPoolNodeState{perPoolNodePoolName!="", perPoolNodePoolName!~{{ vtm_alert_node_down_ignore_pools | to_json }}} == 2
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "vTM node {{ '{{' }} $labels.perPoolNodeNodeAddress {{ '}}' }}:{{ '{{' }} $labels.perPoolNodeNodePort {{ '}}' }} is dead in pool {{ '{{' }} $labels.perPoolNodePoolName {{ '}}' }}"
+          description: "Its health monitor fails (seen from {{ '{{' }} $labels.instance {{ '}}' }})."
+      - alert: VtmTrafficIPNotRaised
+        expr: >-
+          count by (cluster, trafficIPInet46Address) (trafficIPInet46State)
+          unless count by (cluster, trafficIPInet46Address) (trafficIPInet46State == 1)
+        for: 2m
+        labels: { severity: critical }
+        annotations:
+          summary: "vTM traffic IP {{ '{{' }} $labels.trafficIPInet46Address {{ '}}' }} is raised nowhere"
+          description: No traffic manager in the cluster holds this VIP; its services are unreachable.
+      - alert: VtmHighCPU
+        expr: sysCPUBusyPercent{job="vtm-snmp"} > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "vTM {{ '{{' }} $labels.instance {{ '}}' }} CPU above 90% for 10 minutes"

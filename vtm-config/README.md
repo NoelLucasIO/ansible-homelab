@@ -111,6 +111,36 @@ member(s) serving the parent zone and on the parent zone itself, API access only
 it. Put that user in an AAP credential of type **NIOS API** (`aap-setup.yml` creates the type) and
 pass its name as `aap_nios_dns_credential`: only **vTM HCP DNS** gets it.
 
+## monitoring.yml
+
+vTM in Prometheus and Grafana. vTM 22.9 has no Prometheus endpoint; its SNMP agent and MIB
+(`ZXTM-MIB`, enterprise `1.3.6.1.4.1.7146.1.2`) cover everything the dashboard needs.
+
+1. **Agent:** on every traffic manager, SNMPv3 authPriv for `vtm_snmp_user`, answering only the
+   monitoring host (`vtm_snmp_allow`, default: `vtm_mon_host`'s addresses). Passwords come from an
+   AAP credential of type **vTM SNMP**.
+2. **snmp_exporter** (the existing rootless one on `vtm_mon_host`, owned by `vtm_mon_owner`): a
+   module `vtm` and auth `vtm_v3` in `~/<vtm_snmp_exporter_conf_dir>/vtm.yml`, added through a quadlet
+   drop-in (`<unit>.container.d/vtm-config.conf`) that mounts it and repeats the unit's own `Exec=`
+   arguments plus `--config.file=/etc/snmp_exporter/vtm.yml`. The exporter's own files are not
+   edited; deleting the drop-in undoes it. If the restarted exporter doesn't serve the vTM module,
+   the drop-in is removed again and the exporter restarted on its own config, so its other targets
+   keep working.
+3. **Prometheus:** job `vtm-snmp` in `scrape.d/vtm.yml` (every traffic manager, `instance` = its
+   name, `cluster` = `vtm_target`) and alerts in `rules.d/vtm.yml`: `VtmDown`, `VtmPoolNoHealthyNode`,
+   `VtmNodeDown` (not for pools matching `vtm_alert_node_down_ignore_pools`, by default HCP's
+   Prometheus pool, whose idle nodes are down by design), `VtmTrafficIPNotRaised`, `VtmHighCPU`.
+4. **Grafana:** dashboard *vTM (Ivanti Virtual Traffic Manager)* in folder `vtm_grafana_folder`:
+   traffic managers (SNMP up, version, uptime, CPU, memory, traffic IPs, requests, throughput,
+   connections), virtual servers (requests, HTTP responses by class, connections, throughput, errors
+   and timeouts), pools and nodes (state tables, response time, connections, failures), traffic IPs,
+   interfaces, and the vTM events from Loki (`{job="vtm"}`, platform.yml's syslog).
+
+The module (`files/snmp_exporter_vtm_module.yml`, 84 metrics named after the MIB objects) was
+written from the MIB shipped on the appliance and checked object by object with `snmpwalk` on
+22.9r7; objects the MIB marks obsolete (the IPv4-only traffic IP table, `virtualserverTotalConn`)
+are left out, their `Inet46` replacements used.
+
 ## What the appliance does, as found on 22.9r7
 
 - **Syslog** is an *action* attached to an *event type*, sent over UDP only, as RFC 5424:
@@ -138,6 +168,11 @@ pass its name as `aap_nios_dns_credential`: only **vTM HCP DNS** gets it.
   name vTM refuses the backend (clients get HTTP 500).
 - **Traffic IP networks** are `trafficip` (interface -> networks) on each traffic manager; its
   interfaces and addresses are in `appliance.ip`.
+- **SNMP:** the agent is configured per traffic manager (`traffic_managers/<name>` `snmp`); once
+  enabled, vTM reconfigures the OS `snmpd` to listen on 0.0.0.0:161 and proxy its enterprise OIDs
+  to the traffic manager on 127.0.0.1:1161. SNMPv3 offers SHA1 or MD5 for authentication and **DES
+  only** for privacy (AES requests fail with "Decryption error"). REST returns the SNMP passwords in
+  clear, so those writes are `no_log`.
 - **The admin server port** (System > Security, `port` in the `security` file; 9090 out of the box)
   is not in REST 8.6. If you change it, set `vtm_admin_port` to match: SOAP and the certificate
   checks use it.
@@ -176,6 +211,10 @@ pass its name as `aap_nios_dns_credential`: only **vTM HCP DNS** gets it.
    `automation_pubkey` that `bootstrap-host.yml` installs) in root's `authorized_keys` on each
    traffic manager. Without it, the certificate still lands on :9090, the job fails at the restart,
    and :9070 keeps the old one until a reboot or a later run.
+6. **Monitoring:** after the first `aap-setup.yml` run, create a **vTM SNMP** credential (two
+   passwords, 8+ characters) and pass its name as `aap_snmp_credential`; also pass `vtm_mon_host`,
+   `vtm_mon_owner`, `vtm_prom_config`, `vtm_prom_url` and `vtm_grafana_provisioning` so the survey
+   defaults match the monitoring host.
 5. **HCP:** pass `aap_nios_credential` (the credential with `nios_api_password`) and the cluster's
    `vtm_hcp_cluster`, `vtm_hcp_domain`, `vtm_hcp_nodes` and `vtm_hcp_vip_network` to
    `aap-setup.yml`; you get **vTM CA**, **vTM HCP** (weekly schedule) and **vTM HCP DNS**.
@@ -184,6 +223,13 @@ The admin password only matters until the API user exists. After that you can bl
 credential: runs log in as the API user and never touch `admin`.
 
 ## Status
+
+- **monitoring.yml, tested from the CLI** against vtm01 and the fedora host: agent enabled, module
+  served by the existing snmp_exporter (its switch and NIOS targets unaffected), Prometheus scraping
+  vtm01, all five alert rules loaded, dashboard provisioned. 27 of the dashboard's 34 queries
+  return data; the other 7 are error panels that draw only non-zero series. A repeat run changes
+  nothing. The first run showed `auth_protocol` must be `SHA` (not `SHA1`), which is now mapped,
+  and led to the roll-back step.
 
 - **hcp.yml and ca.yml, tested from the CLI** against vtm01 and hcp01 (one node), with a VIP
   given (NIOS allocation and hcp-dns.yml need the NIOS credential: AAP only so far): all objects

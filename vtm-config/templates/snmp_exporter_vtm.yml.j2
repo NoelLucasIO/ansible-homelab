@@ -1,0 +1,12 @@
+# {{ ansible_managed }} (vtm-config monitoring.yml)
+# Loaded by snmp_exporter as an extra --config.file; its own snmp.yml and auths stay untouched.
+auths:
+  vtm_v3:
+    version: 3
+    security_level: authPriv
+    username: {{ vtm_snmp_user | to_json }}
+    password: {{ vtm_snmp_auth_password | to_json }}
+    auth_protocol: {{ {'sha1': 'SHA', 'md5': 'MD5'}[vtm_snmp_hash] | to_json }}   # vTM's sha1 = snmp_exporter's SHA
+    priv_protocol: DES
+    priv_password: {{ vtm_snmp_priv_password | to_json }}
+{{ lookup('ansible.builtin.file', (playbook_dir | dirname) ~ '/files/snmp_exporter_vtm_module.yml') }}

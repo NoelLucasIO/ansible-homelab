@@ -1,0 +1,51 @@
+- question_name: Appliance
+  question_description: Any traffic manager of the cluster; all of them are scraped
+  variable: vtm_target
+  type: text
+  required: true
+  default: {{ vtm_target | to_json }}
+  min: 3
+  max: 253
+- question_name: Monitoring host
+  question_description: Inventory host running snmp_exporter, Prometheus and Grafana
+  variable: vtm_mon_host
+  type: text
+  required: true
+  default: {{ vtm_mon_host | to_json }}
+  min: 1
+  max: 253
+- question_name: Owner of those (rootless) containers
+  variable: vtm_mon_owner
+  type: text
+  required: true
+  default: {{ vtm_mon_owner | to_json }}
+  min: 1
+  max: 64
+- question_name: Prometheus config directory (host side of /etc/prometheus)
+  variable: vtm_prom_config
+  type: text
+  required: true
+  default: {{ vtm_prom_config | to_json }}
+  min: 1
+  max: 400
+- question_name: Prometheus URL (from the monitoring host)
+  variable: vtm_prom_url
+  type: text
+  required: true
+  default: {{ vtm_prom_url | to_json }}
+  min: 8
+  max: 200
+- question_name: Grafana provisioning directory (host side of /etc/grafana/provisioning)
+  variable: vtm_grafana_provisioning
+  type: text
+  required: true
+  default: {{ vtm_grafana_provisioning | to_json }}
+  min: 1
+  max: 400
+- question_name: SNMPv3 user on vTM
+  variable: vtm_snmp_user
+  type: text
+  required: false
+  default: {{ vtm_snmp_user | to_json }}
+  min: 1
+  max: 32
