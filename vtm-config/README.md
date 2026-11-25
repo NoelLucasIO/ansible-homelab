@@ -99,8 +99,15 @@ DNS is not touched. Until it changes, clients reach HCP directly as before.
 authoritative zone (same name servers as the parent zone) holding A records for `<fqdn>` and
 `*.<fqdn>` pointing at the VIPs, so DNS rather than HCP answers. The delegation's name servers are
 kept in the zone's comment; `revert` deletes the zone (only one this playbook made) and restores
-the delegation. Either restarts NIOS DNS only if NIOS needs it. It never allocates VIPs: those
-come from `hcp.yml`.
+the delegation. Either restarts DNS, only if NIOS needs it and only on the members serving the
+parent zone. It never allocates VIPs: those come from `hcp.yml`. If creating the zone fails, the
+delegation is put back before the job stops.
+
+NIOS requires restart permission on the DNS member to create a zone, which an IPAM account
+shouldn't have. Give this step its own NIOS account: an admin group with read/write on the grid
+member(s) serving the parent zone and on the parent zone itself, API access only, and a user in
+it. Put that user in an AAP credential of type **NIOS API** (`aap-setup.yml` creates the type) and
+pass its name as `aap_nios_dns_credential`: only **vTM HCP DNS** gets it.
 
 ## What the appliance does, as found on 22.9r7
 

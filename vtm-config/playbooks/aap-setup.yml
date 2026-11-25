@@ -25,7 +25,10 @@
     aap_inventory: homelab
     aap_machine_credential: ""     # SSH: Alloy host, lab CA host, appliance (REST restart)
     aap_secrets_credential: ""     # a credential of type "vTM API"
-    aap_nios_credential: ""        # carries nios_api_password (HCP VIPs, HCP DNS), e.g. homelab-secrets
+    aap_nios_credential: ""        # carries nios_api_password (HCP VIPs), e.g. homelab-secrets
+    # HCP DNS creates zones, which needs restart rights on the DNS member: a separate NIOS account
+    # in a credential of type "NIOS API" (user + password), so the IPAM account stays least-privilege.
+    aap_nios_dns_credential: ""
     aap_ee: ""
     aap_backup_rrule: "DTSTART;TZID=America/New_York:20260101T024700 RRULE:FREQ=DAILY;INTERVAL=1"
     aap_cert_rrule: "DTSTART;TZID=America/New_York:20260101T033700 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"
@@ -65,6 +68,30 @@
               vtm_api_password: "{% raw %}{{ vtm_api_password }}{% endraw %}"
               vtm_admin_password: "{% raw %}{{ vtm_admin_password | default('') }}{% endraw %}"
               vtm_hec_token: "{% raw %}{{ vtm_hec_token | default('') }}{% endraw %}"
+      changed_when: true
+
+    - name: Credential type "NIOS API" exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ 'NIOS API' | urlencode }}"
+      register: aap_ct_nios
+
+    - name: Create or update the "NIOS API" credential type
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/{{ (aap_ct_nios.json.results[0].id ~ '/') if aap_ct_nios.json.count else '' }}"
+        method: "{{ 'PATCH' if aap_ct_nios.json.count else 'POST' }}"
+        body:
+          name: NIOS API
+          kind: cloud
+          description: An Infoblox NIOS WAPI account (user and password)
+          inputs:
+            fields:
+              - {id: nios_api_user, label: WAPI user, type: string}
+              - {id: nios_api_password, label: WAPI password, type: string, secret: true}
+            required: [nios_api_user, nios_api_password]
+          injectors:
+            extra_vars:
+              nios_api_user: "{% raw %}{{ nios_api_user }}{% endraw %}"
+              nios_api_password: "{% raw %}{{ nios_api_password }}{% endraw %}"
       changed_when: true
 
     - name: Project and inventory ids
@@ -137,7 +164,7 @@
           playbook: vtm-config/playbooks/hcp-dns.yml
           description: "Opt-in: point an HCP cluster's DNS at its vTM VIPs (cutover) or back to HCP (revert)"
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-hcp-dns.yml.j2') | from_yaml }}"
-          credentials: ["{{ aap_nios_credential }}"]
+          credentials: ["{{ aap_nios_dns_credential or aap_nios_credential }}"]
       loop_control:
         loop_var: aap_jt
         label: "{{ aap_jt.name }}"

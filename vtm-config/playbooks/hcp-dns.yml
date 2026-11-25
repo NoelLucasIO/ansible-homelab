@@ -215,11 +215,23 @@
         url: "{{ nios_wapi }}/grid"
       register: vtm_dns_grid
 
-    - name: Restart DNS if NIOS needs it
+    - name: Members serving the parent zone
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/zone_auth?fqdn={{ vtm_hcp_parent }}&view={{ vtm_nios_view }}&_return_fields=grid_primary,grid_secondaries"
+      register: vtm_dns_members
+
+    # Only those members, so the account needs restart rights on them and nothing grid-wide.
+    - name: Restart DNS on them if NIOS needs it
       ansible.builtin.uri:
         url: "{{ nios_wapi }}/{{ vtm_dns_grid.json[0]._ref }}?_function=restartservices"
         method: POST
-        body: {restart_option: RESTART_IF_NEEDED, service_option: DNS}
+        body:
+          restart_option: RESTART_IF_NEEDED
+          service_option: DNS
+          members: >-
+            {{ ((vtm_dns_members.json[0].grid_primary | default([]))
+                + (vtm_dns_members.json[0].grid_secondaries | default([])))
+               | map(attribute='name') | unique | list }}
       changed_when: true
 
     - name: What NIOS answers now
