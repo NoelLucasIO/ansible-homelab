@@ -1,5 +1,9 @@
 ---
-# NTP, event syslog and Analytics Export, over REST. Runs after connect.yml.
+# Admin TLS versions, NTP, event syslog and Analytics Export, over REST. Runs after connect.yml.
+
+# --- TLS versions of the admin server and REST ------------------------------------------------
+- name: Admin server and REST TLS versions
+  ansible.builtin.include_tasks: admin_tls.yml
 
 # --- NTP on every traffic manager in the cluster ----------------------------------------
 - name: NTP servers

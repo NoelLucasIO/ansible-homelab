@@ -109,7 +109,7 @@
       loop:
         - name: vTM platform
           playbook: vtm-config/playbooks/platform.yml
-          description: vTM API user, NTP, event syslog to Loki (+ Alloy listener), Analytics Export to Splunk HEC
+          description: vTM API user, admin TLS 1.2+, NTP, event syslog to Loki (+ Alloy listener), Analytics Export to Splunk HEC
           survey: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../templates/aap/survey-platform.yml.j2') | from_yaml }}"
         - name: vTM backup
           playbook: vtm-config/playbooks/backup.yml

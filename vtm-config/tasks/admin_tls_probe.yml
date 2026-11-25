@@ -1,0 +1,28 @@
+---
+# Which of TLS 1.0, 1.1, 1.2 the admin server and REST accept on vtm_tm, tested on the appliance
+# with its own openssl (it can still offer TLS 1.0), by name: REST doesn't answer on 127.0.0.1.
+# A handshake counts only if openssl reports a protocol version.
+# In: vtm_tls_expect (lines "<port> <version> true|false"), vtm_tls_retries.
+# Out: vtm_tls_probe (stdout_lines in the same form), vtm_tls_wrong (expected lines not seen).
+- name: TLS versions accepted on {{ vtm_tm }}
+  ansible.builtin.shell:
+    cmd: >-
+      for p in {{ vtm_admin_port }} {{ vtm_rest_port }}; do for v in tls1 tls1_1 tls1_2; do
+      if grep -q '^Protocol version:' <<< "$(timeout 6 openssl s_client -brief -connect {{ vtm_tm }}:$p
+      -servername {{ vtm_tm }} -$v -cipher 'DEFAULT:@SECLEVEL=0' </dev/null 2>&1)"; then r=true; else r=false; fi;
+      echo "$p $v $r"; done; done
+    executable: /bin/bash
+  delegate_to: "{{ vtm_tm }}"
+  become: false
+  vars:
+    ansible_user: "{{ vtm_ssh_user }}"
+  register: vtm_tls_probe
+  until: vtm_tls_expect | reject('in', vtm_tls_probe.stdout_lines | default([])) | list | length == 0
+  retries: "{{ vtm_tls_retries | default(0) }}"
+  delay: 5
+  failed_when: false
+  changed_when: false
+
+- name: Mismatches
+  ansible.builtin.set_fact:
+    vtm_tls_wrong: "{{ vtm_tls_expect | reject('in', vtm_tls_probe.stdout_lines | default([])) | list }}"

@@ -13,6 +13,7 @@ This is steps 1 and 2 of 3: platform settings and the admin certificate. Service
 |---|---|---|
 | Alloy listener | `vtm_alloy_host` | Writes `<config dir>/vtm.alloy`: a UDP syslog listener (`vtm_syslog_port`, default 1518) labelled `job="vtm"`, then restarts the rootless Alloy user service if the file changed. Checks the port isn't taken by something else first. |
 | Platform settings | controller | Logs in as `vtm_api_user`. If that fails (first run, rebuilt appliance), logs in once as `vtm_admin_user` and creates the user in the `admin` group, or resets its password, over SOAP. Takes a full backup, then sets NTP on every traffic manager in the cluster, creates the **Syslog to Loki** action and adds it to the built-in **All Events** type (keeping any actions already there), and turns on Analytics Export to Splunk HEC when `vtm_hec_token` is set. |
+| Admin TLS (in Platform settings) | controller, SSH to each traffic manager | Sets `global_settings` `admin.support_tls1`/`support_tls1_1` from `vtm_admin_tls1`/`vtm_admin_tls1_1` (default: off, leaving TLS 1.2 and 1.3), then tests on each traffic manager which versions the admin server and REST accept and restarts only the daemon that still serves the old set. |
 | Check Loki | `vtm_alloy_host` | Asks Loki for `{job="vtm"}` lines in the last 24 hours; fails if there are none. |
 
 Every REST write reads the resource first and only PUTs when the merge would change it, so a
@@ -63,6 +64,13 @@ The weekly AAP schedule reruns it, so it renews itself a month before expiry.
   The index is the token's default.
 - **Local users** are not a REST 8.6 resource; SOAP `Users.addUser` / `changePassword` /
   `listUsers` on `https://<appliance>:9090/soap` handle them.
+- **Admin TLS versions** (`global_settings` `admin.*`) cover the admin server, REST and internal
+  connections. REST (`zeus.configd`) applies a change at once; the admin server only when it
+  restarts (`$ZEUSHOME/admin/rc restart`, which leaves traffic alone). REST doesn't answer on
+  127.0.0.1, so the probe connects by name.
+- **The admin server port** (System > Security, `port` in the `security` file; 9090 out of the box)
+  is not in REST 8.6. If you change it, set `vtm_admin_port` to match: SOAP and the certificate
+  checks use it.
 - **NTP** is `appliance.ntpservers` on each traffic manager (out of the box: `zeus.pool.ntp.org`).
 - The **admin server certificate** is `$ZEUSHOME/admin/etc/admin.public` / `admin.private`,
   per traffic manager, outside the replicated configuration. REST 8.6 imports it

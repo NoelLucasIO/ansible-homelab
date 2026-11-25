@@ -1,0 +1,28 @@
+---
+# TLS versions for the admin server (UI/SOAP), REST and internal connections. Runs after connect.yml.
+# The setting is cluster-wide; each traffic manager is then probed and only a daemon still
+# serving the old set is restarted (admin server: $ZEUSHOME/admin/rc; REST: zxtm/rc.configd).
+- name: Admin server TLS versions (global_settings)
+  ansible.builtin.include_tasks: rest_put.yml
+  vars:
+    vtm_path: global_settings
+    vtm_body:
+      properties:
+        admin:
+          support_tls1: "{{ vtm_admin_tls1 | bool }}"
+          support_tls1_1: "{{ vtm_admin_tls1_1 | bool }}"
+          support_tls1_2: true
+
+- name: What each traffic manager must accept
+  ansible.builtin.set_fact:
+    vtm_tls_expect: >-
+      {{ [vtm_admin_port | string, vtm_rest_port | string]
+         | product(['tls1 ' ~ (vtm_admin_tls1 | bool | string | lower),
+                    'tls1_1 ' ~ (vtm_admin_tls1_1 | bool | string | lower), 'tls1_2 true'])
+         | map('join', ' ') | list }}
+
+- name: Each traffic manager
+  ansible.builtin.include_tasks: admin_tls_tm.yml
+  loop: "{{ vtm_tms.json.children | map(attribute='name') | list }}"
+  loop_control:
+    loop_var: vtm_tm

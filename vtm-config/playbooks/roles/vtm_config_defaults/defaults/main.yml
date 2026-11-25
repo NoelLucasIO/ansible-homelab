@@ -6,7 +6,7 @@
 # --- Which appliance -----------------------------------------------------------------
 vtm_target: vtm01.example.com       # the appliance (or any member of a cluster); REST runs from the controller
 vtm_rest_port: 9070
-vtm_admin_port: 9090                # SOAP (users) lives on the admin server
+vtm_admin_port: 9090                # admin server: UI and SOAP; set to match System > Security (not in REST)
 vtm_rest_api_version: "8.6"         # used if the appliance offers it, else its newest
 vtm_validate_certs: false           # the appliance's own self-signed certificate until step 2 (certificates)
 
@@ -74,3 +74,12 @@ vtm_cert_force: false               # issue a new one even if the current one is
 # serves the new one too. Only the REST daemon restarts; traffic is not touched.
 vtm_cert_restart_rest: true
 vtm_ssh_user: root
+
+# --- Admin server and REST TLS versions (platform.yml) ----------------------------------------
+# global_settings admin.*: the admin server (UI/SOAP, vtm_admin_port), REST (zeus.configd) and
+# internal connections. TLS 1.2 and 1.3 stay on. The admin server applies a change only when it
+# restarts; platform.yml probes each traffic manager over SSH (vtm_ssh_user, as in
+# certificate.yml) and restarts only the daemon still serving the old set.
+vtm_admin_tls1: false
+vtm_admin_tls1_1: false
+vtm_admin_tls_restart: true

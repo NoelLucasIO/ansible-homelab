@@ -1,0 +1,43 @@
+---
+# One traffic manager: probe, restart what disagrees, prove it.
+- name: Probe
+  ansible.builtin.include_tasks: admin_tls_probe.yml
+  vars:
+    vtm_tls_retries: 0
+
+- name: Restart what still serves the old set
+  when: vtm_tls_wrong | length > 0 and vtm_admin_tls_restart | bool
+  block:
+    - name: Restart the admin server (UI and SOAP only) on {{ vtm_tm }}
+      ansible.builtin.command:
+        cmd: /opt/zeus/admin/rc restart
+      delegate_to: "{{ vtm_tm }}"
+      become: false
+      vars:
+        ansible_user: "{{ vtm_ssh_user }}"
+      when: vtm_tls_wrong | select('match', (vtm_admin_port | string) ~ ' ') | list | length > 0
+      changed_when: true
+
+    - name: Restart only the REST daemon on {{ vtm_tm }}
+      ansible.builtin.command:
+        cmd: /opt/zeus/zxtm/rc.configd restart
+      delegate_to: "{{ vtm_tm }}"
+      become: false
+      vars:
+        ansible_user: "{{ vtm_ssh_user }}"
+      when: vtm_tls_wrong | select('match', (vtm_rest_port | string) ~ ' ') | list | length > 0
+      changed_when: true
+
+    - name: Probe again
+      ansible.builtin.include_tasks: admin_tls_probe.yml
+      vars:
+        vtm_tls_retries: 24
+
+- name: Served as set?
+  ansible.builtin.assert:
+    that: vtm_tls_wrong | length == 0
+    fail_msg: >-
+      {{ vtm_tm }} doesn't serve the configured TLS versions. Expected but not seen:
+      {{ vtm_tls_wrong | join('; ') }}. Seen: {{ vtm_tls_probe.stdout_lines | default([]) | join('; ') }}
+      {{ vtm_tls_probe.stderr | default('') | truncate(300) }}
+    quiet: true

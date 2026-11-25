@@ -48,7 +48,7 @@
         vtm_backup_reason: before platform.yml
       when: vtm_backup_before_change | bool
 
-    - name: NTP, event syslog, Analytics Export
+    - name: Admin TLS versions, NTP, event syslog, Analytics Export
       ansible.builtin.include_tasks: "{{ playbook_dir }}/../tasks/platform.yml"
 
 - name: Check Loki
