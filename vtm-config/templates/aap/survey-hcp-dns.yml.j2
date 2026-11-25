@@ -34,3 +34,11 @@
   default: {{ vtm_hcp_vip_count | int }}
   min: 1
   max: 16
+- question_name: Delegation name servers (revert only, if not recorded)
+  question_description: 'name=address, space separated, e.g. hcp-node-101.<fqdn>=<node front-end IP>. Blank = use what cutover recorded'
+  variable: vtm_hcp_dns_delegate_to
+  type: text
+  required: false
+  default: ""
+  min: 0
+  max: 1000

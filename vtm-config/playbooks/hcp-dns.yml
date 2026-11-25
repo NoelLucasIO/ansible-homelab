@@ -19,6 +19,9 @@
     vtm_hcp_dns_ttl: 300
     vtm_hcp_dns_tag: "vtm-config hcp-dns"
     vtm_hcp_vip_lookup_only: true     # never allocate here: the VIPs are hcp.yml's
+    # Name servers of the delegation, "name=address ..." (e.g. hcp-node-101.<fqdn>=192.0.2.101).
+    # Only needed when revert finds no record of them in the zone's comment.
+    vtm_hcp_dns_delegate_to: ""
   module_defaults:
     ansible.builtin.uri:
       user: "{{ nios_api_user }}"
@@ -89,26 +92,50 @@
                  | map(attribute='name') | zip((vtm_dns_deleg.json[0].delegate_to if vtm_dns_deleg.json | length > 0 else [])
                  | map(attribute='address')) | map('join', '=') | join(' ') }}
 
-        - name: Remove the delegation
-          ansible.builtin.uri:
-            url: "{{ nios_wapi }}/{{ vtm_dns_deleg.json[0]._ref }}"
-            method: DELETE
-          when: vtm_dns_deleg.json | length > 0
-          changed_when: true
+        - name: Swap the delegation for the zone (put the delegation back if that fails)
+          block:
+            - name: Remove the delegation
+              ansible.builtin.uri:
+                url: "{{ nios_wapi }}/{{ vtm_dns_deleg.json[0]._ref }}"
+                method: DELETE
+              when: vtm_dns_deleg.json | length > 0
+              changed_when: true
 
-        - name: Authoritative zone {{ vtm_hcp_fqdn }}
-          ansible.builtin.uri:
-            url: "{{ nios_wapi }}/zone_auth"
-            method: POST
-            status_code: [201]
-            body:
-              fqdn: "{{ vtm_hcp_fqdn }}"
-              view: "{{ vtm_nios_view }}"
-              grid_primary: "{{ vtm_dns_parent.json[0].grid_primary }}"
-              grid_secondaries: "{{ vtm_dns_parent.json[0].grid_secondaries | default([]) }}"
-              comment: "{{ vtm_hcp_dns_tag }}; was delegated to: {{ vtm_dns_saved | default('', true) }}"
-          when: vtm_dns_auth.json | length == 0
-          changed_when: true
+            - name: Authoritative zone {{ vtm_hcp_fqdn }}
+              ansible.builtin.uri:
+                url: "{{ nios_wapi }}/zone_auth"
+                method: POST
+                status_code: [201]
+                body:
+                  fqdn: "{{ vtm_hcp_fqdn }}"
+                  view: "{{ vtm_nios_view }}"
+                  grid_primary: "{{ vtm_dns_parent.json[0].grid_primary }}"
+                  grid_secondaries: "{{ vtm_dns_parent.json[0].grid_secondaries | default([]) }}"
+                  comment: "{{ vtm_hcp_dns_tag }}; was delegated to: {{ vtm_dns_saved | default('', true) }}"
+              when: vtm_dns_auth.json | length == 0
+              changed_when: true
+
+          rescue:
+            - name: Put the delegation back
+              ansible.builtin.uri:
+                url: "{{ nios_wapi }}/zone_delegated"
+                method: POST
+                status_code: [201]
+                body:
+                  fqdn: "{{ vtm_hcp_fqdn }}"
+                  view: "{{ vtm_nios_view }}"
+                  comment: "restored by {{ vtm_hcp_dns_tag }} after a failed cutover"
+                  delegate_to: "{{ vtm_dns_deleg.json[0].delegate_to }}"
+              when: vtm_dns_deleg.json | length > 0
+              changed_when: true
+
+            - name: Cutover failed, nothing changed
+              ansible.builtin.fail:
+                msg: >-
+                  Creating the zone failed: {{ ansible_failed_result.json.text | default(ansible_failed_result.msg | default('?')) }}
+                  The delegation was restored. If NIOS asks for restart permission, give the API
+                  user's group (Administration -> Permissions) read/write on the grid member that
+                  serves {{ vtm_hcp_parent }}, or run this with an account that has it.
 
         - name: A records now
           ansible.builtin.uri:
@@ -148,13 +175,16 @@
         - name: Name servers to restore
           ansible.builtin.set_fact:
             vtm_dns_restore: >-
-              {{ (vtm_dns_auth.json[0].comment | default('')).split('was delegated to:')[1:] | join(' ')
-                 | regex_findall('(\S+)=(\S+)') }}
+              {{ ((vtm_dns_auth.json[0].comment | default('')).split('was delegated to:')[1:] | join(' ')
+                 if vtm_dns_auth.json | length > 0 else '') | regex_findall('(\S+)=(\S+)')
+                 or vtm_hcp_dns_delegate_to | regex_findall('(\S+)=(\S+)') }}
 
         - name: Something to restore
           ansible.builtin.assert:
-            that: vtm_dns_auth.json | length == 0 or vtm_dns_restore | length > 0
-            fail_msg: "The zone's comment doesn't say what the delegation was; restore it with hcp-vm's deploy instead."
+            that: vtm_dns_deleg.json | length > 0 or vtm_dns_restore | length > 0
+            fail_msg: >-
+              No delegation in NIOS and no record of its name servers. Set vtm_hcp_dns_delegate_to
+              ("hcp-node-101.<fqdn>=<front-end IP> ...") or rerun hcp-vm's deploy.
             quiet: true
 
         - name: Delete the authoritative zone (and its records)
@@ -176,7 +206,7 @@
               delegate_to: >-
                 {{ vtm_dns_restore | map('join', '", "address": "') | map('regex_replace', '^', '{"name": "')
                    | map('regex_replace', '$', '"}') | map('from_json') | list }}
-          when: vtm_dns_auth.json | length > 0 and vtm_dns_deleg.json | length == 0
+          when: vtm_dns_deleg.json | length == 0
           changed_when: true
 
     # A new zone is served only after the DNS service restarts; NIOS does it only if needed.
