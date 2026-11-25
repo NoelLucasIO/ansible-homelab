@@ -66,6 +66,13 @@ cd ee
 ansible-builder build -t registry.example.com/homelab-ee:1.0 --container-runtime podman
 ```
 
+The IP allocation tasks ping candidate addresses from the execution environment. Jobs run as a
+non-root user in rootless podman, where ICMP sockets are off by default (`ping: socket: Operation
+not permitted`). Allow them for the job's group (0) in AAP under Settings → Job → Container Run
+Options: `"--sysctl=net.ipv4.ping_group_range=0 0"`. A wider range is refused: every group ID in
+it must exist in the container's user namespace. Without the option, allocations stop with "ping
+failed" rather than treating every address as free.
+
 ## Guard rails
 
 - `gitleaks` scans the full git history in CI and runs as a pre-commit hook, with
