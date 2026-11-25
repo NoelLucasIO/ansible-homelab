@@ -31,7 +31,7 @@ touched. Backups stay on the appliance: they don't survive a destroy and rebuild
 
 Replaces vTM's self-signed admin server certificate (`CN=zxtm`) with one from the lab CA
 ([`pki/`](../pki/README.md), step-ca), on every traffic manager in the cluster. One certificate
-secures the admin UI and SOAP (:9090) and REST (:9070).
+secures the admin UI and SOAP (the admin port, `vtm_admin_port`) and REST (:9070).
 
 1. Asks each traffic manager over SOAP (`getAdminSSLCertificateInfo`) for its current
    certificate. It renews when that is self-signed, lacks a SAN, is within
@@ -44,7 +44,7 @@ secures the admin UI and SOAP (:9090) and REST (:9070).
 3. Installs it with REST `status/local_tm/admin_ssl_certificate?import`, the same installer as
    *System > Security*, which restarts the admin server. The key goes from the container straight
    into that request: it is never written to disk on the controller or the CA host.
-4. Proves the result: :9090 must verify against the lab root (chain and host name), and the
+4. Proves the result: the admin port must verify against the lab root (chain and host name), and the
    certificate :9070 serves (checked with openssl from the CA host) must have the installed
    fingerprint. If it doesn't, it restarts only the REST daemon over SSH as `vtm_ssh_user`
    (`vtm_cert_restart_rest`), then checks again.
@@ -86,6 +86,9 @@ An HCP cluster behind vTM. Per service: a monitor, a pool and a virtual server n
   `vtm_hcp_vip_network` (reused on reruns). The traffic IP group, named after the cluster FQDN,
   holds them on every traffic manager (single-hosted). Each traffic manager gets a traffic IP
   network for that subnet on whichever of its interfaces is in it.
+- **Port 9090:** the MAPI virtual server listens on 9090, which is also vTM's default admin port,
+  and the admin server binds it on every address. Move the admin server first (System > Security,
+  e.g. to 9091) and set `vtm_admin_port` to match, or the two collide.
 - **Virtual servers:** on the traffic IP group, SSL decryption with the cluster certificate,
   TLS 1.2+, X-Forwarded-For added, cluster IP header not.
 - **Proof:** from the CA host, each service is requested through the VIP with vTM's certificate
@@ -155,7 +158,7 @@ are left out, their `Inet46` replacements used.
   logs to a Splunk HTTP Event Collector, with source and sourcetype already set per file.
   The index is the token's default.
 - **Local users** are not a REST 8.6 resource; SOAP `Users.addUser` / `changePassword` /
-  `listUsers` on `https://<appliance>:9090/soap` handle them.
+  `listUsers` on `https://<appliance>:<admin port>/soap` handle them.
 - **Admin TLS versions** (`global_settings` `admin.*`) cover the admin server, REST and internal
   connections. REST (`zeus.configd`) applies a change at once; the admin server only when it
   restarts (`$ZEUSHOME/admin/rc restart`, which leaves traffic alone). REST doesn't answer on
@@ -181,7 +184,7 @@ are left out, their `Inet46` replacements used.
   per traffic manager, outside the replicated configuration. REST 8.6 imports it
   (`status/local_tm/admin_ssl_certificate?import`, fields `public_cert` (the chain is served as
   given) and `private_key`: PEM, unencrypted, RSA/DSA/EC); SOAP has the same as
-  `System.Management.importAdminSSLCertificate`. Either restarts the admin server (:9090), but
+  `System.Management.importAdminSSLCertificate`. Either restarts the admin server (admin port), but
   REST itself is served by `zeus.configd`, which reads the file only at start and ignores HUP:
   until `$ZEUSHOME/zxtm/rc.configd restart` (or a reboot) :9070 keeps the old certificate, and
   its status then reports an empty fingerprint. Restarting configd leaves the traffic processes
@@ -209,7 +212,7 @@ are left out, their `Inet46` replacements used.
    running `pki-ca`) and `vtm_ssh_user`@ each traffic manager, for the REST restart. The
    appliance has no automation user, so put the machine credential's public key (the
    `automation_pubkey` that `bootstrap-host.yml` installs) in root's `authorized_keys` on each
-   traffic manager. Without it, the certificate still lands on :9090, the job fails at the restart,
+   traffic manager. Without it, the certificate still lands on the admin port, the job fails at the restart,
    and :9070 keeps the old one until a reboot or a later run.
 6. **Monitoring:** after the first `aap-setup.yml` run, create a **vTM SNMP** credential (two
    passwords, 8+ characters) and pass its name as `aap_snmp_credential`; also pass `vtm_mon_host`,
