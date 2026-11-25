@@ -179,6 +179,7 @@ nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
 nios_api_user: aap-ipam
 hcp_nios_view: default
 hcp_nios_candidates: 5
+hcp_require_libvirt_guests: true        # deploy refuses a hypervisor without libvirt-guests (clean shutdown on reboot)
 hcp_owner_comment: "hcp-vm: provisioned by AAP"   # destroy refuses NIOS objects without it
 
 # --- Secrets (AAP custom credential or vault.yml; never committed) ---------------------

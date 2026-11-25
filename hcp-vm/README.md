@@ -358,3 +358,10 @@ default in `playbooks/roles/hcp_vm_defaults/defaults/main.yml`, overridable from
 - `admin jvm domain createPKCS12` hands the file path to HCP's JVM, which runs as `ris` and reads
   the file itself: a file under `/root` comes through as nothing ("toDerInputStream rejects tag
   type 0"). Put it in `/opt/arc/tmp`, owned by `ris`.
+- A hypervisor reboot without `libvirt-guests` kills the HCP VM. After one, `var0` failed its
+  boot-time fsck and a data disk needed 3,000+ repairs (cleared inodes: lost objects), so the node
+  was rebuilt. `deploy.yml` now refuses a hypervisor where `libvirt-guests` isn't enabled with
+  `ON_SHUTDOWN=shutdown` (set it up with `bootstrap-host.yml`, `bootstrap_libvirt_guests: true`).
+  HCPOS honors ACPI shutdown: about a minute, well inside the 300 s timeout.
+- Ansible logs module arguments to each target's journal, including custom headers such as an
+  `Authorization: Bearer` token. Every `ansible.cfg` here sets `no_target_syslog = True`.

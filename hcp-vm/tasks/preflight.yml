@@ -70,6 +70,31 @@
       {{ inventory_hostname }}: need {{ hcp_iso_path }} (copy the HCP ISO there or set hcp_iso_path in
       host_vars) and virt-install, virsh, qemu-img, qemu-nbd, python3 on PATH.
 
+# A host reboot without libvirt-guests kills the VM: HCP's var0 and data disks need fsck, and
+# a killed data disk loses objects. bootstrap-host.yml sets it up (bootstrap_libvirt_guests).
+- name: Clean guest shutdown on host reboot (libvirt-guests unit)
+  ansible.builtin.systemd_service:
+    name: libvirt-guests.service
+  register: hcp_lg_unit
+  failed_when: false
+
+- name: Clean guest shutdown on host reboot (libvirt-guests config)
+  ansible.builtin.command: grep -hqs '^ON_SHUTDOWN=shutdown' /etc/sysconfig/libvirt-guests /etc/conf.d/libvirt-guests
+  register: hcp_lg
+  changed_when: false
+  failed_when: false
+
+- name: The hypervisor shuts guests down on reboot
+  ansible.builtin.assert:
+    that: >-
+      (hcp_lg_unit.status.UnitFileState | default('') == 'enabled' and hcp_lg.rc == 0)
+      or not hcp_require_libvirt_guests | bool
+    fail_msg: >-
+      {{ inventory_hostname }}: libvirt-guests isn't enabled with ON_SHUTDOWN=shutdown, so a host
+      reboot would kill HCP and can corrupt its disks. Run bootstrap-host.yml with
+      bootstrap_libvirt_guests: true for this host (or set hcp_require_libvirt_guests: false).
+    quiet: true
+
 - name: Does the domain exist?
   ansible.builtin.command: virsh domstate {{ hcp_domain_name }}
   register: hcp_domstate
