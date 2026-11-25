@@ -261,7 +261,7 @@
         method: POST
         body:
           restart_option: RESTART_IF_NEEDED
-          service_option: DNS
+          services: [DNS]            # with "members", NIOS refuses the older service_option
           members: >-
             {{ ((vtm_dns_members.json[0].grid_primary | default([]))
                 + (vtm_dns_members.json[0].grid_secondaries | default([])))
