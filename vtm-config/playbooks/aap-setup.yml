@@ -80,6 +80,7 @@
       ansible.builtin.uri:
         url: "{{ aap_api }}/projects/{{ aap_ids.results[0].json.results[0].id }}/update/"
         method: POST
+        status_code: [200, 201, 202]
       register: aap_sync
       changed_when: true
 
