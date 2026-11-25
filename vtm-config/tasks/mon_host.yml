@@ -9,8 +9,8 @@
 
 - name: Owner facts
   ansible.builtin.set_fact:
-    vtm_mon_home: "{{ getent_passwd[vtm_mon_owner][4] }}"
-    vtm_mon_uid: "{{ getent_passwd[vtm_mon_owner][1] }}"
+    vtm_mon_home: "{{ ansible_facts.getent_passwd[vtm_mon_owner][4] }}"
+    vtm_mon_uid: "{{ ansible_facts.getent_passwd[vtm_mon_owner][1] }}"
     vtm_mon_tms: "{{ hostvars['localhost'].vtm_mon_tms }}"
     vtm_target: "{{ hostvars['localhost'].vtm_target }}"
 
