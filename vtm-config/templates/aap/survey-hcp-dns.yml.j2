@@ -42,3 +42,10 @@
   default: ""
   min: 0
   max: 1000
+- question_name: Also an A record for the bare cluster name (cutover)
+  question_description: 'Needs the NIOS global permission "Adding a blank A/AAAA record" for the DNS account'
+  variable: vtm_hcp_dns_apex
+  type: multiplechoice
+  required: false
+  choices: ["false", "true"]
+  default: "false"
