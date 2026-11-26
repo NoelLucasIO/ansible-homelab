@@ -33,6 +33,9 @@ cat > /etc/rsyslog.d/50-forward.conf <<'RS'
            queue.saveOnShutdown="on" action.resumeRetryCount="-1")
 RS
 rsyslogd -N1
+# node_exporter 1.9 (Debian) can't parse the 7.x kernel's /proc/fs/xfs/stat: its xfs collector logs
+# an error on every scrape. Off; disk space comes from the filesystem collector.
+sed -i 's/^ARGS=""$/ARGS="--no-collector.xfs"/' /etc/default/prometheus-node-exporter
 systemctl enable --now rsyslog prometheus-node-exporter
 systemctl start qemu-guest-agent || true   # static unit, started by udev on the virtio port
 systemctl restart rsyslog
