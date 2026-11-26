@@ -8,7 +8,7 @@
   "time": { "from": "now-7d", "to": "now" },
   "templating": {
     "list": [
-      { "name": "prom", "label": "Prometheus", "type": "datasource", "query": "prometheus" },
+      { "name": "prom", "label": "Prometheus", "type": "datasource", "query": "prometheus", "regex": "/^prometheus$/" },
       { "name": "loki", "label": "Loki", "type": "datasource", "query": "loki" }
     ]
   },

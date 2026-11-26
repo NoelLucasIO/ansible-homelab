@@ -1573,7 +1573,7 @@
     "name": "prom",
     "label": "Prometheus",
     "type": "datasource",
-    "query": "prometheus",
+    "query": "prometheus", "regex": "/^prometheus$/",
     "hide": 0
    },
    {

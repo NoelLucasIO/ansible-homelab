@@ -8,7 +8,7 @@
   "time": { "from": "now-24h", "to": "now" },
   "templating": {
     "list": [
-      { "name": "prom", "label": "Prometheus", "type": "datasource", "query": "prometheus" },
+      { "name": "prom", "label": "Prometheus", "type": "datasource", "query": "prometheus", "regex": "/^prometheus$/" },
       { "name": "loki", "label": "Loki", "type": "datasource", "query": "loki" },
       { "name": "pod", "type": "constant", "hide": 2, "query": "{% endraw %}{{ pki_name }}{% raw %}" }
     ]
