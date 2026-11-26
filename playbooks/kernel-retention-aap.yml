@@ -131,6 +131,7 @@
         body:
           name: "{{ kr_schedule_name }}"
           rrule: "{{ kr_schedule }}"
+          extra_data: {kernel_retention_hosts: all}   # the survey's answer (required)
           enabled: true
       changed_when: true
 
