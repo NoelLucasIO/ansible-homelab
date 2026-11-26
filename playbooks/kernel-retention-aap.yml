@@ -16,7 +16,7 @@
     kr_machine_credential: homelab-ssh
     kr_template: Kernel retention
     kr_schedule_name: Kernel retention weekly
-    kr_schedule: "DTSTART;TZID=America/New_York:20261129T043700 RRULE:FREQ=WEEKLY;BYDAY=SU"
+    kr_schedule: "DTSTART;TZID=America/New_York:20261129T043700 RRULE:FREQ=WEEKLY;INTERVAL=1;BYDAY=SU"
   module_defaults:
     ansible.builtin.uri:
       headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
