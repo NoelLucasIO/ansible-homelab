@@ -1,0 +1,54 @@
+---
+# Fedora / RHEL family. A release is a kernel-core VERSION-RELEASE.ARCH, which is what
+# uname -r reports, so the running kernel is matched exactly.
+- name: Limit kept from now on (dnf installonly_limit)
+  community.general.ini_file:
+    path: /etc/dnf/dnf.conf
+    section: main
+    option: installonly_limit
+    value: "{{ kernel_retention_keep }}"
+    no_extra_spaces: true
+    owner: root
+    group: root
+    mode: "0644"
+  when: kernel_retention_set_config | bool
+
+- name: Installed kernel packages
+  ansible.builtin.command:
+    argv: [rpm, -qa, --qf, "%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n", "kernel*"]
+  register: kernel_retention_rpm
+  changed_when: false
+  check_mode: false
+
+- name: Plan
+  ansible.builtin.set_fact:
+    kernel_retention_plan: >-
+      {{ kernel_retention_rpm.stdout_lines | map('split') | list
+         | kernel_retention_plan('rpm', ansible_facts['kernel'], kernel_retention_keep,
+                                 kernel_retention_rpm_core, kernel_retention_rpm_names) }}
+
+- name: Remove kernels over the limit
+  ansible.builtin.command:
+    argv: "{{ ['dnf', '-y', 'remove'] + kernel_retention_plan.packages }}"
+  when:
+    - kernel_retention_purge | bool
+    - kernel_retention_plan.packages | length > 0
+  changed_when: true
+
+- name: Installed kernels, after
+  ansible.builtin.command:
+    argv: [rpm, -q, --qf, "%{VERSION}-%{RELEASE}.%{ARCH}\n", "{{ kernel_retention_plan.core }}"]
+  register: kernel_retention_after
+  changed_when: false
+  failed_when: false
+  when:
+    - kernel_retention_purge | bool
+    - not ansible_check_mode
+    - kernel_retention_plan.core is not none
+
+- name: Kernel count within the limit
+  ansible.builtin.assert:
+    that: kernel_retention_after.stdout_lines | length <= kernel_retention_keep | int
+    fail_msg: "{{ inventory_hostname }} still has {{ kernel_retention_after.stdout_lines | length }}: {{ kernel_retention_after.stdout_lines | join(', ') }}"
+    quiet: true
+  when: kernel_retention_after.stdout_lines is defined

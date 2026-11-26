@@ -1,0 +1,141 @@
+---
+# Brings AAP in line with kernel-retention.yml (controller API, built-in modules only). Idempotent.
+#   * job template "Kernel retention" on inventory "homelab" with credential "homelab-ssh",
+#     a survey for the host pattern, and the job type asked on launch (pick Check for a dry run)
+#   * a weekly schedule (Sundays 04:37 America/New_York)
+#
+#   ansible-playbook playbooks/kernel-retention-aap.yml -e @hcp-vm/aap.local.yml   (from the repo root)
+- name: AAP setup for kernel-retention
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    kr_inventory: homelab
+    kr_machine_credential: homelab-ssh
+    kr_template: Kernel retention
+    kr_schedule_name: Kernel retention weekly
+    kr_schedule: "DTSTART;TZID=America/New_York:20261129T043700 RRULE:FREQ=WEEKLY;BYDAY=SU"
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 202, 204]
+  tasks:
+    - name: Settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+        fail_msg: "Pass -e @hcp-vm/aap.local.yml (aap_url and aap_token, or aap_user/aap_password)."
+        quiet: true
+
+    - name: Project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/?name={{ aap_project | urlencode }}"
+      register: kr_project
+
+    - name: Sync the project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ kr_project.json.results[0].id }}/update/"
+        method: POST
+      register: kr_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ kr_sync.json.id }}/"
+      register: kr_sync_job
+      until: kr_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+      failed_when: kr_sync_job.json.status != 'successful'
+
+    - name: Inventory {{ kr_inventory }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/?name={{ kr_inventory | urlencode }}"
+      register: kr_inv
+      failed_when: kr_inv.json.count != 1
+
+    - name: Job template exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/?name={{ kr_template | urlencode }}"
+      register: kr_jt_q
+
+    # become stays off at template level: the play sets it.
+    - name: Create or update {{ kr_template }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ (kr_jt_q.json.results[0].id ~ '/') if kr_jt_q.json.count else '' }}"
+        method: "{{ 'PATCH' if kr_jt_q.json.count else 'POST' }}"
+        body:
+          name: "{{ kr_template }}"
+          description: "At most 2 kernels per Linux host: running + newest (dnf installonly_limit, removes the rest)"
+          job_type: run
+          ask_job_type_on_launch: true
+          project: "{{ kr_project.json.results[0].id | int }}"
+          inventory: "{{ kr_inv.json.results[0].id | int }}"
+          playbook: playbooks/kernel-retention.yml
+          become_enabled: false
+          survey_enabled: true
+          timeout: 3600
+      register: kr_jt
+      changed_when: true
+
+    - name: Survey
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ kr_jt.json.id }}/survey_spec/"
+        method: POST
+        body:
+          name: ""
+          description: ""
+          spec:
+            - question_name: Systems
+              question_description: Inventory pattern of Linux hosts (Arch, Proxmox, containers and appliances are always skipped)
+              variable: kernel_retention_hosts
+              type: text
+              required: true
+              default: all
+      changed_when: true
+
+    - name: Credential {{ kr_machine_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ kr_machine_credential | urlencode }}"
+      register: kr_cred
+      failed_when: kr_cred.json.count != 1
+
+    - name: Attach {{ kr_machine_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ kr_jt.json.id }}/credentials/"
+        method: POST
+        body: {id: "{{ kr_cred.json.results[0].id }}"}
+        status_code: [204, 400]           # 400: already attached
+      changed_when: false
+
+    - name: Schedule exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ kr_jt.json.id }}/schedules/?name={{ kr_schedule_name | urlencode }}"
+      register: kr_sched_q
+
+    - name: Weekly
+      ansible.builtin.uri:
+        url: >-
+          {{ aap_api }}/{{ ('schedules/' ~ kr_sched_q.json.results[0].id ~ '/') if kr_sched_q.json.count
+             else ('job_templates/' ~ kr_jt.json.id ~ '/schedules/') }}
+        method: "{{ 'PATCH' if kr_sched_q.json.count else 'POST' }}"
+        body:
+          name: "{{ kr_schedule_name }}"
+          rrule: "{{ kr_schedule }}"
+          enabled: true
+      changed_when: true
+
+    - name: Next
+      ansible.builtin.debug:
+        msg: >-
+          Launch "{{ kr_template }}" once with job type Check to see the plan, then Run
+          (or let the Sunday schedule do it).

@@ -1,0 +1,18 @@
+---
+# kernel-retention.yml: at most kernel_retention_keep (2) kernels on each Linux host, the
+# running one plus the newest other. Never removes the running kernel.
+#   Fedora / RHEL family: installonly_limit=2 in dnf.conf (dnf holds it on every kernel
+#     update) and the kernels over the limit removed now.
+#   Debian: the kernels over the limit removed (apt has no limit; the weekly run enforces it).
+#   Skipped, reason printed: Arch/CachyOS, Proxmox VE/PBS, containers, hosts with
+#     kernel_retention_skip or tideline_skip, tideline_appliances entries, other distros.
+# Check mode prints the plan and changes nothing. Details: roles/kernel_retention/README.md
+#
+#   ansible-playbook -i inventory.yml playbooks/kernel-retention.yml --check -K
+#   ansible-playbook -i inventory.yml playbooks/kernel-retention.yml -K
+- name: Kernel retention
+  hosts: "{{ kernel_retention_hosts | default('all') }}"
+  gather_facts: false
+  become: true
+  roles:
+    - kernel_retention

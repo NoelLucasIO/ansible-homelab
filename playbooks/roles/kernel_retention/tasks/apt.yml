@@ -1,0 +1,43 @@
+---
+# Debian. A release is what follows linux-image- (6.12.48+deb13-amd64), which is what
+# uname -r reports. The linux-image-amd64 metapackage always points at the newest, which
+# is always kept, so it is never disturbed.
+- name: Installed kernel packages
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, "-f=${db:Status-Abbrev} ${Package}\n", "linux-image-*", "linux-headers-*", "linux-modules-*", "linux-kbuild-*"]
+  register: kernel_retention_dpkg
+  changed_when: false
+  failed_when: kernel_retention_dpkg.rc not in [0, 1]       # 1: a pattern matched nothing
+  check_mode: false
+
+- name: Plan
+  ansible.builtin.set_fact:
+    kernel_retention_plan: >-
+      {{ kernel_retention_dpkg.stdout_lines | select('match', '^ii') | map('split') | map('last') | list
+         | kernel_retention_plan('deb', ansible_facts['kernel'], kernel_retention_keep) }}
+
+- name: Remove kernels over the limit
+  ansible.builtin.apt:
+    name: "{{ kernel_retention_plan.packages }}"
+    state: absent
+    purge: true
+  when:
+    - kernel_retention_purge | bool
+    - kernel_retention_plan.packages | length > 0
+
+- name: Installed kernels, after
+  ansible.builtin.shell:
+    cmd: set -o pipefail; dpkg-query -W -f='${db:Status-Abbrev} ${Package}\n' 'linux-image-[0-9]*' | awk '$1 == "ii" && $2 !~ /-(unsigned|dbg)$/ {print $2}'
+    executable: /bin/bash
+  register: kernel_retention_after
+  changed_when: false
+  when:
+    - kernel_retention_purge | bool
+    - not ansible_check_mode
+
+- name: Kernel count within the limit
+  ansible.builtin.assert:
+    that: kernel_retention_after.stdout_lines | length <= kernel_retention_keep | int
+    fail_msg: "{{ inventory_hostname }} still has {{ kernel_retention_after.stdout_lines | length }}: {{ kernel_retention_after.stdout_lines | join(', ') }}"
+    quiet: true
+  when: kernel_retention_after.stdout_lines is defined

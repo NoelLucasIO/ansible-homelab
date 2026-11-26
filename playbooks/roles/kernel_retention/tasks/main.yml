@@ -1,0 +1,73 @@
+---
+# Kernel retention: see ../README.md
+- name: Limit is sane
+  ansible.builtin.assert:
+    that: kernel_retention_keep | int >= 2
+    fail_msg: kernel_retention_keep must be 2 or more (dnf's installonly_limit minimum, and one would leave no fallback kernel).
+    quiet: true
+  run_once: true
+
+- name: Left out by inventory
+  ansible.builtin.meta: end_host
+  when: >-
+    kernel_retention_skip | default(false) | bool
+    or tideline_skip | default(false) | bool
+    or inventory_hostname in (tideline_appliances | default([]) | map(attribute='name') | list)
+
+- name: Facts
+  ansible.builtin.setup:
+    gather_subset: [min, virtual]
+  ignore_unreachable: true
+  register: kernel_retention_setup
+
+- name: Unreachable; nothing to do this run
+  ansible.builtin.meta: end_host
+  when: kernel_retention_setup.unreachable | default(false)
+
+- name: Proxmox VE / PBS?
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    get_checksum: false
+  loop: [/usr/bin/pveversion, /usr/sbin/proxmox-backup-manager, /usr/sbin/proxmox-boot-tool]
+  register: kernel_retention_pve
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: In scope?
+  ansible.builtin.set_fact:
+    kernel_retention_skip_reason: >-
+      {%- if ansible_facts['os_family'] == 'Archlinux' -%}
+      {{ ansible_facts['distribution'] }}: pacman keeps one version per kernel package
+      {%- elif ansible_facts['virtualization_role'] | default('') == 'guest'
+               and ansible_facts['virtualization_type'] | default('') in kernel_retention_container_types -%}
+      {{ ansible_facts['virtualization_type'] }} container: no kernel of its own
+      {%- elif kernel_retention_pve.results | default([]) | selectattr('stat', 'defined') | selectattr('stat.exists') | list | length > 0 -%}
+      Proxmox VE/PBS: kernels are managed by proxmox-boot-tool
+      {%- elif ansible_facts['distribution'] not in kernel_retention_distributions -%}
+      {{ ansible_facts['distribution'] }}: not in kernel_retention_distributions
+      {%- endif -%}
+
+- name: Skipped
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} skipped: {{ kernel_retention_skip_reason }}"
+  when: kernel_retention_skip_reason | default('', true) | length > 0
+
+- name: End here when skipped
+  ansible.builtin.meta: end_host
+  when: kernel_retention_skip_reason | default('', true) | length > 0
+
+- name: Fedora / RHEL family
+  ansible.builtin.include_tasks: dnf.yml
+  when: ansible_facts['os_family'] == 'RedHat'
+
+- name: Debian
+  ansible.builtin.include_tasks: apt.yml
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: Result
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} (running {{ ansible_facts['kernel'] }}):
+      kept {{ kernel_retention_plan.keep | join(', ') or 'none' }};
+      {{ ('would remove ' if ansible_check_mode else 'removed ') ~ kernel_retention_plan.remove | join(', ')
+         if kernel_retention_plan.remove | length else 'nothing to remove' }}
+      {{- '' if kernel_retention_plan.running_installed else '. The running kernel is not an installed package (custom or already removed)' }}
