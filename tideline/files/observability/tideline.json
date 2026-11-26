@@ -26,8 +26,8 @@
           "type": "grafana-postgresql-datasource",
           "uid": "tideline"
         },
-        "query": "SELECT host FROM tideline.hosts ORDER BY host",
-        "definition": "SELECT host FROM tideline.hosts ORDER BY host",
+        "query": "SELECT host FROM tideline.hosts UNION ALL SELECT '(no systems yet)' WHERE NOT EXISTS (SELECT 1 FROM tideline.hosts) ORDER BY 1",
+        "definition": "SELECT host FROM tideline.hosts UNION ALL SELECT '(no systems yet)' WHERE NOT EXISTS (SELECT 1 FROM tideline.hosts) ORDER BY 1",
         "multi": true,
         "includeAll": true,
         "refresh": 1,
