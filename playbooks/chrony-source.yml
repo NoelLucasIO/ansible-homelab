@@ -1,0 +1,19 @@
+---
+# chrony-source.yml: point chronyd at the time server(s) given in chrony_source_server (a DNS
+# name or IP; several: comma-separated), restart it, wait for it to synchronise, and print
+# chronyc tracking and sources as proof. Fails a host that doesn't synchronise in time.
+#   Only the source lines change: every other pool/server/peer/sourcedir line (DHCP-supplied
+#   servers included) is commented out, and the distro's own settings stay. Fedora/RHEL/Arch
+#   (/etc/chrony.conf, chronyd) and Debian/Proxmox (/etc/chrony/chrony.conf, chrony).
+#   Skipped, reason printed: hosts without chrony, chrony_source_skip / tideline_skip,
+#   tideline_appliances entries.
+# Check mode shows the config change and the current tracking; nothing restarts.
+#
+#   ansible-playbook -i inventory.yml playbooks/chrony-source.yml -e chrony_source_server=ntp.example.com --check --diff -K
+#   ansible-playbook -i inventory.yml playbooks/chrony-source.yml -e chrony_source_server=ntp.example.com -K
+- name: Chrony time source
+  hosts: "{{ chrony_source_hosts | default('all') }}"
+  gather_facts: false
+  become: true
+  roles:
+    - chrony_source

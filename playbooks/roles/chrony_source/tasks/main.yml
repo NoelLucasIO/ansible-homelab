@@ -1,0 +1,108 @@
+---
+# Chrony time source: see ../README.md
+- name: Server list
+  ansible.builtin.set_fact:
+    chrony_source_list: "{{ chrony_source_server | string | split(',') | map('trim') | select | list }}"
+
+- name: Server given and well formed
+  ansible.builtin.assert:
+    that:
+      - chrony_source_list | length > 0
+      - chrony_source_list | select('match', '^[A-Za-z0-9][A-Za-z0-9.:-]*$') | list | length == chrony_source_list | length
+    fail_msg: "chrony_source_server must be a DNS name or IP (several: comma-separated); got '{{ chrony_source_server }}'."
+    quiet: true
+  run_once: true
+
+- name: Left out by inventory
+  ansible.builtin.meta: end_host
+  when: >-
+    chrony_source_skip | default(false) | bool
+    or tideline_skip | default(false) | bool
+    or inventory_hostname in (tideline_appliances | default([]) | map(attribute='name') | list)
+
+- name: Facts
+  ansible.builtin.setup:
+    gather_subset: [min]
+
+- name: Where chrony lives on this distro
+  ansible.builtin.set_fact:
+    chrony_source_conf: "{{ '/etc/chrony/chrony.conf' if ansible_facts['os_family'] == 'Debian' else '/etc/chrony.conf' }}"
+    chrony_source_service: "{{ 'chrony' if ansible_facts['os_family'] == 'Debian' else 'chronyd' }}"
+
+- name: Chrony installed?
+  ansible.builtin.stat:
+    path: "{{ chrony_source_conf }}"
+    get_checksum: false
+  register: chrony_source_stat
+
+- name: Skipped
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} skipped: no {{ chrony_source_conf }} (chrony not installed)"
+  when: not chrony_source_stat.stat.exists
+
+- name: End here when chrony isn't installed
+  ansible.builtin.meta: end_host
+  when: not chrony_source_stat.stat.exists
+
+# The distro's own settings (driftfile, makestep, ntsdumpdir, leapsectz, ...) stay as they are.
+- name: Other time sources off (pool, server, peer, sourcedir incl. DHCP-supplied servers)
+  ansible.builtin.replace:
+    path: "{{ chrony_source_conf }}"
+    regexp: '^(?!server ({{ chrony_source_list | map("regex_escape") | join("|") }}) )((pool|server|peer|sourcedir)\s.*)$'
+    replace: '#\2   # off: chrony-source.yml'
+  when: chrony_source_only | bool
+
+- name: Time source
+  ansible.builtin.blockinfile:
+    path: "{{ chrony_source_conf }}"
+    marker: "# {mark} ANSIBLE MANAGED: time source (playbooks/chrony-source.yml)"
+    insertbefore: BOF
+    block: |
+      {% for s in chrony_source_list %}
+      server {{ s }} {{ chrony_source_options }}
+      {% endfor %}
+
+- name: Restart {{ chrony_source_service }}
+  ansible.builtin.systemd_service:
+    name: "{{ chrony_source_service }}"
+    state: restarted
+    enabled: true
+
+- name: Wait for synchronisation
+  ansible.builtin.command:
+    argv: [chronyc, waitsync, "{{ chrony_source_wait | int }}", "0", "0", "1"]
+  register: chrony_source_waitsync
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Chronyc tracking
+  ansible.builtin.command:
+    argv: [chronyc, tracking]
+  register: chrony_source_tracking
+  changed_when: false
+  check_mode: false
+
+- name: Chronyc sources
+  ansible.builtin.command:
+    argv: [chronyc, sources]
+  register: chrony_source_sources
+  changed_when: false
+  check_mode: false
+
+- name: Proof
+  ansible.builtin.debug:
+    msg: "{{ ['chronyc tracking:'] + chrony_source_tracking.stdout_lines + ['', 'chronyc sources:'] + chrony_source_sources.stdout_lines }}"
+
+# The only sources left are the new ones, so a selected source (^*) is one of them.
+- name: Synchronised to the new source
+  ansible.builtin.assert:
+    that:
+      - chrony_source_waitsync.rc == 0
+      - chrony_source_sources.stdout_lines | select('match', '^\^\*') | list | length == 1
+      - chrony_source_tracking.stdout is search('Leap status\s+:\s+Normal')
+    fail_msg: >-
+      {{ inventory_hostname }} did not synchronise to {{ chrony_source_list | join(', ') }} within
+      {{ chrony_source_wait }} s: check DNS for the name and UDP 123 to it (tracking and sources above).
+    success_msg: "{{ inventory_hostname }} is synchronised to {{ chrony_source_list | join(', ') }}"
+  when: not ansible_check_mode

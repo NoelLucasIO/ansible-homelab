@@ -1,0 +1,9 @@
+---
+# Defaults (lowest precedence): inventory values, AAP's included, override them.
+chrony_source_hosts: all                    # inventory pattern (the AAP survey sets it)
+chrony_source_server: ""                    # DNS name or IP; several: comma-separated (the survey sets it)
+chrony_source_options: iburst               # appended to each server line
+chrony_source_only: true                    # comment out every other pool/server/peer/sourcedir line
+chrony_source_wait: 30                      # seconds to wait for chronyd to synchronise after the restart
+# Per host: chrony_source_skip: true leaves a host out. Hosts with tideline_skip: true or
+# named in tideline_appliances (vendor appliances) are left out too.

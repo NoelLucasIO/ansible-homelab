@@ -1,0 +1,129 @@
+---
+# Brings AAP in line with chrony-source.yml (controller API, built-in modules only). Idempotent.
+#   * job template "Chrony time source" on inventory "homelab" with credential "homelab-ssh",
+#     a survey for the time server and the host pattern, and the job type asked on launch
+#     (pick Check for a dry run). No schedule: it runs when you change time sources.
+#
+#   ansible-playbook playbooks/chrony-source-aap.yml -e @hcp-vm/aap.local.yml   (from the repo root)
+- name: AAP setup for chrony-source
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    cs_inventory: homelab
+    cs_machine_credential: homelab-ssh
+    cs_template: Chrony time source
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 202, 204]
+  tasks:
+    - name: Settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+        fail_msg: "Pass -e @hcp-vm/aap.local.yml (aap_url and aap_token, or aap_user/aap_password)."
+        quiet: true
+
+    - name: Project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/?name={{ aap_project | urlencode }}"
+      register: cs_project
+
+    - name: Sync the project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ cs_project.json.results[0].id }}/update/"
+        method: POST
+      register: cs_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ cs_sync.json.id }}/"
+      register: cs_sync_job
+      until: cs_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+      failed_when: cs_sync_job.json.status != 'successful'
+
+    - name: Inventory {{ cs_inventory }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/inventories/?name={{ cs_inventory | urlencode }}"
+      register: cs_inv
+      failed_when: cs_inv.json.count != 1
+
+    - name: Job template exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/?name={{ cs_template | urlencode }}"
+      register: cs_jt_q
+
+    # become stays off at template level: the play sets it.
+    - name: Create or update {{ cs_template }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ (cs_jt_q.json.results[0].id ~ '/') if cs_jt_q.json.count else '' }}"
+        method: "{{ 'PATCH' if cs_jt_q.json.count else 'POST' }}"
+        body:
+          name: "{{ cs_template }}"
+          description: "Point chronyd at the time server(s) you give, restart it, prove it synchronised (chronyc tracking)"
+          job_type: run
+          ask_job_type_on_launch: true
+          project: "{{ cs_project.json.results[0].id | int }}"
+          inventory: "{{ cs_inv.json.results[0].id | int }}"
+          playbook: playbooks/chrony-source.yml
+          become_enabled: false
+          survey_enabled: true
+          timeout: 3600
+      register: cs_jt
+      changed_when: true
+
+    - name: Survey
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ cs_jt.json.id }}/survey_spec/"
+        method: POST
+        body:
+          name: ""
+          description: ""
+          spec:
+            - question_name: Time server
+              question_description: DNS name or IP of the NTP server (several, comma-separated). It replaces every other source.
+              variable: chrony_source_server
+              type: text
+              required: true
+              min: 1
+              max: 512
+            - question_name: Systems
+              question_description: Inventory pattern of hosts (hosts without chrony and appliances are skipped)
+              variable: chrony_source_hosts
+              type: text
+              required: true
+              default: all
+      changed_when: true
+
+    - name: Credential {{ cs_machine_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ cs_machine_credential | urlencode }}"
+      register: cs_cred
+      failed_when: cs_cred.json.count != 1
+
+    - name: Attach {{ cs_machine_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/job_templates/{{ cs_jt.json.id }}/credentials/"
+        method: POST
+        body: {id: "{{ cs_cred.json.results[0].id }}"}
+        status_code: [204, 400]           # 400: already attached
+      changed_when: false
+
+    - name: Next
+      ansible.builtin.debug:
+        msg: >-
+          Launch "{{ cs_template }}": answer the time server (DNS name or IP), optionally narrow
+          the hosts, and pick job type Check first to see the config change.
