@@ -3,13 +3,33 @@
 # Grafana datasource and dashboard, Prometheus alert rules, and node_exporter's textfile
 # collector. Idempotent; rerun after changing the dashboard or the schema.
 #   ansible-playbook playbooks/deploy.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass -K
+# A play's hosts: line can't see inventory variables (only extra vars), so the store host is
+# picked inside the play from tideline_store_host, which AAP keeps in the inventory.
+- name: Store host is in the inventory
+  hosts: localhost
+  gather_facts: false
+  roles:
+    - tideline_defaults
+  tasks:
+    - name: The store host is an inventory host
+      ansible.builtin.assert:
+        that: tideline_store_host in groups['all']
+        fail_msg: >-
+          tideline_store_host is '{{ tideline_store_host }}', which isn't a host in this inventory
+          ({{ groups['all'] | join(', ') }}). Set it to the inventory name of the Postgres/Grafana host.
+        quiet: true
+
 - name: Deploy Tideline's database and dashboards
-  hosts: "{{ tideline_store_host | default('fedora') }}"
+  hosts: all
   gather_facts: false
   become: true
   roles:
     - tideline_defaults
   tasks:
+    - name: Only on the store host
+      ansible.builtin.meta: end_host
+      when: inventory_hostname != tideline_store_host
+
     - name: Inputs
       ansible.builtin.assert:
         that:
