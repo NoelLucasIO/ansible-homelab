@@ -21,7 +21,6 @@
         timeout: 20
       register: tl_vtm_versions
       when: tl_probe.type == 'vtm'
-      no_log: true
 
     - name: "VTM local information, {{ tl_app.name }}"
       ansible.builtin.uri:
@@ -35,7 +34,6 @@
         timeout: 20
       register: tl_vtm_info
       when: tl_probe.type == 'vtm'
-      no_log: true
 
     - name: "VTM version, {{ tl_app.name }}"
       ansible.builtin.set_fact:
@@ -55,7 +53,6 @@
         timeout: 20
       register: tl_nios
       when: tl_probe.type == 'nios'
-      no_log: true
 
     - name: "NIOS version, {{ tl_app.name }}"
       ansible.builtin.set_fact:
@@ -74,20 +71,19 @@
         timeout: 20
       register: tl_http
       when: tl_probe.type == 'http'
-      no_log: true
 
     # --- A command over SSH: command (needs Python on the target) or raw (network gear)
     - name: "Command via probe host, {{ tl_app.name }}"
       ansible.builtin.command:
         cmd: "{{ tl_probe.command }}"
-      delegate_to: "{{ tl_probe.host }}"
+      delegate_to: "{{ tl_probe.host | default('localhost') }}"   # templated even when the when: is false
       register: tl_cmd
       changed_when: false
       when: tl_probe.type == 'command'
 
     - name: "Raw via probe host, {{ tl_app.name }}"
       ansible.builtin.raw: "{{ tl_probe.command }}"
-      delegate_to: "{{ tl_probe.host }}"
+      delegate_to: "{{ tl_probe.host | default('localhost') }}"   # templated even when the when: is false
       register: tl_raw
       changed_when: false
       when: tl_probe.type == 'raw'
@@ -109,9 +105,7 @@
     - name: "Probe failed, using the catalog's installed version, {{ tl_app.name }}"
       ansible.builtin.set_fact:
         tl_live: ""
-        tl_perr: >-
-          {{ (ansible_failed_result.msg | default('probe failed'))[:300]
-             if 'password' not in (ansible_failed_result.msg | default('')) else 'probe failed (details hidden: no_log)' }}
+        tl_perr: "{{ (ansible_failed_result.msg | default('probe failed') | string) | truncate(300, true, '…', 0) }}"
 
 - name: "Compare, {{ tl_app.name }}"
   vars:

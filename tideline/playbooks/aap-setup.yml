@@ -38,7 +38,7 @@
     tl_secrets_credential: homelab-tideline
     tl_secrets_type: Tideline secrets
     tl_nios_credential: homelab-secrets       # nios_api_password, for the NIOS appliance probe
-    tl_vtm_credential: ""                     # a "vTM API" credential, for the vTM probe (optional)
+    tl_vtm_credential: ""                     # a "vTM API" credential for the vTM probe; empty: the first one found
     tl_firewall: "{{ opnsense_firewall | default('gw.example.com') }}"
     tl_fw_credential: "{{ tl_firewall.split('.')[0] }}-tideline-api"
     tl_schedule: "DTSTART;TZID=America/New_York:20261126T051300 RRULE:FREQ=HOURLY;INTERVAL=6"   # 05:13, 11:13, 17:13, 23:13
@@ -189,6 +189,18 @@
       no_log: true
 
     # --- Job templates --------------------------------------------------------------
+    - name: A "vTM API" credential, when tl_vtm_credential names none
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?credential_type__name={{ 'vTM API' | urlencode }}"
+      register: tl_vtm_q
+      when: tl_vtm_credential | length == 0
+
+    - name: Credential for the vTM appliance probe
+      ansible.builtin.set_fact:
+        tl_vtm_cred_name: >-
+          {{ tl_vtm_credential if tl_vtm_credential | length > 0
+             else ((tl_vtm_q.json.results | default([]) | map(attribute='name') | list) + [''])[0] }}
+
     - name: Job templates
       ansible.builtin.include_tasks: ../tasks/aap_template.yml
       loop:
@@ -205,7 +217,7 @@
           inventory: "{{ tl_inv_ids.homelab }}"
           playbook: tideline/playbooks/collect.yml
           timeout: 3600
-          credentials: ["{{ tl_machine_credential }}", "{{ tl_secrets_credential }}", "{{ tl_nios_credential }}", "{{ tl_vtm_credential }}"]
+          credentials: ["{{ tl_machine_credential }}", "{{ tl_secrets_credential }}", "{{ tl_nios_credential }}", "{{ tl_vtm_cred_name }}"]
           survey:
             name: ""
             description: ""
