@@ -41,6 +41,30 @@
     - name: Alloy
       when: install_alloy | bool
       block:
+        # A user-level Alloy (rootless quadlet) already owns the HTTP port on hosts
+        # like fedora and the workstation; a second, rootful Alloy would crash-loop.
+        - name: Read local accounts
+          ansible.builtin.getent:
+            database: passwd
+
+        - name: Look for user-level Alloy quadlets
+          ansible.builtin.stat:
+            path: "{{ item.value[4] }}/.config/containers/systemd/alloy.container"
+          loop: "{{ ansible_facts['getent_passwd'] | dict2items | selectattr('value.4', 'match', '^/home/') | list }}"
+          loop_control:
+            label: "{{ item.key }}"
+          register: alloy_user_quadlets
+
+        - name: Refuse hosts that already run their own Alloy
+          ansible.builtin.assert:
+            that: alloy_user_quadlet_paths | length == 0
+            fail_msg: >-
+              {{ inventory_hostname }} already runs a user-level Alloy ({{ alloy_user_quadlet_paths | join(', ') }}).
+              Remove it from the log_agents group, or remove that Alloy first.
+            quiet: true
+          vars:
+            alloy_user_quadlet_paths: "{{ alloy_user_quadlets.results | selectattr('stat.exists') | map(attribute='stat.path') | list }}"
+
         - name: Install podman (RHEL / Fedora)
           ansible.builtin.dnf:
             name: podman
@@ -114,6 +138,11 @@
         - name: Flush handlers so the readiness check sees the final config
           ansible.builtin.meta: flush_handlers
 
+        - name: Record the unit's restart count
+          ansible.builtin.systemd_service:
+            name: alloy.service
+          register: alloy_unit_before
+
         - name: Wait for Alloy to report ready
           ansible.builtin.uri:
             url: "http://127.0.0.1:{{ alloy_http_port }}/-/ready"
@@ -122,6 +151,15 @@
           retries: 12
           delay: 5
           until: alloy_ready.status == 200
+
+        # The port check alone can be answered by another Alloy on the host.
+        - name: Confirm alloy.service itself is running and not crash-looping
+          ansible.builtin.systemd_service:
+            name: alloy.service
+          register: alloy_unit
+          failed_when: >-
+            alloy_unit.status.ActiveState != 'active' or alloy_unit.status.SubState != 'running'
+            or alloy_unit.status.NRestarts | int > alloy_unit_before.status.NRestarts | int
 
     # ============================================================== Splunk UF
     - name: Detect a full Splunk Enterprise install (never put a UF beside it)
@@ -135,12 +173,26 @@
         - install_splunk_uf | bool
         - not splunk_enterprise.stat.exists
       block:
-        - name: Require download URL and admin password
+        - name: Check whether the forwarder is installed
+          ansible.builtin.stat:
+            path: "{{ splunk_uf_home }}/bin/splunk"
+          register: uf_binary
+
+        # etc/passwd appears once the admin account exists, i.e. after the first start
+        - name: Check whether the forwarder has been initialised
+          ansible.builtin.stat:
+            path: "{{ splunk_uf_home }}/etc/passwd"
+          register: uf_passwd
+
+        # Only a first install needs these; an empty survey answer arrives as None.
+        - name: Require download URL (first install) and admin password (first start)
           ansible.builtin.assert:
             that:
-              - splunk_uf_url is defined and splunk_uf_url | length > 0
-              - splunk_uf_admin_password is defined and splunk_uf_admin_password | length >= 8
-            fail_msg: Set splunk_uf_url and splunk_uf_admin_password (8+ chars) in the survey.
+              - uf_binary.stat.exists or (splunk_uf_url | default('', true) | length > 0)
+              - uf_passwd.stat.exists or (splunk_uf_admin_password | default('', true) | length >= 8)
+            fail_msg: >-
+              The forwarder isn't installed/initialised on {{ inventory_hostname }}: set splunk_uf_url
+              and splunk_uf_admin_password (8+ chars) in the survey or extra vars.
             quiet: true
 
         - name: Create the forwarder service account
@@ -170,12 +222,6 @@
             group: "{{ splunk_uf_user }}"
             mode: "0644"
           notify: Restart splunk forwarder
-
-        # etc/passwd appears once the admin account exists, i.e. after the first start
-        - name: Check whether the forwarder has been initialised
-          ansible.builtin.stat:
-            path: "{{ splunk_uf_home }}/etc/passwd"
-          register: uf_passwd
 
         - name: First start (runs before the unit file exists, so the splunk CLI never calls systemctl)
           when: not uf_passwd.stat.exists
