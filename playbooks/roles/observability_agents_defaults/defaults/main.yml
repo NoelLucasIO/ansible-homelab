@@ -9,7 +9,7 @@
 install_alloy: true
 install_splunk_uf: true
 
-alloy_image: docker.io/grafana/alloy:v1.21.0
+alloy_image: docker.io/grafana/alloy:v1.22.0
 alloy_loki_push_url: http://192.0.2.45:3500/loki/api/v1/push
 alloy_http_port: 12345
 alloy_journal_max_age: 12h
