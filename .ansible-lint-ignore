@@ -11,3 +11,4 @@ opnsense-backup/playbooks/roles/opnsense_backup_defaults/defaults/main.yml var-n
 backup/playbooks/roles/backup_defaults/defaults/main.yml var-naming[no-role-prefix]
 backup/playbooks/roles/backup_defaults/defaults/main.yml jinja[spacing]
 vtm-config/playbooks/roles/vtm_config_defaults/defaults/main.yml var-naming[no-role-prefix]
+tideline/playbooks/roles/tideline_defaults/defaults/main.yml var-naming[no-role-prefix]

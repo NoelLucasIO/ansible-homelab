@@ -1,0 +1,61 @@
+---
+# Create or update one job template (tl_jt) and attach its credentials; a credential that
+# doesn't exist yet is reported, not fatal.
+- name: Job template exists? {{ tl_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/?name={{ tl_jt.name | urlencode }}"
+  register: tl_jt_q
+
+- name: Create or update {{ tl_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ (tl_jt_q.json.results[0].id ~ '/') if tl_jt_q.json.count else '' }}"
+    method: "{{ 'PATCH' if tl_jt_q.json.count else 'POST' }}"
+    body:
+      name: "{{ tl_jt.name }}"
+      description: "{{ tl_jt.description }}"
+      job_type: run
+      project: "{{ tl_project_id | int }}"
+      inventory: "{{ tl_jt.inventory | int }}"
+      playbook: "{{ tl_jt.playbook }}"
+      become_enabled: "{{ tl_jt.become | default(false) }}"
+      ask_variables_on_launch: false
+      survey_enabled: "{{ tl_jt.survey is defined }}"
+      timeout: "{{ tl_jt.timeout | default(3600) }}"
+  register: tl_jt_set
+  changed_when: true
+
+- name: Survey for {{ tl_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ tl_jt_set.json.id }}/survey_spec/"
+    method: POST
+    body: "{{ tl_jt.survey }}"
+  when: tl_jt.survey is defined
+  changed_when: true
+
+- name: Credential ids for {{ tl_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/credentials/?name={{ item | urlencode }}"
+  loop: "{{ tl_jt.credentials | select | list }}"
+  register: tl_creds
+
+- name: Missing credentials
+  ansible.builtin.debug:
+    msg: "No credential '{{ item.item }}' yet; create it (or rerun with its secret) and rerun aap-setup.yml to attach it."
+  loop: "{{ tl_creds.results | selectattr('json.count', 'equalto', 0) | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Attach credentials to {{ tl_jt.name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/job_templates/{{ tl_jt_set.json.id }}/credentials/"
+    method: POST
+    body: { id: "{{ item.json.results[0].id }}" }
+    status_code: [204, 400]           # 400: already attached
+  loop: "{{ tl_creds.results | rejectattr('json.count', 'equalto', 0) | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  changed_when: false
+
+- name: Remember {{ tl_jt.name }}
+  ansible.builtin.set_fact:
+    tl_jt_ids: "{{ tl_jt_ids | default({}) | combine({tl_jt.key: tl_jt_set.json.id}) }}"

@@ -1,0 +1,35 @@
+---
+# Merge tl_inv_vars into an inventory's variables without dropping what other projects keep
+# there. Keys listed in tl_inv_seed_only are written only when absent, so values you edit in
+# AAP (the appliance catalog) survive a rerun.
+- name: Inventory {{ tl_inv_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/inventories/?name={{ tl_inv_name | urlencode }}"
+  register: tl_inv_q
+
+- name: Inventory exists, {{ tl_inv_name }}
+  ansible.builtin.assert:
+    that: tl_inv_q.json.count == 1
+    fail_msg: "No AAP inventory '{{ tl_inv_name }}' (homelab comes from ipam-vm/aap-setup.yml, network from opnsense-backup/aap-setup.yml)."
+    quiet: true
+
+- name: Merged variables, {{ tl_inv_name }}
+  vars:
+    tl_current: "{{ (tl_inv_q.json.results[0].variables | default('', true) | from_yaml) or {} }}"
+    tl_new: "{{ tl_inv_vars | dict2items | rejectattr('key', 'in', tl_current.keys() | intersect(tl_inv_seed_only | default([]))) | items2dict }}"
+  ansible.builtin.set_fact:
+    tl_inv_merged: "{{ tl_current | combine(tl_new) }}"
+    tl_inv_changed: "{{ tl_current | combine(tl_new) != tl_current }}"
+
+- name: Update variables, {{ tl_inv_name }}
+  ansible.builtin.uri:
+    url: "{{ aap_api }}/inventories/{{ tl_inv_q.json.results[0].id }}/"
+    method: PATCH
+    body:
+      variables: "{{ tl_inv_merged | to_nice_yaml(indent=2, width=200) }}"
+  when: tl_inv_changed | bool
+  changed_when: true
+
+- name: Remember {{ tl_inv_name }}
+  ansible.builtin.set_fact:
+    tl_inv_ids: "{{ tl_inv_ids | default({}) | combine({tl_inv_name: tl_inv_q.json.results[0].id}) }}"

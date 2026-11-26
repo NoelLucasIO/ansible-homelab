@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+apiVersion: 1
+datasources:
+  - name: Tideline
+    uid: tideline
+    type: grafana-postgresql-datasource
+    access: proxy
+    url: {{ tideline_pg_host }}:{{ tideline_pg_port }}
+    user: {{ tideline_grafana_db_user }}
+    editable: false
+    jsonData:
+      database: {{ tideline_db }}
+      sslmode: disable
+      postgresVersion: 1800
+      timescaledb: false
+    secureJsonData:
+      password: $__file{/etc/grafana/provisioning/datasources/tideline.pw}

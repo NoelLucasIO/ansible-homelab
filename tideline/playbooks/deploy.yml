@@ -1,0 +1,186 @@
+---
+# Tideline's home on the store host: database and roles on the existing PostgreSQL, the
+# Grafana datasource and dashboard, Prometheus alert rules, and node_exporter's textfile
+# collector. Idempotent; rerun after changing the dashboard or the schema.
+#   ansible-playbook playbooks/deploy.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass -K
+- name: Deploy Tideline's database and dashboards
+  hosts: "{{ tideline_store_host | default('fedora') }}"
+  gather_facts: false
+  become: true
+  roles:
+    - tideline_defaults
+  tasks:
+    - name: Inputs
+      ansible.builtin.assert:
+        that:
+          - tideline_owner != 'CHANGE_ME'
+          - tideline_grafana_db_password | default('') | length >= 16
+        fail_msg: >-
+          Set tideline_owner (site values) and tideline_grafana_db_password (AAP credential
+          "Tideline secrets", or vault.yml on the CLI; 16+ characters).
+        quiet: true
+
+    - name: Owner environment
+      ansible.builtin.include_tasks: ../tasks/owner_env.yml
+
+    # --- PostgreSQL -----------------------------------------------------------------
+    - name: Roles, database and schema
+      ansible.builtin.command:
+        cmd: podman exec -i {{ tideline_pg_container }} psql -U postgres -v ON_ERROR_STOP=1 -X -q
+        stdin: "{{ lookup('ansible.builtin.template', (playbook_dir | dirname) ~ '/templates/db.sql.j2') }}"
+        chdir: /
+      become: true
+      become_user: "{{ tideline_owner }}"
+      environment: "{{ tl_owner_env }}"
+      register: tl_db
+      changed_when: "'CREATE ROLE' in tl_db.stdout or 'CREATE DATABASE' in tl_db.stdout"
+      failed_when: false            # reported below with the password masked
+      no_log: true
+
+    - name: Database step failed (password masked)
+      ansible.builtin.fail:
+        msg: >-
+          rc={{ tl_db.rc }}: {{ (tl_db.stderr | default('') ~ ' ' ~ tl_db.stdout | default(''))
+            | replace(tideline_grafana_db_password, '***') | regex_replace("PASSWORD '(?:[^']|'')*'", "PASSWORD '***'") }}
+      when: tl_db.rc | default(1) != 0
+
+    # --- node_exporter textfile collector -------------------------------------------
+    - name: Textfile directory
+      ansible.builtin.file:
+        path: "{{ tideline_textfile_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Textfile collector for node_exporter
+      when: tideline_manage_textfile_collector | bool
+      block:
+        - name: Current node_exporter command line
+          ansible.builtin.command: systemctl show -p ExecStart --value {{ tideline_node_exporter_unit }}  # noqa: command-instead-of-module
+          register: tl_ne_exec
+          changed_when: false
+
+        - name: Its argv
+          ansible.builtin.set_fact:
+            tl_ne_argv: "{{ ((tl_ne_exec.stdout | regex_findall('argv\\[\\]=([^;]+);')) + ['']) | first | trim }}"
+
+        - name: Found it
+          ansible.builtin.assert:
+            that: tl_ne_argv is search('node_exporter')
+            fail_msg: "Couldn't read ExecStart of {{ tideline_node_exporter_unit }}: {{ tl_ne_exec.stdout }}"
+            quiet: true
+
+        # Same drop-in opnsense-backup writes; only added when the flag is missing.
+        - name: Drop-in with --collector.textfile.directory
+          ansible.builtin.copy:
+            dest: /etc/systemd/system/{{ tideline_node_exporter_unit }}.d/textfile.conf
+            mode: "0644"
+            content: |
+              # Managed by Ansible (tideline): adds the textfile collector, keeps every other flag.
+              [Service]
+              ExecStart=
+              ExecStart={{ tl_ne_argv }} --collector.textfile.directory={{ tideline_textfile_dir }}
+          when: "'--collector.textfile.directory' not in tl_ne_argv"
+          register: tl_ne_dropin
+
+        - name: Restart node_exporter
+          ansible.builtin.systemd_service:
+            name: "{{ tideline_node_exporter_unit }}"
+            state: restarted
+            daemon_reload: true
+          when: tl_ne_dropin is changed  # noqa: no-handler
+
+    - name: The textfile directory node_exporter actually reads
+      ansible.builtin.assert:
+        that: tl_ne_argv is not defined or '--collector.textfile.directory' not in tl_ne_argv
+              or ('--collector.textfile.directory=' ~ tideline_textfile_dir) in tl_ne_argv
+        fail_msg: >-
+          node_exporter already reads a different textfile directory
+          ({{ tl_ne_argv | default('') | regex_search('--collector.textfile.directory=\S+') }}); set tideline_textfile_dir to it.
+        quiet: true
+
+    # --- Prometheus -----------------------------------------------------------------
+    - name: Alert rules
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/observability/prometheus-rules.yml.j2"
+        dest: "{{ tideline_prom_rules_dir }}/tideline.yml"
+        owner: "{{ tideline_owner }}"
+        group: "{{ tideline_owner }}"
+        mode: "0644"
+      when: tideline_prom_rules_dir | length > 0
+      register: tl_rules
+
+    - name: Rules are valid
+      ansible.builtin.command:
+        cmd: podman exec {{ tideline_prom_container }} promtool check rules {{ tideline_prom_rules_container_dir }}/tideline.yml
+        chdir: /
+      become: true
+      become_user: "{{ tideline_owner }}"
+      environment: "{{ tl_owner_env }}"
+      changed_when: false
+      when: tl_rules is changed  # noqa: no-handler
+
+    - name: Reload Prometheus
+      ansible.builtin.uri:
+        url: "{{ tideline_prom_url }}/-/reload"
+        method: POST
+        status_code: [200]
+      when: tl_rules is changed  # noqa: no-handler
+
+    # --- Grafana --------------------------------------------------------------------
+    - name: Dashboard directory
+      ansible.builtin.file:
+        path: "{{ tideline_grafana_provisioning }}/dashboards/tideline"
+        state: directory
+        owner: "{{ tideline_owner }}"
+        group: "{{ tideline_owner }}"
+        mode: "0755"
+
+    - name: Datasource password (SELECT-only role; Grafana runs in a user namespace)
+      ansible.builtin.copy:
+        dest: "{{ tideline_grafana_provisioning }}/datasources/tideline.pw"
+        content: "{{ tideline_grafana_db_password }}"
+        owner: "{{ tideline_owner }}"
+        group: "{{ tideline_owner }}"
+        mode: "0644"
+      register: tl_graf_pw
+      no_log: true
+
+    - name: Datasource and dashboard provider
+      ansible.builtin.template:
+        src: "{{ playbook_dir | dirname }}/templates/observability/{{ item.src }}"
+        dest: "{{ tideline_grafana_provisioning }}/{{ item.dest }}"
+        owner: "{{ tideline_owner }}"
+        group: "{{ tideline_owner }}"
+        mode: "0644"
+      loop:
+        - {src: grafana-datasource.yaml.j2, dest: datasources/tideline.yaml}
+        - {src: grafana-dashboards.yaml.j2, dest: dashboards/tideline.yaml}
+      loop_control:
+        label: "{{ item.dest }}"
+      register: tl_graf_cfg
+
+    # Dashboard edits are picked up within 60 s; a new datasource or provider needs a restart.
+    - name: Dashboard
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/files/observability/tideline.json"
+        dest: "{{ tideline_grafana_provisioning }}/dashboards/tideline/tideline.json"
+        owner: "{{ tideline_owner }}"
+        group: "{{ tideline_owner }}"
+        mode: "0644"
+
+    - name: Restart Grafana to load the datasource/provider
+      ansible.builtin.systemd_service:
+        name: "{{ tideline_grafana_unit }}"
+        scope: user
+        state: restarted
+      become: true
+      become_user: "{{ tideline_owner }}"
+      environment: "{{ tl_owner_env }}"
+      when: tl_graf_pw is changed or tl_graf_cfg is changed  # noqa: no-handler
+
+    - name: Next
+      ansible.builtin.debug:
+        msg: >-
+          Database {{ tideline_db }} and the dashboard are in place. Run collect.yml (AAP workflow
+          "Tideline") to fill it; the dashboard is "Tideline: available updates" in the
+          {{ tideline_grafana_folder }} folder.

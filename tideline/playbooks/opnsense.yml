@@ -1,0 +1,153 @@
+---
+# Tideline for OPNsense: pending firmware/package updates through the API (no SSH on the
+# firewall), into the same database. Read-only apart from asking the firewall to check its
+# mirror, which is what the GUI's "Check for updates" does.
+# The API user needs the privilege "System: Firmware". That privilege could also start an
+# update, so the key lives only in AAP (credential "<host>-tideline-api").
+#   ansible-playbook playbooks/opnsense.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass
+- name: OPNsense updates
+  hosts: "{{ opnsense_hosts | default('opnsense') }}"
+  gather_facts: false
+  roles:
+    - tideline_defaults
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ opnsense_api_key }}"
+      password: "{{ opnsense_api_secret }}"
+      force_basic_auth: true
+      validate_certs: "{{ opnsense_validate_certs | bool }}"
+      timeout: "{{ opnsense_api_timeout | int }}"
+      return_content: true
+  tasks:
+    - name: API key given
+      ansible.builtin.assert:
+        that:
+          - opnsense_api_key | default('') | length > 0
+          - opnsense_api_secret | default('') | length > 0
+        fail_msg: Needs opnsense_api_key / opnsense_api_secret (AAP credential "<host>-tideline-api").
+        quiet: true
+
+    - name: Collect
+      block:
+        - name: Ask the firewall to check for updates
+          ansible.builtin.uri:
+            url: "{{ opnsense_api_url }}/api/core/firmware/check"
+            method: POST
+            body: "{}"
+            body_format: json
+          when: tideline_opnsense_check | bool
+          changed_when: false
+          no_log: true
+
+        - name: Wait for the check
+          ansible.builtin.uri:
+            url: "{{ opnsense_api_url }}/api/core/firmware/upgradestatus"
+          register: tl_fw_check
+          until: tl_fw_check.json.status | default('done') != 'running'
+          retries: 60
+          delay: 5
+          when: tideline_opnsense_check | bool
+          no_log: true
+
+        - name: Firmware status
+          ansible.builtin.uri:
+            url: "{{ opnsense_api_url }}/api/core/firmware/status"
+          register: tl_fw
+          no_log: true
+
+        # Newer releases nest the lists under product.product_check; older ones put them at the top.
+        - name: What the firewall reports
+          ansible.builtin.set_fact:
+            tl_fw_s: "{{ tl_fw.json.product.product_check | default({}) | combine(tl_fw.json) }}"
+            tl_fw_version: "{{ tl_fw.json.product.product_version | default(tl_fw.json.product_version | default('')) }}"
+
+        - name: Release notes for the new core version
+          ansible.builtin.uri:
+            url: "{{ opnsense_api_url }}/api/core/firmware/changelog/{{ tl_core.new_version }}"
+          register: tl_fw_log
+          failed_when: false
+          no_log: true
+          vars:
+            tl_core: "{{ (tl_fw_s.upgrade_packages | default([]) | selectattr('name', 'equalto', 'opnsense') | list + [{}]) | first }}"
+          when: tl_core.new_version is defined
+
+        - name: Rows
+          vars:
+            tl_series: "{{ tl_fw_version | regex_search('^\\d+\\.\\d+') or '' }}"
+            tl_rel_page: "https://docs.opnsense.org/releases/CE_{{ tl_series }}.html"
+            tl_core_text: >-
+              {{ ((tl_fw_log.json.html | default('')) | regex_replace('<(br|/p|/li)\s*/?>', '\n')
+                  | regex_replace('<[^>]+>', '') | regex_replace('\n{3,}', '\n\n') | trim)[:tideline_max_text | int] }}
+          ansible.builtin.set_fact:
+            tl_rows: >-
+              {{ tl_rows | default([]) + [{
+                   'source': 'opnsense', 'name': item.name, 'arch': '',
+                   'installed_version': item.current_version | default(none),
+                   'new_version': item.new_version | default(none),
+                   'repo': item.repository | default('OPNsense'),
+                   'summary': ('OPNsense core release' if item.name == 'opnsense'
+                               else ('plugin' if item.name is match('os-') else 'FreeBSD package')),
+                   'security': false,
+                   'advisory_type': 'core' if item.name in ['opnsense', 'opnsense-update', 'base', 'kernel'] else 'package',
+                   'advisory_title': ('OPNsense ' ~ item.new_version) if item.name == 'opnsense' else none,
+                   'advisory_text': tl_core_text if item.name == 'opnsense' and tl_core_text else none,
+                   'advisory_url': tl_rel_page if item.name in ['opnsense', 'base', 'kernel'] else none,
+                   'package_url': ('https://github.com/opnsense/plugins' if item.name is match('os-')
+                                   else 'https://www.freshports.org/search.php?stype=name&method=match&query=' ~ item.name),
+                   'changes_url': 'https://github.com/opnsense/changelog/tree/master/community/' ~ tl_series
+                                  if item.name == 'opnsense' else none}] }}
+          loop: "{{ (tl_fw_s.upgrade_packages | default([])) + (tl_fw_s.new_packages | default([]) | map('combine', {'current_version': none}) | list) }}"
+          loop_control:
+            label: "{{ item.name }}"
+
+        - name: Major upgrade offered
+          ansible.builtin.set_fact:
+            tl_rows: >-
+              {{ tl_rows | default([]) + [{
+                   'source': 'opnsense', 'name': 'opnsense (major upgrade)', 'arch': '',
+                   'installed_version': tl_fw_version, 'new_version': tl_fw_s.upgrade_major_version,
+                   'repo': 'OPNsense', 'summary': 'Major release; needs a planned upgrade and reboot',
+                   'advisory_type': 'major', 'advisory_title': 'OPNsense ' ~ tl_fw_s.upgrade_major_version,
+                   'advisory_text': (tl_fw_s.upgrade_major_message | default('') | regex_replace('<[^>]+>', ''))[:tideline_max_text | int] or none,
+                   'advisory_url': 'https://docs.opnsense.org/releases/CE_' ~ tl_fw_s.upgrade_major_version ~ '.html',
+                   'changes_url': 'https://github.com/opnsense/changelog/tree/master/community/' ~ tl_fw_s.upgrade_major_version}] }}
+          when: tl_fw_s.upgrade_major_version | default('') | length > 0
+
+        - name: Entry
+          ansible.builtin.set_fact:
+            tl_entry:
+              host: "{{ inventory_hostname }}"
+              kind: firewall
+              ok: "{{ tl_fw_s.status | default('') != 'error' }}"
+              os: OPNsense
+              os_version: "{{ tl_fw_version }}"
+              kernel: "{{ tl_fw.json.product.product_version | default(none) }}"
+              managers: [pkg]
+              sources_ok: [opnsense]
+              reboot_required: "{{ (tl_fw_s.needs_reboot | default('0') | string) == '1' }}"
+              errors: "{{ [tl_fw_s.status_msg] if tl_fw_s.status | default('') == 'error' else [] }}"
+              updates: "{{ tl_rows | default([]) }}"
+      rescue:
+        - name: Firewall didn't answer
+          ansible.builtin.set_fact:
+            tl_entry:
+              host: "{{ inventory_hostname }}"
+              kind: firewall
+              ok: false
+              errors: ["API: {{ (ansible_failed_result.msg | default('failed'))[:300] }}"]
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} {{ tl_fw_version | default('') }}:
+          {{ tl_entry.updates | default([]) | length }} package updates{{
+          ', major upgrade to ' ~ tl_fw_s.upgrade_major_version if tl_fw_s.upgrade_major_version | default('') | length > 0 else '' }}{{
+          '; ' ~ tl_entry.errors | join(' | ') if tl_entry.errors | length > 0 else '' }}
+
+    - name: Into PostgreSQL, metrics out
+      vars:
+        tideline_payload:
+          hosts: "{{ ansible_play_hosts | map('extract', hostvars, 'tl_entry') | list }}"
+          keep_days: "{{ tideline_keep_days | int }}"
+      ansible.builtin.include_tasks: ../tasks/ingest.yml
+      run_once: true

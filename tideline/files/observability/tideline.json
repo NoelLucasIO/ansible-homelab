@@ -1,0 +1,1457 @@
+{
+  "uid": "tideline",
+  "title": "Tideline: available updates",
+  "description": "What can be updated on each system: installed vs available version, when it was installed, and the advisory or release notes behind it.",
+  "tags": [
+    "tideline",
+    "updates",
+    "security"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "refresh": "15m",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "graphTooltip": 1,
+  "links": [],
+  "templating": {
+    "list": [
+      {
+        "name": "host",
+        "label": "System",
+        "type": "query",
+        "datasource": {
+          "type": "grafana-postgresql-datasource",
+          "uid": "tideline"
+        },
+        "query": "SELECT host FROM tideline.hosts ORDER BY host",
+        "definition": "SELECT host FROM tideline.hosts ORDER BY host",
+        "multi": true,
+        "includeAll": true,
+        "refresh": 1,
+        "sort": 1,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "custom",
+        "query": "dnf,pacman,aur,apt,flatpak,fwupd,container,opnsense,appliance",
+        "multi": true,
+        "includeAll": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": []
+      },
+      {
+        "name": "scope",
+        "label": "Show",
+        "type": "custom",
+        "query": "All updates : all, Security only : security",
+        "current": {
+          "text": "All updates",
+          "value": "all"
+        },
+        "options": []
+      },
+      {
+        "name": "q",
+        "label": "Search (package, advisory, CVE)",
+        "type": "textbox",
+        "query": "",
+        "current": {
+          "text": "",
+          "value": ""
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Pending updates",
+      "description": "Open updates matching the filters above.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT count(*) AS \"Pending\",\n  count(*) FILTER (WHERE u.security) AS \"Security\",\n  count(*) FILTER (WHERE u.security AND u.severity IN ('critical', 'high')) AS \"Critical / high\",\n  count(DISTINCT u.host) AS \"Systems with updates\"\nFROM tideline.updates u\nWHERE u.resolved_at IS NULL AND u.host IN (${host:sqlstring}) AND u.source IN (${source:sqlstring}) AND ('${scope}' = 'all' OR u.security) AND (${q:sqlstring} = '' OR u.name ILIKE '%' || ${q:sqlstring} || '%' OR coalesce(u.advisory_title, '') ILIKE '%' || ${q:sqlstring} || '%' OR coalesce(u.advisory_id, '') ILIKE '%' || ${q:sqlstring} || '%' OR array_to_string(u.cves, ' ') ILIKE '%' || ${q:sqlstring} || '%')"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pending"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "blue",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Systems with updates"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "blue",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Security"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Critical / high"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Health",
+      "description": "Stale: no complete collection in 30 hours. Errors: a source failed (its last known rows are kept).",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT\n  (SELECT count(*) FROM tideline.hosts WHERE reboot_required AND host IN (${host:sqlstring})) AS \"Reboot needed\",\n  (SELECT coalesce(max(extract(day FROM now() - u.first_seen)), 0)::int FROM tideline.updates u\n    WHERE u.resolved_at IS NULL AND u.security AND u.host IN (${host:sqlstring})) AS \"Oldest security update (days)\",\n  (SELECT count(*) FROM tideline.hosts WHERE (last_success IS NULL OR last_success < now() - interval '30 hours')\n    AND host IN (${host:sqlstring})) AS \"Stale systems\",\n  (SELECT count(*) FROM tideline.hosts WHERE jsonb_array_length(last_errors) > 0 AND host IN (${host:sqlstring})) AS \"With errors\"\n"
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "orientation": "horizontal",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reboot needed"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Oldest security update (days)"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 7
+                    },
+                    {
+                      "color": "red",
+                      "value": 14
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Stale systems"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "With errors"
+            },
+            "properties": [
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 5
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Systems",
+      "description": "One row per system. Reboot: running kernel or libraries older than what's installed.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT h.host AS \"System\", h.kind AS \"Kind\", concat_ws(' ', h.os, h.os_version) AS \"OS\",\n  count(u.id) AS \"Pending\",\n  count(u.id) FILTER (WHERE u.security) AS \"Security\",\n  count(u.id) FILTER (WHERE u.security AND u.severity IN ('critical', 'high')) AS \"Crit/High\",\n  min(u.first_seen) AS \"Oldest pending\",\n  CASE WHEN h.reboot_required THEN 'yes' WHEN h.reboot_required IS NULL THEN '' ELSE 'no' END AS \"Reboot\",\n  h.kernel AS \"Kernel / build\",\n  array_to_string(h.managers, ', ') AS \"Checked\",\n  h.last_success AS \"Last success\",\n  (SELECT string_agg(e, ' | ') FROM jsonb_array_elements_text(h.last_errors) e) AS \"Errors\"\nFROM tideline.hosts h\nLEFT JOIN tideline.updates u ON u.host = h.host AND u.resolved_at IS NULL\nWHERE h.host IN (${host:sqlstring})\nGROUP BY h.host\nORDER BY \"Crit/High\" DESC, \"Security\" DESC, \"Pending\" DESC, h.host"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last success"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Oldest pending"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reboot"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "yes": {
+                        "color": "orange",
+                        "index": 0
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Crit/High"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Security"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "text",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Errors"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Pending updates",
+      "description": "Package links to its distro page; Advisory to the erratum, security advisory or release notes; Notes to the package's change history. Hover a cell and use Inspect to read long text.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT u.host AS \"System\", u.source AS \"Source\", u.name AS \"Package\",\n  u.installed_version AS \"Installed\", u.installed_at AS \"Installed on\", u.new_version AS \"Available\",\n  CASE WHEN u.security THEN coalesce(u.severity, 'unrated') END AS \"Severity\",\n  u.advisory_type AS \"Type\",\n  coalesce(u.advisory_id, CASE WHEN u.advisory_url IS NOT NULL THEN 'release notes' END) AS \"Advisory\",\n  coalesce(u.advisory_title, u.summary) AS \"Notes\",\n  u.first_seen AS \"Pending since\", u.repo AS \"Repo\",\n  u.advisory_url, u.package_url, u.changes_url\nFROM tideline.updates u\nWHERE u.resolved_at IS NULL AND u.host IN (${host:sqlstring}) AND u.source IN (${source:sqlstring}) AND ('${scope}' = 'all' OR u.security) AND (${q:sqlstring} = '' OR u.name ILIKE '%' || ${q:sqlstring} || '%' OR coalesce(u.advisory_title, '') ILIKE '%' || ${q:sqlstring} || '%' OR coalesce(u.advisory_id, '') ILIKE '%' || ${q:sqlstring} || '%' OR array_to_string(u.cves, ' ') ILIKE '%' || ${q:sqlstring} || '%')\nORDER BY CASE u.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE CASE WHEN u.security THEN 4 ELSE 5 END END, u.host, u.source, u.name\nLIMIT 5000"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "dark-red",
+                        "index": 0
+                      },
+                      "high": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "medium": {
+                        "color": "yellow",
+                        "index": 2
+                      },
+                      "low": {
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "unrated": {
+                        "color": "purple",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Package"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Package page",
+                    "url": "${__data.fields.package_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Advisory"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Advisory / release notes",
+                    "url": "${__data.fields.advisory_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Notes"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Changes",
+                    "url": "${__data.fields.changes_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Installed on"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Pending since"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Notes"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 420
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "advisory_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "package_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "changes_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 15
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Advisories and release notes",
+      "description": "One row per advisory (Fedora/RHEL errata, Arch AVGs), Debian changelog entry or upstream release. Description is the advisory's own text.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT coalesce(u.advisory_id, u.name) AS \"Advisory\",\n  (array_agg(u.advisory_type ORDER BY CASE u.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE CASE WHEN u.security THEN 4 ELSE 5 END END))[1] AS \"Type\",\n  (array_agg(CASE WHEN u.security THEN coalesce(u.severity, 'unrated') END ORDER BY CASE u.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE CASE WHEN u.security THEN 4 ELSE 5 END END))[1] AS \"Severity\",\n  max(u.advisory_title) AS \"Title\",\n  string_agg(DISTINCT u.host, ', ') AS \"Systems\",\n  count(DISTINCT u.name) AS \"Packages\",\n  max(u.advisory_issued) AS \"Issued\",\n  string_agg(DISTINCT c.cve, ' ') AS \"CVEs\",\n  max(u.advisory_text) AS \"Description\",\n  max(u.advisory_url) AS advisory_url\nFROM tideline.updates u\nLEFT JOIN LATERAL unnest(u.cves) AS c(cve) ON true\nWHERE u.resolved_at IS NULL AND u.host IN (${host:sqlstring}) AND u.source IN (${source:sqlstring}) AND ('${scope}' = 'all' OR u.security) AND (${q:sqlstring} = '' OR u.name ILIKE '%' || ${q:sqlstring} || '%' OR coalesce(u.advisory_title, '') ILIKE '%' || ${q:sqlstring} || '%' OR coalesce(u.advisory_id, '') ILIKE '%' || ${q:sqlstring} || '%' OR array_to_string(u.cves, ' ') ILIKE '%' || ${q:sqlstring} || '%') AND (u.advisory_id IS NOT NULL OR u.advisory_text IS NOT NULL)\nGROUP BY coalesce(u.advisory_id, u.name)\nORDER BY min(CASE u.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE CASE WHEN u.security THEN 4 ELSE 5 END END), max(u.advisory_issued) DESC NULLS LAST\nLIMIT 2000"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "dark-red",
+                        "index": 0
+                      },
+                      "high": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "medium": {
+                        "color": "yellow",
+                        "index": 2
+                      },
+                      "low": {
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "unrated": {
+                        "color": "purple",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Advisory"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Open advisory / release notes",
+                    "url": "${__data.fields.advisory_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Issued"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIsoNoDateIfToday"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Description"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 640
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Title"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 300
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "CVEs"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "advisory_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 14
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Appliances",
+      "description": "From the tideline_appliances catalog you edit (AAP inventory variables). From = live when a probe read the running version, manual otherwise.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT name AS \"Appliance\", product AS \"Product\", vendor AS \"Vendor\",\n  installed_version AS \"Installed\", installed_source AS \"From\", installed_on AS \"Installed on\",\n  latest_version AS \"Latest\", latest_released AS \"Released\",\n  CASE WHEN update_available THEN 'update available' WHEN NOT update_available THEN 'current' ELSE 'unknown' END AS \"Status\",\n  notes AS \"Notes\", probe_error AS \"Probe error\", checked_at AS \"Checked\",\n  release_notes_url, download_url\nFROM tideline.appliances\nORDER BY update_available DESC NULLS LAST, name"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Status"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "update available": {
+                        "color": "orange",
+                        "index": 0
+                      },
+                      "current": {
+                        "color": "green",
+                        "index": 1
+                      },
+                      "unknown": {
+                        "color": "purple",
+                        "index": 2
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Latest"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Release notes",
+                    "url": "${__data.fields.release_notes_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Product"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Downloads",
+                    "url": "${__data.fields.download_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Checked"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Installed on"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIsoNoDateIfToday"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Released"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIsoNoDateIfToday"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Notes"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 360
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Probe error"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto",
+                  "wrapText": true
+                }
+              },
+              {
+                "id": "custom.inspect",
+                "value": true
+              },
+              {
+                "id": "custom.width",
+                "value": 240
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "release_notes_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "download_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 42,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pending updates over time",
+      "description": "Open updates at each point, from Tideline's history (starts when Tideline first ran).",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "time_series",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT d AS time, u.host AS metric, count(*) AS value\nFROM (SELECT generate_series(date_trunc('hour', $__timeFrom()::timestamptz), least($__timeTo()::timestamptz, now()), interval '6 hours')\n      UNION SELECT least($__timeTo()::timestamptz, now())) AS s(d)\nJOIN tideline.updates u ON u.first_seen <= d AND (u.resolved_at IS NULL OR u.resolved_at > d)\nWHERE u.host IN (${host:sqlstring}) AND u.source IN (${source:sqlstring}) AND ('${scope}' = 'all' OR u.security)\nGROUP BY 1, 2\nORDER BY 1"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "fillOpacity": 10,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          },
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 0,
+        "y": 50,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Applied or withdrawn (in the time range)",
+      "description": "Updates a later run no longer offered: almost always because they were installed.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "grafana-postgresql-datasource",
+            "uid": "tideline"
+          },
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT u.resolved_at AS \"Resolved\", u.host AS \"System\", u.source AS \"Source\",\n  u.name AS \"Package\", u.installed_version AS \"From\", u.new_version AS \"To\",\n  CASE WHEN u.security THEN coalesce(u.severity, 'unrated') END AS \"Severity\",\n  u.advisory_id AS \"Advisory\", u.first_seen AS \"First seen\", u.advisory_url\nFROM tideline.updates u\nWHERE u.resolved_at BETWEEN $__timeFrom() AND $__timeTo()\n  AND u.host IN (${host:sqlstring}) AND u.source IN (${source:sqlstring})\nORDER BY u.resolved_at DESC\nLIMIT 2000"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        },
+        "sortBy": []
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true,
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Severity"
+            },
+            "properties": [
+              {
+                "id": "mappings",
+                "value": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "critical": {
+                        "color": "dark-red",
+                        "index": 0
+                      },
+                      "high": {
+                        "color": "orange",
+                        "index": 1
+                      },
+                      "medium": {
+                        "color": "yellow",
+                        "index": 2
+                      },
+                      "low": {
+                        "color": "blue",
+                        "index": 3
+                      },
+                      "unrated": {
+                        "color": "purple",
+                        "index": 4
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background",
+                  "mode": "basic"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Advisory"
+            },
+            "properties": [
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "Advisory",
+                    "url": "${__data.fields.advisory_url}",
+                    "targetBlank": true
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Resolved"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "First seen"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "advisory_url"
+            },
+            "properties": [
+              {
+                "id": "custom.hidden",
+                "value": true
+              }
+            ]
+          }
+        ]
+      },
+      "id": 8,
+      "gridPos": {
+        "x": 0,
+        "y": 58,
+        "w": 24,
+        "h": 9
+      },
+      "datasource": {
+        "type": "grafana-postgresql-datasource",
+        "uid": "tideline"
+      }
+    }
+  ]
+}

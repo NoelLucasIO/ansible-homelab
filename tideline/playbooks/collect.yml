@@ -1,0 +1,184 @@
+---
+# Tideline: what can be updated, everywhere. Read-only: nothing is upgraded.
+#   1. Linux hosts: the collector (files/tideline_collect.py) reports dnf/pacman/AUR/apt/
+#      flatpak/fwupd updates and newer container images, with advisories and release notes.
+#   2. Vendor appliances: the tideline_appliances catalog, probed live where it can be.
+#   3. Everything goes into PostgreSQL on the store host; Prometheus metrics are rewritten.
+# The firewall has its own playbook (opnsense.yml) because it lives in another inventory.
+#
+#   ansible-playbook playbooks/collect.yml -i inventory.yml -e @../site-vars.yml --ask-vault-pass -K
+- name: Collect available updates from Linux hosts
+  hosts: "{{ tideline_hosts | default('all') }}"
+  gather_facts: false
+  become: true
+  roles:
+    - tideline_defaults
+  tasks:
+    - name: Part of this run
+      ansible.builtin.set_fact:
+        tideline_in_run: true
+        tideline_skipped: >-
+          {{ tideline_skip | default(false) | bool
+             or inventory_hostname in (tideline_appliances | map(attribute='name') | list) }}
+
+    - name: Left out (tideline_skip, or an appliance in the catalog)
+      ansible.builtin.meta: end_host
+      when: tideline_skipped | bool
+
+    - name: Reachable?
+      ansible.builtin.ping:
+      become: false
+      ignore_unreachable: true
+      register: tl_ping
+
+    - name: Unreachable
+      ansible.builtin.set_fact:
+        tideline_entry: {host: "{{ inventory_hostname }}", kind: linux, ok: false, errors: ["unreachable: {{ tl_ping.msg | default('') }}"]}
+      when: tl_ping.unreachable | default(false)
+
+    - name: Stop here when unreachable
+      ansible.builtin.meta: end_host
+      when: tl_ping.unreachable | default(false)
+
+    - name: Which tools are here
+      ansible.builtin.shell: |
+        for t in python3 pacman checkupdates; do command -v $t >/dev/null && echo $t; done; true
+      args:
+        executable: /bin/sh
+      register: tl_tools
+      changed_when: false
+
+    - name: Python 3 is required
+      ansible.builtin.assert:
+        that: "'python3' in tl_tools.stdout_lines"
+        fail_msg: "{{ inventory_hostname }} has no python3 (the collector needs only the standard library)."
+        quiet: true
+
+    - name: Arch/CachyOS - checkupdates (pacman-contrib)
+      community.general.pacman:
+        name: pacman-contrib
+        state: present
+      when:
+        - tideline_install_prereqs | bool
+        - "'pacman' in tl_tools.stdout_lines"
+        - "'checkupdates' not in tl_tools.stdout_lines"
+
+    - name: Collector directory
+      ansible.builtin.file:
+        path: "{{ tideline_collector_path | dirname }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Collector
+      ansible.builtin.copy:
+        src: "{{ playbook_dir | dirname }}/files/tideline_collect.py"
+        dest: "{{ tideline_collector_path }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Collect (read-only; the first metadata refresh can take minutes)
+      ansible.builtin.command:
+        argv: >-
+          {{ ['/usr/bin/python3', tideline_collector_path,
+              '--max-text', tideline_max_text | string,
+              '--apt-changelogs', tideline_apt_changelogs | string,
+              '--container-users', tideline_container_users | join(','),
+              '--container-sources', tideline_container_sources | to_json]
+             + ([] if tideline_refresh | bool else ['--no-refresh'])
+             + ([] if tideline_aur | bool else ['--no-aur'])
+             + ([] if tideline_flatpak | bool else ['--no-flatpak'])
+             + ([] if tideline_fwupd | bool else ['--no-fwupd'])
+             + ([] if tideline_containers | bool else ['--no-containers'])
+             + (['--allow-prerelease'] if tideline_allow_prerelease | bool else []) }}
+        chdir: /
+      environment:
+        TIDELINE_GITHUB_TOKEN: "{{ tideline_github_token | default('') }}"
+      async: "{{ tideline_collect_timeout | int }}"
+      poll: 10
+      register: tl_run
+      changed_when: false
+      failed_when: false
+
+    - name: Result
+      ansible.builtin.set_fact:
+        tideline_entry: >-
+          {{ (tl_run.stdout | from_json) | combine({'host': inventory_hostname, 'kind': 'linux', 'ok': true})
+             if (tl_run.rc | default(1)) == 0 and (tl_run.stdout | default('')) is match('\s*\{')
+             else {'host': inventory_hostname, 'kind': 'linux', 'ok': false,
+                   'errors': ['collector failed (rc=' ~ (tl_run.rc | default('?')) ~ '): '
+                              ~ ((tl_run.stderr | default(tl_run.msg | default('')))[-600:])]} }}
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ tideline_entry.updates | default([]) | length }} updates
+          ({{ tideline_entry.updates | default([]) | selectattr('security') | list | length }} security)
+          from {{ tideline_entry.sources_ok | default([]) | join(', ') or 'nothing' }}{{
+          '; reboot needed' if tideline_entry.reboot_required | default(false) else '' }}{{
+          '; errors: ' ~ (tideline_entry.errors | join(' | ')) if tideline_entry.errors | default([]) | length > 0 else '' }}
+
+- name: Vendor appliances
+  hosts: localhost              # implicit localhost: local connection, delegation keeps its own
+  gather_facts: false
+  roles:
+    - tideline_defaults
+  tasks:
+    - name: Catalog entries are named
+      ansible.builtin.assert:
+        that: tideline_appliances | rejectattr('name', 'defined') | list | length == 0
+        fail_msg: Every tideline_appliances entry needs a name.
+        quiet: true
+
+    - name: Probe and compare each appliance
+      ansible.builtin.include_tasks: ../tasks/appliance.yml
+      # through JSON: unquoted YAML dates (installed_on: 2026-01-15) become plain strings
+      loop: "{{ tideline_appliances | to_json | from_json }}"
+      loop_control:
+        loop_var: tl_app
+        label: "{{ tl_app.name }}"
+
+- name: Store the results
+  hosts: localhost              # implicit localhost: local connection, delegation keeps its own
+  gather_facts: false
+  roles:
+    - tideline_defaults
+  tasks:
+    - name: Linux results (hosts this run reached, or tried to)
+      ansible.builtin.set_fact:
+        tl_hosts: >-
+          {{ tl_hosts | default([]) + [hostvars[item].tideline_entry | default({'host': item, 'kind': 'linux', 'ok': false,
+             'errors': ['no result: the play failed on this host before the collector ran (see the job output)']})] }}
+      loop: "{{ groups['all'] }}"
+      loop_control:
+        label: "{{ item }}"
+      when:
+        - hostvars[item].tideline_in_run | default(false)
+        - not hostvars[item].tideline_skipped | default(false)
+
+    - name: Appliances as systems (an open update when the catalog's latest is newer)
+      ansible.builtin.set_fact:
+        tl_hosts: >-
+          {{ tl_hosts | default([]) + [{'host': item.name, 'kind': 'appliance', 'ok': true,
+             'os': item.product, 'os_version': item.installed_version, 'managers': ['catalog'],
+             'sources_ok': ['appliance'], 'errors': [item.probe_error] if item.probe_error else [],
+             'updates': ([{'source': 'appliance', 'name': item.product or item.name, 'arch': '',
+                           'installed_version': item.installed_version, 'new_version': item.latest_version,
+                           'repo': item.vendor, 'summary': item.notes, 'advisory_type': 'appliance',
+                           'advisory_url': item.release_notes_url, 'package_url': item.download_url,
+                           'changes_url': item.release_notes_url}] if item.update_available else [])}] }}
+      loop: "{{ tl_appliances | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Payload
+      ansible.builtin.set_fact:
+        tideline_payload:
+          hosts: "{{ tl_hosts | default([]) }}"
+          appliances: "{{ tl_appliances | default([]) }}"
+          keep_days: "{{ tideline_keep_days | int }}"
+
+    - name: Into PostgreSQL, metrics out
+      ansible.builtin.include_tasks: ../tasks/ingest.yml

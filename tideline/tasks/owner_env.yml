@@ -1,0 +1,14 @@
+---
+# The rootless Quadlets on the store host (Postgres, Prometheus, Grafana) belong to
+# tideline_owner; commands that talk to them run as that user, with its runtime directory.
+- name: Owner of the store host's Quadlets
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ tideline_owner }}"
+  delegate_to: "{{ tideline_store_host }}"
+
+- name: Owner environment
+  ansible.builtin.set_fact:
+    tl_owner_env:
+      XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[tideline_owner][1] }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[tideline_owner][1] }}/bus"

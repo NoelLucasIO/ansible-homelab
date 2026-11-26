@@ -1,0 +1,63 @@
+---
+# Copy to inventory.yml (git-ignored) for CLI runs. In AAP: inventories "homelab" (Linux
+# hosts) and "network" (the firewall); aap-setup.yml puts the tideline_* values there.
+all:
+  hosts:
+    fedora.example.com:                       # store host (Postgres, Prometheus, Grafana) and a client
+      ansible_python_interpreter: /usr/bin/python3
+      tideline_container_users: [root, CHANGE_ME]   # root plus rootless Quadlet owners
+    workstation.example.com:
+      tideline_container_users: [root, CHANGE_ME]
+    rhel-vm.example.com:
+    debian-vm.example.com:
+    appliance-vm.example.com:
+      tideline_skip: true                     # vendor appliance: never apt/dnf-update it by hand
+  vars:
+    tideline_store_host: fedora.example.com
+    tideline_owner: CHANGE_ME
+    tideline_textfile_dir: /var/lib/node_exporter/textfile_collector
+    tideline_prom_rules_dir: /srv/prometheus/config/rules.d
+    tideline_prom_url: http://127.0.0.1:9090
+    tideline_grafana_provisioning: /srv/grafana-provisioning
+    # The appliance catalog: yours to edit. "installed" is replaced by a probe's answer.
+    tideline_appliances:
+      - name: vtm01.example.com
+        product: Ivanti vTM
+        vendor: Ivanti
+        installed: "22.9r7"
+        installed_on: 2026-01-15
+        latest: "22.9r7"
+        latest_released: 2025-12-01
+        release_notes: https://help.ivanti.com/ps/help/en_US/VTM/22.x/relnotes.htm
+        notes: Developer-mode licence
+        probe: {type: vtm, url: "https://vtm01.example.com:9070"}
+      - name: nios.example.com
+        product: Infoblox NIOS
+        vendor: Infoblox
+        installed: "9.1.0"
+        latest: "9.1.0"
+        probe: {type: nios}
+      - name: hcp01.example.com
+        product: Hitachi Content Platform
+        vendor: Hitachi Vantara
+        installed: "9.7.0"
+        latest: "9.7.0"
+        notes: Single-node lab VM
+      - name: switch01.example.com
+        product: Junos (EX2200-C)
+        vendor: Juniper
+        installed: "12.3R12-S21"
+        latest: "12.3R12-S21"
+        notes: End of life; last release for the platform
+        # probe: {type: raw, host: switch01.example.com, command: "show version", regex: 'Junos: (\S+)'}
+
+# Firewall: a separate inventory ("network"), reached through its API only.
+# network.yml:
+#   all:
+#     children:
+#       opnsense:
+#         hosts:
+#           gw.example.com: {ansible_connection: local}
+#     vars:
+#       tideline_store_host: fedora.example.com
+#       tideline_owner: CHANGE_ME

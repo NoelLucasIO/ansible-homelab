@@ -1,0 +1,99 @@
+---
+# Defaults only (lowest precedence): inventory values, AAP's included, override them.
+# Addresses use RFC 5737 documentation ranges and example.com.
+
+# --- Which systems --------------------------------------------------------------------
+tideline_hosts: all                         # Linux hosts to collect from (inventory pattern)
+# Per host: tideline_skip: true leaves a host out (e.g. a vendor appliance that happens to be
+# in the inventory). Hosts named in tideline_appliances are left out automatically.
+
+# --- Collector (runs on each Linux host, read-only) -----------------------------------
+tideline_collector_path: /usr/local/libexec/tideline/collect.py
+tideline_collect_timeout: 1800              # seconds; async, so long dnf/apt refreshes don't break SSH
+tideline_refresh: true                      # refresh package metadata first (dnf makecache, apt-get update)
+tideline_max_text: 4000                     # advisory / release-note text kept per update (characters)
+tideline_apt_changelogs: 40                 # top changelog entry for up to N source packages per host
+tideline_aur: true                          # Arch: foreign packages vs the AUR (VCS -git packages skipped)
+tideline_flatpak: true
+tideline_fwupd: true                        # device firmware from LVFS
+tideline_containers: true                   # running Podman containers vs their registry
+tideline_container_users: [root]            # per host, add rootless owners: [root, alice]
+tideline_allow_prerelease: false            # newer container tags: ignore rc/beta/alpha
+tideline_install_prereqs: true              # pacman-contrib (checkupdates) on Arch hosts; nothing else
+# Images without an org.opencontainers.image.source label: where their release notes live.
+# Keys are registry/repository (docker.io/library/... for official images).
+tideline_container_sources:
+  docker.io/apache/kafka: https://github.com/apache/kafka
+  docker.io/clickhouse/clickhouse-server: https://github.com/ClickHouse/ClickHouse
+  docker.io/grafana/grafana: https://github.com/grafana/grafana
+  docker.io/grafana/grafana-enterprise: https://github.com/grafana/grafana
+  docker.io/grafana/loki: https://github.com/grafana/loki
+  docker.io/grafana/alloy: https://github.com/grafana/alloy
+  docker.io/jaegertracing/jaeger: https://github.com/jaegertracing/jaeger
+  docker.io/jc21/nginx-proxy-manager: https://github.com/NginxProxyManager/nginx-proxy-manager
+  docker.io/library/nginx: https://github.com/nginx/nginx
+  docker.io/opensearchproject/opensearch: https://github.com/opensearch-project/OpenSearch
+  docker.io/opensearchproject/opensearch-dashboards: https://github.com/opensearch-project/OpenSearch-Dashboards
+  docker.io/opensearchproject/logstash-oss-with-opensearch-output-plugin: https://github.com/elastic/logstash
+  docker.io/smallstep/step-ca: https://github.com/smallstep/certificates
+  docker.io/valkey/valkey: https://github.com/valkey-io/valkey
+  docker.io/dpage/pgadmin4: https://github.com/pgadmin-org/pgadmin4
+  docker.io/linuxserver/qbittorrent: https://github.com/linuxserver/docker-qbittorrent
+  docker.elastic.co/beats/filebeat-oss: https://github.com/elastic/beats
+  codeberg.org/forgejo/forgejo: https://codeberg.org/forgejo/forgejo
+  quay.io/prometheus/prometheus: https://github.com/prometheus/prometheus
+  quay.io/prometheus/alertmanager: https://github.com/prometheus/alertmanager
+  quay.io/prometheus/snmp-exporter: https://github.com/prometheus/snmp_exporter
+  quay.io/prometheus/blackbox-exporter: https://github.com/prometheus/blackbox_exporter
+# GitHub API token (optional, read-only public access is enough): tideline_github_token.
+# Unauthenticated, GitHub allows 60 release lookups an hour per address.
+
+# --- Store: PostgreSQL, Prometheus and Grafana host -------------------------------------
+tideline_store_host: fedora                 # inventory name or FQDN
+tideline_owner: CHANGE_ME                   # owner of the rootless postgres/prometheus/grafana Quadlets
+tideline_pg_container: postgres
+tideline_pg_host: 127.0.0.1                 # as Grafana reaches it (both use the host network)
+tideline_pg_port: 5432
+tideline_db: tideline
+tideline_db_owner: tideline                 # NOLOGIN role owning the schema
+tideline_grafana_db_user: tideline_grafana  # SELECT-only; password: tideline_grafana_db_password (secret)
+tideline_keep_days: 365                     # history of resolved updates
+
+# --- Observability -------------------------------------------------------------------
+tideline_textfile_dir: /var/lib/node_exporter/textfile_collector
+tideline_manage_textfile_collector: true    # add the collector to node-exporter.service if missing
+tideline_node_exporter_unit: node-exporter.service
+tideline_prom_rules_dir: /srv/prometheus/config/rules.d   # set "" to skip the alert rules
+tideline_prom_rules_container_dir: /etc/prometheus/rules.d
+tideline_prom_container: prometheus
+tideline_prom_url: http://127.0.0.1:9090
+tideline_grafana_provisioning: /srv/grafana-provisioning  # mounted at /etc/grafana/provisioning
+tideline_grafana_unit: grafana.service      # rootless user unit
+tideline_grafana_folder: Infrastructure
+tideline_stale_hours: 30                    # 6-hourly runs: several misses before alerting
+tideline_alert_critical_days: 3             # critical security update waiting longer than this
+tideline_alert_high_days: 14
+tideline_alert_reboot_days: 14
+
+# --- Vendor appliances: a catalog you keep -------------------------------------------
+# Edit in AAP (Inventories > homelab > Variables) or site-vars.yml. installed/latest are
+# yours to maintain; a probe, when given and answering, replaces "installed" with what the
+# appliance reports. Fields: name (required), product, vendor, installed, installed_on
+# (YYYY-MM-DD), latest, latest_released, release_notes, download, notes, probe.
+#   probe: {type: vtm, url: https://vtm.example.com:9070}       vtm_api_user / vtm_api_password
+#   probe: {type: nios}                                          nios_wapi, nios_api_user / nios_api_password
+#   probe: {type: http, url: ..., regex: '...(capture)...', user: ..., password_var: name_of_var}
+#   probe: {type: command, host: inventory-host, command: '...', regex: '...(capture)...'}
+#   probe: {type: raw, host: inventory-host, command: 'show version', regex: 'Junos: (\S+)'}
+tideline_appliances: []
+tideline_validate_certs: false              # appliance and firewall APIs (self-signed until the lab CA)
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam
+vtm_api_user: ansible
+
+# --- OPNsense (playbooks/opnsense.yml; inventory "network") ---------------------------
+opnsense_api_url: "https://{{ inventory_hostname }}"
+opnsense_validate_certs: false
+opnsense_api_timeout: 60
+tideline_opnsense_check: true               # ask the firewall to check its mirror first

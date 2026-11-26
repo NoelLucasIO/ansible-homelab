@@ -1,0 +1,135 @@
+---
+# One catalog entry (tl_app): probe the running version when a probe is given, then compare
+# with the catalog's "latest". A probe that fails is reported and the manual value is used.
+- name: "Start clean, {{ tl_app.name }}"
+  ansible.builtin.set_fact:
+    tl_live: ""
+    tl_perr: ""
+    tl_probe: "{{ tl_app.probe | default({}) }}"
+
+- name: "Probe, {{ tl_app.name }}"
+  when: tl_probe.type is defined
+  block:
+    # --- Ivanti vTM: REST API, newest API version the appliance offers
+    - name: "VTM API versions, {{ tl_app.name }}"
+      ansible.builtin.uri:
+        url: "{{ tl_probe.url | default('https://' ~ tl_app.name ~ ':9070') }}/api/tm/"
+        user: "{{ tl_probe.user | default(vtm_api_user) }}"
+        password: "{{ lookup('ansible.builtin.vars', tl_probe.password_var | default('vtm_api_password')) }}"
+        force_basic_auth: true
+        validate_certs: "{{ tideline_validate_certs | bool }}"
+        timeout: 20
+      register: tl_vtm_versions
+      when: tl_probe.type == 'vtm'
+      no_log: true
+
+    - name: "VTM local information, {{ tl_app.name }}"
+      ansible.builtin.uri:
+        url: >-
+          {{ tl_probe.url | default('https://' ~ tl_app.name ~ ':9070') }}/api/tm/{{
+             tl_vtm_versions.json.children | map(attribute='name') | list | last }}/status/local_tm/information
+        user: "{{ tl_probe.user | default(vtm_api_user) }}"
+        password: "{{ lookup('ansible.builtin.vars', tl_probe.password_var | default('vtm_api_password')) }}"
+        force_basic_auth: true
+        validate_certs: "{{ tideline_validate_certs | bool }}"
+        timeout: 20
+      register: tl_vtm_info
+      when: tl_probe.type == 'vtm'
+      no_log: true
+
+    - name: "VTM version, {{ tl_app.name }}"
+      ansible.builtin.set_fact:
+        tl_live: >-
+          {{ tl_vtm_info.json.information.tm_version
+             | default((tl_vtm_info.json | to_json | regex_search('"tm_version":\\s*"([^"]+)"', '\\1') or [''])[0]) }}
+      when: tl_probe.type == 'vtm'
+
+    # --- Infoblox NIOS: the grid's running version from WAPI
+    - name: "NIOS upgrade status, {{ tl_app.name }}"
+      ansible.builtin.uri:
+        url: "{{ tl_probe.url | default(nios_wapi) }}/upgradestatus?type=GRID&_return_fields=current_version"
+        user: "{{ tl_probe.user | default(nios_api_user) }}"
+        password: "{{ lookup('ansible.builtin.vars', tl_probe.password_var | default('nios_api_password')) }}"
+        force_basic_auth: true
+        validate_certs: "{{ tideline_validate_certs | bool }}"
+        timeout: 20
+      register: tl_nios
+      when: tl_probe.type == 'nios'
+      no_log: true
+
+    - name: "NIOS version, {{ tl_app.name }}"
+      ansible.builtin.set_fact:
+        tl_live: "{{ (tl_nios.json | first).current_version | default('') }}"
+      when: tl_probe.type == 'nios'
+
+    # --- Anything with a web endpoint: a regex with one capture group
+    - name: "HTTP, {{ tl_app.name }}"
+      ansible.builtin.uri:
+        url: "{{ tl_probe.url }}"
+        user: "{{ tl_probe.user | default(omit) }}"
+        password: "{{ lookup('ansible.builtin.vars', tl_probe.password_var) if tl_probe.password_var is defined else omit }}"
+        force_basic_auth: "{{ tl_probe.user is defined }}"
+        validate_certs: "{{ tideline_validate_certs | bool }}"
+        return_content: true
+        timeout: 20
+      register: tl_http
+      when: tl_probe.type == 'http'
+      no_log: true
+
+    # --- A command over SSH: command (needs Python on the target) or raw (network gear)
+    - name: "Command via probe host, {{ tl_app.name }}"
+      ansible.builtin.command:
+        cmd: "{{ tl_probe.command }}"
+      delegate_to: "{{ tl_probe.host }}"
+      register: tl_cmd
+      changed_when: false
+      when: tl_probe.type == 'command'
+
+    - name: "Raw via probe host, {{ tl_app.name }}"
+      ansible.builtin.raw: "{{ tl_probe.command }}"
+      delegate_to: "{{ tl_probe.host }}"
+      register: tl_raw
+      changed_when: false
+      when: tl_probe.type == 'raw'
+
+    - name: "Version from the output, {{ tl_app.name }}"
+      ansible.builtin.set_fact:
+        tl_live: >-
+          {{ ((({'http': tl_http.content | default(''), 'command': tl_cmd.stdout | default(''),
+                 'raw': tl_raw.stdout | default('')})[tl_probe.type])
+              | regex_search(tl_probe.regex, '\1') or [''])[0] }}
+      when: tl_probe.type in ['http', 'command', 'raw']
+
+    - name: "The probe found a version, {{ tl_app.name }}"
+      ansible.builtin.assert:
+        that: tl_live | length > 0
+        fail_msg: "probe '{{ tl_probe.type }}' answered but no version was found in it"
+        quiet: true
+  rescue:
+    - name: "Probe failed, using the catalog's installed version, {{ tl_app.name }}"
+      ansible.builtin.set_fact:
+        tl_live: ""
+        tl_perr: >-
+          {{ (ansible_failed_result.msg | default('probe failed'))[:300]
+             if 'password' not in (ansible_failed_result.msg | default('')) else 'probe failed (details hidden: no_log)' }}
+
+- name: "Compare, {{ tl_app.name }}"
+  vars:
+    tl_installed: "{{ tl_live if tl_live | length > 0 else (tl_app.installed | default('') | string) }}"
+    tl_latest: "{{ tl_app.latest | default('') | string }}"
+  ansible.builtin.set_fact:
+    tl_appliances: >-
+      {{ tl_appliances | default([]) + [{
+           'name': tl_app.name, 'product': tl_app.product | default(tl_app.name),
+           'vendor': tl_app.vendor | default(none),
+           'installed_version': tl_installed or none,
+           'installed_source': 'live' if tl_live | length > 0 else ('manual' if tl_installed else none),
+           'installed_on': (tl_app.installed_on | string) if tl_app.installed_on is defined else none,
+           'latest_version': tl_latest or none,
+           'latest_released': (tl_app.latest_released | string) if tl_app.latest_released is defined else none,
+           'update_available': ((tl_installed | tideline_vercmp(tl_latest)) < 0) if (tl_installed and tl_latest) else none,
+           'release_notes_url': tl_app.release_notes | default(none),
+           'download_url': tl_app.download | default(none),
+           'notes': tl_app.notes | default(none),
+           'probe': tl_probe.type | default(none),
+           'probe_error': tl_perr or none}] }}

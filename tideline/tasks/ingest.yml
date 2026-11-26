@@ -1,0 +1,53 @@
+---
+# Hand tideline_payload to tideline.ingest() on the store host, then rewrite the Prometheus
+# textfile from the database's state. psql runs inside the Postgres container as its owner
+# (no database password needed). The JSON goes in on stdin, inside a dollar-quote whose
+# random tag can't occur in it, so nothing in it needs escaping.
+- name: Store host environment
+  ansible.builtin.include_tasks: owner_env.yml
+
+- name: Dollar-quote tag for the payload
+  ansible.builtin.set_fact:
+    tl_json: "{{ tideline_payload | to_json }}"
+    tl_tag: "tl_{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_lowercase', 'digits'], length=24) }}"
+
+- name: The tag doesn't occur in the payload
+  ansible.builtin.assert:
+    that: ('$' ~ tl_tag ~ '$') not in tl_json
+    quiet: true
+
+- name: Ingest into {{ tideline_db }}
+  ansible.builtin.command:
+    cmd: podman exec -i {{ tideline_pg_container }} psql -U postgres -d {{ tideline_db }} -X -At -v ON_ERROR_STOP=1
+    stdin: "SELECT tideline.ingest(${{ tl_tag }}${{ tl_json }}${{ tl_tag }}$::jsonb);"
+    chdir: /
+  delegate_to: "{{ tideline_store_host }}"
+  become: true
+  become_user: "{{ tideline_owner }}"
+  environment: "{{ tl_owner_env }}"
+  register: tl_ingest
+  changed_when: true
+
+- name: Metrics from the database
+  ansible.builtin.command:
+    cmd: podman exec -i {{ tideline_pg_container }} psql -U postgres -d {{ tideline_db }} -X -At -v ON_ERROR_STOP=1
+    stdin: SELECT tideline.metrics();
+    chdir: /
+  delegate_to: "{{ tideline_store_host }}"
+  become: true
+  become_user: "{{ tideline_owner }}"
+  environment: "{{ tl_owner_env }}"
+  register: tl_metrics
+  changed_when: false
+
+- name: Textfile for node_exporter (written atomically)
+  ansible.builtin.copy:
+    dest: "{{ tideline_textfile_dir }}/tideline.prom"
+    content: "{{ tl_metrics.stdout }}\n"
+    mode: "0644"
+  delegate_to: "{{ tideline_store_host }}"
+  become: true
+
+- name: Stored
+  ansible.builtin.debug:
+    msg: "{{ tl_ingest.stdout }}"

@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+groups:
+  - name: tideline
+    rules:
+      - alert: TidelineCollectionStale
+        expr: time() - tideline_last_success_timestamp_seconds > {{ tideline_stale_hours | int }} * 3600
+        for: 30m
+        labels: { severity: warning }
+        annotations:
+          summary: "No complete update check of {% raw %}{{ $labels.host }}{% endraw %} for over {{ tideline_stale_hours }} hours"
+          description: "Check the AAP workflow \"Tideline\" (host reachability, the collector's errors in the Systems table)."
+      - alert: TidelineMetricsMissing
+        expr: absent(tideline_updates_pending)
+        for: 12h
+        labels: { severity: warning }
+        annotations:
+          summary: "No Tideline metrics at all (textfile collector, or the job never ran)"
+      - alert: TidelineCriticalSecurityUpdate
+        expr: time() - tideline_security_oldest_timestamp_seconds{severity="critical"} > {{ tideline_alert_critical_days | int }} * 86400
+        for: 1h
+        labels: { severity: critical }
+        annotations:
+          summary: "{% raw %}{{ $labels.host }}{% endraw %}: a critical security update has waited over {{ tideline_alert_critical_days }} days"
+          description: "See the Tideline dashboard (Security only)."
+      - alert: TidelineHighSecurityUpdate
+        expr: time() - tideline_security_oldest_timestamp_seconds{severity="high"} > {{ tideline_alert_high_days | int }} * 86400
+        for: 1h
+        labels: { severity: warning }
+        annotations:
+          summary: "{% raw %}{{ $labels.host }}{% endraw %}: an important/high security update has waited over {{ tideline_alert_high_days }} days"
+      - alert: TidelineRebootPending
+        expr: tideline_reboot_required == 1
+        for: {{ tideline_alert_reboot_days | int * 24 }}h
+        labels: { severity: info }
+        annotations:
+          summary: "{% raw %}{{ $labels.host }}{% endraw %} has needed a reboot for over {{ tideline_alert_reboot_days }} days"

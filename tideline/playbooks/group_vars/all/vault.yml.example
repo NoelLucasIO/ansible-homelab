@@ -1,0 +1,17 @@
+# CLI only: copy to vault.yml (git-ignored), fill in, then ansible-vault encrypt vault.yml.
+# In AAP these come from credentials (aap-setup.yml creates "homelab-tideline" and
+# "<firewall>-tideline-api"). Generate a password with:
+#   python3 -c 'import secrets; print(secrets.token_urlsafe(32))'
+
+# credential "homelab-tideline" (type "Tideline secrets")
+tideline_grafana_db_password: CHANGE_ME      # Grafana's SELECT-only role on the tideline database
+# tideline_github_token: CHANGE_ME           # optional: more than 60 release-note lookups an hour
+
+# credential "<firewall>-tideline-api" (type "OPNsense API"), opnsense.yml only.
+# OPNsense: System > Access > Users > (user with privilege "System: Firmware") > API keys
+opnsense_api_key: CHANGE_ME
+opnsense_api_secret: CHANGE_ME
+
+# Appliance probes (only for the probes you use; same credentials as ipam-vm / vtm-config)
+# nios_api_password: CHANGE_ME
+# vtm_api_password: CHANGE_ME

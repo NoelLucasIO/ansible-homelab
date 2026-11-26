@@ -1,0 +1,298 @@
+---
+# Brings AAP in line with Tideline (controller API, built-in modules only). Idempotent.
+#   * inventory variables: tideline_* site values merged into "homelab" and "network"
+#     (other keys untouched; tideline_appliances only seeded when absent, so your AAP edits win)
+#   * credential type "Tideline secrets" + credential "homelab-tideline" (prompted; Enter skips)
+#   * credential "<firewall>-tideline-api" of type "OPNsense API" (prompted; Enter skips)
+#   * job templates "Tideline deploy", "Tideline collect", "Tideline OPNsense"
+#   * workflow "Tideline" (collect, then OPNsense) on a 6-hourly schedule
+#
+#   ansible-playbook playbooks/aap-setup.yml -e @../hcp-vm/aap.local.yml -e @../site-vars.yml
+- name: AAP setup for Tideline
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - tideline_defaults
+  vars_prompt:
+    - name: tl_grafana_pw_in
+      prompt: "Password for the Grafana read-only database role (Enter to skip the credential)"
+      private: true
+      default: ""
+    - name: tl_github_token_in
+      prompt: "GitHub token for release-note lookups (optional; Enter for none)"
+      private: true
+      default: ""
+    - name: tl_fw_key_in
+      prompt: "OPNsense API key with 'System: Firmware' (Enter to skip)"
+      private: true
+      default: ""
+    - name: tl_fw_secret_in
+      prompt: "OPNsense API secret"
+      private: true
+      default: ""
+  vars:
+    aap_api: "{{ aap_url }}/api/controller/v2"
+    aap_project: ansible-homelab
+    tl_machine_credential: homelab-ssh
+    tl_secrets_credential: homelab-tideline
+    tl_secrets_type: Tideline secrets
+    tl_nios_credential: homelab-secrets       # nios_api_password, for the NIOS appliance probe
+    tl_vtm_credential: ""                     # a "vTM API" credential, for the vTM probe (optional)
+    tl_firewall: "{{ opnsense_firewall | default('gw.example.com') }}"
+    tl_fw_credential: "{{ tl_firewall.split('.')[0] }}-tideline-api"
+    tl_schedule: "DTSTART;TZID=America/New_York:20261126T051300 RRULE:FREQ=HOURLY;INTERVAL=6"   # 05:13, 11:13, 17:13, 23:13
+    # Site values copied into the inventories (from -e @../site-vars.yml); everything else
+    # keeps its role default, so later default changes in the repo still apply.
+    tl_site_keys: [tideline_store_host, tideline_owner, tideline_textfile_dir, tideline_prom_rules_dir,
+                   tideline_prom_url, tideline_grafana_provisioning, tideline_grafana_folder,
+                   tideline_container_users, tideline_appliances, tideline_keep_days]
+    tl_site: >-
+      {{ dict(tl_site_keys | zip(query('ansible.builtin.vars', *tl_site_keys))) }}
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ {'Authorization': 'Bearer ' ~ aap_token} if aap_token | default('') | length > 0 else omit }}"
+      user: "{{ omit if aap_token | default('') | length > 0 else aap_user }}"
+      password: "{{ omit if aap_token | default('') | length > 0 else aap_password }}"
+      force_basic_auth: "{{ aap_token | default('') | length == 0 }}"
+      validate_certs: "{{ aap_validate_certs | default(false) }}"
+      body_format: json
+      return_content: true
+      status_code: [200, 201, 202, 204]
+  tasks:
+    - name: Settings given
+      ansible.builtin.assert:
+        that:
+          - aap_url is defined
+          - aap_token | default('') | length > 0 or (aap_user is defined and aap_password is defined)
+          - tideline_owner != 'CHANGE_ME'
+        fail_msg: "Pass -e @../hcp-vm/aap.local.yml -e @../site-vars.yml (aap_url/aap_token, tideline_* site values)."
+        quiet: true
+
+    - name: Project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/?name={{ aap_project | urlencode }}"
+      register: tl_project
+
+    - name: Sync the project
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/projects/{{ tl_project.json.results[0].id }}/update/"
+        method: POST
+      register: tl_sync
+      changed_when: true
+
+    - name: Wait for the sync
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/project_updates/{{ tl_sync.json.id }}/"
+      register: tl_sync_job
+      until: tl_sync_job.json.status in ['successful', 'failed', 'error', 'canceled']
+      retries: 60
+      delay: 5
+      failed_when: tl_sync_job.json.status != 'successful'
+
+    - name: Shortcuts
+      ansible.builtin.set_fact:
+        tl_org: "{{ tl_project.json.results[0].organization }}"
+        tl_project_id: "{{ tl_project.json.results[0].id }}"
+
+    # --- Inventory variables ----------------------------------------------------------
+    - name: Site values into inventory "homelab"
+      ansible.builtin.include_tasks: ../tasks/aap_inventory_vars.yml
+      vars:
+        tl_inv_name: homelab
+        tl_inv_vars: "{{ tl_site }}"
+        tl_inv_seed_only: [tideline_appliances]
+
+    - name: Site values into inventory "network"
+      ansible.builtin.include_tasks: ../tasks/aap_inventory_vars.yml
+      vars:
+        tl_inv_name: network
+        tl_inv_vars: >-
+          {{ tl_site | dict2items | selectattr('key', 'in', ['tideline_store_host', 'tideline_owner',
+             'tideline_textfile_dir', 'tideline_keep_days']) | items2dict }}
+
+    # --- Credentials ----------------------------------------------------------------
+    - name: Credential type exists? {{ tl_secrets_type }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ tl_secrets_type | urlencode }}"
+      register: tl_ct_q
+
+    - name: Create credential type {{ tl_secrets_type }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/"
+        method: POST
+        body:
+          name: "{{ tl_secrets_type }}"
+          description: Tideline's Grafana database password and an optional GitHub token
+          kind: cloud
+          inputs:
+            fields:
+              - {id: tideline_grafana_db_password, label: Grafana DB password, type: string, secret: true}
+              - {id: tideline_github_token, label: GitHub token (optional), type: string, secret: true}
+            required: [tideline_grafana_db_password]
+          injectors:
+            extra_vars:
+              tideline_grafana_db_password: !unsafe "{{ tideline_grafana_db_password }}"
+              tideline_github_token: !unsafe "{{ tideline_github_token | default('') }}"
+      register: tl_ct_new
+      when: tl_ct_q.json.count == 0
+      changed_when: true
+
+    - name: Credential exists? {{ tl_secrets_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ tl_secrets_credential | urlencode }}"
+      register: tl_cred_q
+
+    - name: Create or update {{ tl_secrets_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/{{ (tl_cred_q.json.results[0].id ~ '/') if tl_cred_q.json.count else '' }}"
+        method: "{{ 'PATCH' if tl_cred_q.json.count else 'POST' }}"
+        body:
+          name: "{{ tl_secrets_credential }}"
+          credential_type: "{{ (tl_ct_new.json.id if tl_ct_q.json.count == 0 else tl_ct_q.json.results[0].id) | int }}"
+          organization: "{{ tl_org | int }}"
+          inputs:
+            tideline_grafana_db_password: "{{ tl_grafana_pw_in }}"
+            tideline_github_token: "{{ tl_github_token_in }}"
+      when: tl_grafana_pw_in | length > 0
+      changed_when: true
+      no_log: true
+
+    - name: OPNsense API credential type
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credential_types/?name={{ 'OPNsense API' | urlencode }}"
+      register: tl_fw_ct
+
+    - name: OPNsense API credential type exists (opnsense-backup/aap-setup.yml creates it)
+      ansible.builtin.assert:
+        that: tl_fw_ct.json.count == 1 or tl_fw_key_in | length == 0
+        fail_msg: Run opnsense-backup/playbooks/aap-setup.yml first; it creates the "OPNsense API" credential type.
+        quiet: true
+
+    - name: Credential exists? {{ tl_fw_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/?name={{ tl_fw_credential | urlencode }}"
+      register: tl_fw_cred_q
+
+    - name: Create or update {{ tl_fw_credential }}
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/credentials/{{ (tl_fw_cred_q.json.results[0].id ~ '/') if tl_fw_cred_q.json.count else '' }}"
+        method: "{{ 'PATCH' if tl_fw_cred_q.json.count else 'POST' }}"
+        body:
+          name: "{{ tl_fw_credential }}"
+          description: "Tideline: firmware status (privilege System: Firmware)"
+          credential_type: "{{ tl_fw_ct.json.results[0].id | int }}"
+          organization: "{{ tl_org | int }}"
+          inputs: {opnsense_api_key: "{{ tl_fw_key_in }}", opnsense_api_secret: "{{ tl_fw_secret_in }}"}
+      when: tl_fw_key_in | length > 0 and tl_fw_secret_in | length > 0
+      changed_when: true
+      no_log: true
+
+    # --- Job templates --------------------------------------------------------------
+    - name: Job templates
+      ansible.builtin.include_tasks: ../tasks/aap_template.yml
+      loop:
+        - key: deploy
+          name: Tideline deploy
+          description: "Tideline: database, Grafana datasource + dashboard, Prometheus rules on the store host"
+          inventory: "{{ tl_inv_ids.homelab }}"
+          playbook: tideline/playbooks/deploy.yml
+          timeout: 900
+          credentials: ["{{ tl_machine_credential }}", "{{ tl_secrets_credential }}"]
+        - key: collect
+          name: Tideline collect
+          description: "Tideline: available updates on Linux hosts, containers and appliances (read-only)"
+          inventory: "{{ tl_inv_ids.homelab }}"
+          playbook: tideline/playbooks/collect.yml
+          timeout: 3600
+          credentials: ["{{ tl_machine_credential }}", "{{ tl_secrets_credential }}", "{{ tl_nios_credential }}", "{{ tl_vtm_credential }}"]
+          survey:
+            name: ""
+            description: ""
+            spec:
+              - question_name: Systems
+                question_description: Inventory pattern of Linux hosts to check (appliances are always checked)
+                variable: tideline_hosts
+                type: text
+                required: true
+                default: all
+        - key: opnsense
+          name: Tideline OPNsense
+          description: "Tideline: OPNsense firmware/package updates through the API (read-only)"
+          inventory: "{{ tl_inv_ids.network }}"
+          playbook: tideline/playbooks/opnsense.yml
+          timeout: 900
+          credentials: ["{{ tl_machine_credential }}", "{{ tl_fw_credential }}"]
+      loop_control:
+        loop_var: tl_jt
+        label: "{{ tl_jt.name }}"
+
+    # --- Workflow and schedule --------------------------------------------------------
+    - name: Workflow exists? Tideline
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/?name=Tideline"
+      register: tl_wf_q
+
+    - name: Create or update workflow Tideline
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ (tl_wf_q.json.results[0].id ~ '/') if tl_wf_q.json.count else '' }}"
+        method: "{{ 'PATCH' if tl_wf_q.json.count else 'POST' }}"
+        body:
+          name: Tideline
+          description: Available updates everywhere (Linux hosts, containers, appliances, then OPNsense) into the Tideline dashboard
+          organization: "{{ tl_org | int }}"
+      register: tl_wf
+      changed_when: true
+
+    - name: Workflow nodes
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ tl_wf.json.id }}/workflow_nodes/"
+      register: tl_nodes
+
+    - name: Node for each step
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ tl_wf.json.id }}/workflow_nodes/"
+        method: POST
+        body: {identifier: "{{ item }}", unified_job_template: "{{ tl_jt_ids[item] }}"}
+      loop: [collect, opnsense]
+      when: item not in (tl_nodes.json.results | map(attribute='identifier') | list)
+      changed_when: true
+
+    - name: Workflow nodes, now
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ tl_wf.json.id }}/workflow_nodes/"
+      register: tl_nodes
+
+    - name: OPNsense runs after collect, whatever collect's result
+      vars:
+        tl_by_id: "{{ tl_nodes.json.results | items2dict(key_name='identifier', value_name='id') }}"
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_template_nodes/{{ tl_by_id.collect }}/always_nodes/"
+        method: POST
+        body: {id: "{{ tl_by_id.opnsense }}"}
+        status_code: [204, 400]       # 400: already linked
+      changed_when: false
+
+    - name: Schedule exists?
+      ansible.builtin.uri:
+        url: "{{ aap_api }}/workflow_job_templates/{{ tl_wf.json.id }}/schedules/?name={{ 'Tideline every 6 hours' | urlencode }}"
+      register: tl_sched_q
+
+    - name: Every 6 hours
+      ansible.builtin.uri:
+        url: >-
+          {{ aap_api }}/{{ ('schedules/' ~ tl_sched_q.json.results[0].id ~ '/') if tl_sched_q.json.count
+             else ('workflow_job_templates/' ~ tl_wf.json.id ~ '/schedules/') }}
+        method: "{{ 'PATCH' if tl_sched_q.json.count else 'POST' }}"
+        body:
+          name: Tideline every 6 hours
+          rrule: "{{ tl_schedule }}"
+          enabled: true
+      changed_when: true
+
+    - name: Next
+      ansible.builtin.debug:
+        msg: >-
+          Run "Tideline deploy" once, then launch the "Tideline" workflow (or wait for the
+          schedule). Edit the appliance catalog in Inventories > homelab > Variables
+          (tideline_appliances).

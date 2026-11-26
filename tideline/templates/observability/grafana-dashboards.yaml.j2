@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+apiVersion: 1
+providers:
+  - name: tideline
+    folder: {{ tideline_grafana_folder }}
+    type: file
+    disableDeletion: true
+    allowUiUpdates: true
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/provisioning/dashboards/tideline
+      foldersFromFilesStructure: false
