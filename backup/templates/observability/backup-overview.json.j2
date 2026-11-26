@@ -49,9 +49,9 @@
     { "type": "table", "title": "Backup jobs", "gridPos": { "x": 0, "y": 4, "w": 24, "h": 9 },
       "datasource": { "type": "prometheus", "uid": "${prom}" },
       "targets": [
-        { "expr": "time() - pbs_backup_last_success_timestamp_seconds", "format": "table", "instant": true, "refId": "AGE" },
-        { "expr": "pbs_backup_last_exit_code", "format": "table", "instant": true, "refId": "EXIT" },
-        { "expr": "pbs_backup_duration_seconds", "format": "table", "instant": true, "refId": "DUR" }
+        { "expr": "max by (instance, kind, target) (time() - pbs_backup_last_success_timestamp_seconds)", "format": "table", "instant": true, "refId": "AGE" },
+        { "expr": "max by (instance, kind, target) (pbs_backup_last_exit_code)", "format": "table", "instant": true, "refId": "EXIT" },
+        { "expr": "max by (instance, kind, target) (pbs_backup_duration_seconds)", "format": "table", "instant": true, "refId": "DUR" }
       ],
       "transformations": [
         { "id": "merge" },
