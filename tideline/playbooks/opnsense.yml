@@ -77,7 +77,7 @@
             tl_rel_page: "https://docs.opnsense.org/releases/CE_{{ tl_series }}.html"
             tl_core_text: >-
               {{ ((tl_fw_log.json.html | default('')) | regex_replace('<(br|/p|/li)\s*/?>', '\n')
-                  | regex_replace('<[^>]+>', '') | regex_replace('\n{3,}', '\n\n') | trim)[:tideline_max_text | int] }}
+                  | regex_replace('<[^>]+>', '') | regex_replace('\n{3,}', '\n\n') | trim) | truncate(tideline_max_text | int, true, '…', 0) }}
           ansible.builtin.set_fact:
             tl_rows: >-
               {{ tl_rows | default([]) + [{
@@ -108,7 +108,8 @@
                    'installed_version': tl_fw_version, 'new_version': tl_fw_s.upgrade_major_version,
                    'repo': 'OPNsense', 'summary': 'Major release; needs a planned upgrade and reboot',
                    'advisory_type': 'major', 'advisory_title': 'OPNsense ' ~ tl_fw_s.upgrade_major_version,
-                   'advisory_text': (tl_fw_s.upgrade_major_message | default('') | regex_replace('<[^>]+>', ''))[:tideline_max_text | int] or none,
+                   'advisory_text': (tl_fw_s.upgrade_major_message | default('') | regex_replace('<[^>]+>', '')
+                                     | truncate(tideline_max_text | int, true, '…', 0)) or none,
                    'advisory_url': 'https://docs.opnsense.org/releases/CE_' ~ tl_fw_s.upgrade_major_version ~ '.html',
                    'changes_url': 'https://github.com/opnsense/changelog/tree/master/community/' ~ tl_fw_s.upgrade_major_version}] }}
           when: tl_fw_s.upgrade_major_version | default('') | length > 0
