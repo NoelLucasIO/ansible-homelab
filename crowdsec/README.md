@@ -22,8 +22,12 @@ internet ─► OPNsense ─► Nginx Proxy Manager (Podman host)
   container that reads NPM's access logs and reports to that LAPI. An IP that probes or
   brute-forces a site behind NPM gets blocked at the firewall for every address you serve,
   not only at the proxy.
-- Private addresses are whitelisted by CrowdSec's default parsers, so LAN clients are never
-  banned.
+- **Allowlist the LAN on the LAPI** (step 5 below). CrowdSec's default parsers whitelist
+  private addresses, but that did not stop OPNsense's own detections from banning a LAN host:
+  a vulnerability scanner on the LAN (vigil's Saturday Nuclei/ZAP runs) tripped
+  `firewallservices/pf-scan-multi_ports` and `crowdsecurity/ssh-bf` on the firewall, and the
+  bouncer then dropped everything from that host for hours, its DNS, monitoring and LAPI
+  connection included.
 
 ## OPNsense (once, by hand)
 
@@ -47,6 +51,15 @@ internet ─► OPNsense ─► Nginx Proxy Manager (Podman host)
 
    It prints `url`, `login` and `password` (on stderr). The password is
    `crowdsec_agent_password`.
+5. Allowlist your own networks, so no detection can ban them (CrowdSec 1.6.8+):
+
+   ```sh
+   cscli allowlists create lan -d "home LAN, never ban"
+   cscli allowlists add lan 192.0.2.0/24        # each LAN/VLAN, IPv6 prefixes, VPN tunnel subnets
+   cscli allowlists inspect lan
+   ```
+
+   Check what has been banned, and why, with `cscli alerts list --ip <address>`.
 
 The LAPI listens over plain HTTP. Every agent needs its own machine login, and the port is
 reachable from the LAN only.
