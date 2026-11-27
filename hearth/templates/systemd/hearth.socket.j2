@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# LAN listener for {{ hearth_upstream_unit }} (which stays on {{ hearth_upstream }}):
+# NPM ({{ npm_ip }}) forwards https://{{ hearth_fqdn }} here.
+[Unit]
+Description=hearth: LAN listener for the local LLM API ({{ hearth_fqdn }})
+
+[Socket]
+ListenStream={{ hearth_ip }}:{{ hearth_port }}
+# Bind even if the address isn't up yet at boot
+FreeBind=true
+
+[Install]
+WantedBy=sockets.target

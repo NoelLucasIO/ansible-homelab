@@ -1,0 +1,111 @@
+---
+- name: Secrets are filled in (AAP credential homelab-secrets, or group_vars/all/vault.yml)
+  ansible.builtin.assert:
+    that: lookup('vars', item, default='CHANGE_ME') != 'CHANGE_ME'
+    fail_msg: "{{ item }} is missing or CHANGE_ME. See playbooks/group_vars/all/vault.yml.example."
+    quiet: true
+  loop: [hearth_owner, nios_api_password, npm_identity, npm_secret]
+  no_log: true
+
+- name: Owner of the user units
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ hearth_owner }}"
+
+- name: Remember home and the environment systemd --user needs
+  ansible.builtin.set_fact:
+    hearth_home: "{{ ansible_facts.getent_passwd[hearth_owner][4] }}"
+    hearth_user_unit_dir: "{{ ansible_facts.getent_passwd[hearth_owner][4] }}/.config/systemd/user"
+    hearth_user_env:
+      XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[hearth_owner][1] }}"
+      DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[hearth_owner][1] }}/bus"
+
+# Without lingering the user's units stop at logout and don't start at boot.
+- name: Lingering is on
+  ansible.builtin.command: loginctl enable-linger {{ hearth_owner }}
+  args:
+    creates: /var/lib/systemd/linger/{{ hearth_owner }}
+
+- name: The LLM server's unit
+  ansible.builtin.systemd_service:
+    name: "{{ hearth_upstream_unit }}"
+    scope: user
+  become: true
+  become_user: "{{ hearth_owner }}"
+  environment: "{{ hearth_user_env }}"
+  register: hearth_upstream_state
+  failed_when: false
+
+- name: It is running
+  ansible.builtin.assert:
+    that: hearth_upstream_state.status.ActiveState | default('') == 'active'
+    fail_msg: >-
+      {{ hearth_upstream_unit }} isn't active for {{ hearth_owner }}
+      ({{ hearth_upstream_state.status.ActiveState | default('not found') }}). hearth publishes an
+      LLM server that already runs; start it (systemctl --user start {{ hearth_upstream_unit }}).
+    quiet: true
+
+- name: It answers on {{ hearth_upstream }}
+  ansible.builtin.uri:
+    url: "http://{{ hearth_upstream }}/health"
+  register: hearth_health
+  until: hearth_health.status == 200
+  retries: 12
+  delay: 5
+
+- name: API key file
+  ansible.builtin.stat:
+    path: "{{ hearth_api_key_file }}"
+  register: hearth_key_stat
+  when: hearth_api_key_file | length > 0
+
+- name: Read the API key (for the test only)
+  ansible.builtin.slurp:
+    src: "{{ hearth_api_key_file }}"
+  register: hearth_key_raw
+  when: hearth_api_key_file | length > 0 and hearth_key_stat.stat.exists
+  no_log: true
+
+- name: Authorization header for the test
+  ansible.builtin.set_fact:
+    hearth_auth: >-
+      {{ {'Authorization': 'Bearer ' ~ (hearth_key_raw.content | b64decode | trim)}
+         if hearth_key_raw.content is defined else {} }}
+  no_log: true
+
+- name: Socket proxy binary ({{ hearth_proxyd }})
+  ansible.builtin.stat:
+    path: "{{ hearth_proxyd }}"
+  register: hearth_proxyd_stat
+
+- name: Check it
+  ansible.builtin.assert:
+    that: hearth_proxyd_stat.stat.executable | default(false)
+    fail_msg: "{{ hearth_proxyd }} not found; set hearth_proxyd (Fedora/RHEL/Arch: /usr/lib/systemd/systemd-socket-proxyd)."
+    quiet: true
+
+- name: Is the listener already up?
+  ansible.builtin.systemd_service:
+    name: "{{ hearth_name }}.socket"
+    scope: user
+  become: true
+  become_user: "{{ hearth_owner }}"
+  environment: "{{ hearth_user_env }}"
+  register: hearth_socket_state
+  failed_when: false
+
+- name: Listening TCP ports
+  ansible.builtin.command: ss -Hltn
+  register: hearth_ss
+  changed_when: false
+  when: hearth_socket_state.status.ActiveState | default('inactive') != 'active'
+
+- name: Port is free (first deploy only)
+  ansible.builtin.assert:
+    that: (hearth_port | string) not in hearth_listening
+    fail_msg: "Port {{ hearth_port }} is already in use on {{ inventory_hostname }}; change hearth_port."
+    quiet: true
+  vars:
+    hearth_listening: "{{ hearth_ss.stdout_lines | map('split') | map(attribute=3)
+                          | map('regex_replace', '^.*:', '') | list }}"
+  when: hearth_socket_state.status.ActiveState | default('inactive') != 'active'

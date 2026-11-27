@@ -1,0 +1,42 @@
+---
+# Defaults only. Role defaults have the lowest precedence, so anything set in the
+# inventory (AAP inventory variables included) or with -e overrides them.
+# Addresses use the RFC 5737 documentation ranges and example.com: set real values
+# in your inventory (see inventory.example.yml).
+
+# --- Names -------------------------------------------------------------------------
+hearth_name: hearth                       # unit names: hearth.socket, hearth.service
+hearth_domain: "{{ vm_domain | default('example.com') }}"   # shares ipam-vm's domain when set
+hearth_fqdn: "llm.{{ hearth_domain }}"    # https://<this>/v1 is what clients (Readest) use
+
+# --- The LLM server this publishes (already running on the host, managed elsewhere) ----
+# Any OpenAI-compatible server listening on loopback; written for llama.cpp's llama-server.
+hearth_upstream: 127.0.0.1:8080
+hearth_upstream_unit: llama-server.service   # user unit of hearth_owner; checked, never changed
+# The server's API key, read on the host for the end-to-end test (never written anywhere).
+# Blank: the test sends no key.
+hearth_api_key_file: "{{ hearth_home }}/.config/llama/apikey"
+
+# --- The LAN listener (systemd socket + systemd-socket-proxyd, user units) -------------
+hearth_owner: "{{ baseline_admin_user | default('CHANGE_ME') }}"
+# Address NPM forwards to. Default: the host's own default IPv4 address (facts).
+hearth_ip: "{{ ansible_facts.default_ipv4.address | default('192.0.2.50') }}"
+hearth_port: 8088
+hearth_proxyd: /usr/lib/systemd/systemd-socket-proxyd
+
+# --- Reverse proxy and DNS (same variables as ipam-vm/vigil/pki) ----------------------
+nios_ip: 192.0.2.25
+nios_wapi: "https://{{ nios_ip }}/wapi/v2.12"
+nios_api_user: aap-ipam                   # password: nios_api_password (secret)
+npm_api: http://192.0.2.45:81/api
+npm_ip: 192.0.2.45
+npm_cert_domain: "*.{{ hearth_domain }}"
+npm_access_list_name: "LAN-only"
+hearth_proxy_timeout: 600                 # seconds NPM waits for a slow generation
+hearth_record_comment: "hearth: managed by Ansible"
+
+# --- Verify -------------------------------------------------------------------------
+hearth_verify_tls: true                   # the wildcard certificate on NPM is publicly trusted
+# Turn off a hybrid model's thinking for the test (Qwen3 and similar), as Readest's
+# "Thinking: Off" should. Ignored by models without a thinking switch.
+hearth_verify_no_thinking: true

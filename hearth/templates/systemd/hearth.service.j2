@@ -1,0 +1,8 @@
+# {{ ansible_managed }}
+[Unit]
+Description=hearth: forward {{ hearth_ip }}:{{ hearth_port }} to {{ hearth_upstream }}
+Requires={{ hearth_name }}.socket
+After={{ hearth_name }}.socket {{ hearth_upstream_unit }}
+
+[Service]
+ExecStart={{ hearth_proxyd }} {{ hearth_upstream }}

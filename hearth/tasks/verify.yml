@@ -1,0 +1,71 @@
+---
+# End to end, the way Readest calls it: DNS, NPM's certificate and access list, the proxy,
+# the relay, the API key, and a JSON-object answer (X-Ray asks for one).
+- name: Model list through the proxy at {{ hearth_fqdn }}
+  ansible.builtin.uri:
+    url: "https://{{ hearth_fqdn }}/v1/models"
+    headers: "{{ hearth_auth }}"
+    validate_certs: "{{ hearth_verify_tls }}"
+    return_content: true
+  register: hearth_v1_models
+  # A caching resolver may still hold an NXDOMAIN from before the record existed.
+  until: hearth_v1_models.status == 200
+  retries: 12
+  delay: 15
+
+- name: Model name the server reports
+  ansible.builtin.set_fact:
+    hearth_model: "{{ hearth_v1_models.json.data[0].id }}"
+
+- name: Without the API key it is refused
+  ansible.builtin.uri:
+    url: "https://{{ hearth_fqdn }}/v1/models"
+    validate_certs: "{{ hearth_verify_tls }}"
+    status_code: [401, 403]
+  when: hearth_auth | length > 0
+
+- name: JSON completion through the proxy
+  ansible.builtin.uri:
+    url: "https://{{ hearth_fqdn }}/v1/chat/completions"
+    method: POST
+    headers: "{{ hearth_auth }}"
+    validate_certs: "{{ hearth_verify_tls }}"
+    body_format: json
+    timeout: "{{ hearth_proxy_timeout }}"
+    return_content: true
+    body: >-
+      {{ {'model': hearth_model,
+          'temperature': 0,
+          'response_format': {'type': 'json_object'},
+          'messages': [
+            {'role': 'system',
+             'content': 'You build a reference for a reader from book text. Reply with a JSON object only: '
+                        ~ '{"characters": [{"name": "...", "description": "..."}], '
+                        ~ '"places": [{"name": "...", "description": "..."}]}'},
+            {'role': 'user',
+             'content': 'Ishmael signed aboard the Pequod at Nantucket. Its captain, Ahab, had lost a leg to '
+                        ~ 'the white whale Moby Dick and swore to hunt it down; Starbuck, the first mate, doubted him.'}]}
+         | combine({'chat_template_kwargs': {'enable_thinking': false}} if hearth_verify_no_thinking | bool else {}) }}
+  register: hearth_chat
+
+- name: Parse the answer
+  ansible.builtin.set_fact:
+    hearth_answer: "{{ hearth_chat.json.choices[0].message.content | from_json }}"
+
+- name: It found the characters
+  ansible.builtin.assert:
+    that:
+      - hearth_answer.characters is defined
+      - hearth_answer.characters | length >= 2
+    fail_msg: "Unexpected answer from {{ hearth_model }}: {{ hearth_answer }}"
+    quiet: true
+
+- name: Summary
+  ansible.builtin.debug:
+    msg:
+      - "https://{{ hearth_fqdn }}/v1 -> {{ hearth_ip }}:{{ hearth_port }} -> {{ hearth_upstream }} ({{ hearth_upstream_unit }})"
+      - "Model {{ hearth_model }}: {{ hearth_chat.json.usage.completion_tokens | default('?') }} tokens in {{ hearth_chat.elapsed }} s,
+         found {{ hearth_answer.characters | map(attribute='name') | join(', ') }}"
+      - "Readest: Settings > Language > Custom Translators > Add Translator"
+      - "  Type OpenAI Compatible | Base URL https://{{ hearth_fqdn }}/v1 | API key: the server's key ({{ hearth_api_key_file }}) |
+         Model {{ hearth_model }} | Temperature 0 | Thinking Off"

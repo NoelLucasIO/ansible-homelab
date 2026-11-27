@@ -1,0 +1,48 @@
+---
+# Stop and remove the LAN listener. The LLM server itself, the NPM proxy host and the DNS
+# record are left alone (deploy.yml brings the listener back).
+#   ansible-playbook playbooks/remove.yml -e @../site-vars.yml -K -e hearth_host=gpu01
+- name: Remove hearth
+  hosts: "{{ hearth_host | default('gpu01') }}"
+  become: true
+  gather_facts: false
+  roles:
+    - hearth_defaults
+  tasks:
+    - name: Owner of the user units
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ hearth_owner }}"
+
+    - name: Paths and environment
+      ansible.builtin.set_fact:
+        hearth_user_unit_dir: "{{ ansible_facts.getent_passwd[hearth_owner][4] }}/.config/systemd/user"
+        hearth_user_env:
+          XDG_RUNTIME_DIR: "/run/user/{{ ansible_facts.getent_passwd[hearth_owner][1] }}"
+          DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/{{ ansible_facts.getent_passwd[hearth_owner][1] }}/bus"
+
+    - name: Stop and disable
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        state: stopped
+        enabled: false
+      loop: ["{{ hearth_name }}.socket", "{{ hearth_name }}.service"]
+      become: true
+      become_user: "{{ hearth_owner }}"
+      environment: "{{ hearth_user_env }}"
+      failed_when: false
+
+    - name: Remove the unit files
+      ansible.builtin.file:
+        path: "{{ hearth_user_unit_dir }}/{{ item }}"
+        state: absent
+      loop: ["{{ hearth_name }}.socket", "{{ hearth_name }}.service"]
+
+    - name: Reload the user's systemd
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+        scope: user
+      become: true
+      become_user: "{{ hearth_owner }}"
+      environment: "{{ hearth_user_env }}"

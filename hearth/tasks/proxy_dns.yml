@@ -1,0 +1,108 @@
+---
+# https://llm.<domain> -> http://<GPU host>:<port>: wildcard certificate, LAN-only access list,
+# long timeouts (a long X-Ray update can take minutes) and no buffering (streamed answers).
+- name: NPM proxy host
+  ansible.builtin.include_tasks: npm_login.yml
+
+- name: Certificates and access lists
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/{{ item }}"
+    headers: "{{ npm_headers }}"
+    return_content: true
+  loop: [certificates, access-lists]
+  register: npm_lookup
+
+- name: Pick the wildcard certificate (newest) and the LAN-only list
+  ansible.builtin.set_fact:
+    npm_cert_id: "{{ (npm_lookup.results[0].json | selectattr('domain_names', 'contains', npm_cert_domain)
+                      | sort(attribute='expires_on') | last).id }}"
+    npm_acl_id: "{{ (npm_lookup.results[1].json | selectattr('name', 'equalto', npm_access_list_name) | first).id }}"
+    hearth_npm_existing: "{{ npm_hosts.json | selectattr('domain_names', 'contains', hearth_fqdn) | list }}"
+
+- name: Proxy host settings
+  ansible.builtin.set_fact:
+    hearth_npm_body:
+      domain_names: ["{{ hearth_fqdn }}"]
+      forward_scheme: http
+      forward_host: "{{ hearth_ip }}"
+      forward_port: "{{ hearth_port | int }}"
+      certificate_id: "{{ npm_cert_id | int }}"
+      access_list_id: "{{ npm_acl_id | int }}"
+      ssl_forced: true
+      http2_support: true
+      block_exploits: true
+      allow_websocket_upgrade: false
+      caching_enabled: false
+      hsts_enabled: false
+      hsts_subdomains: false
+      advanced_config: |
+        proxy_read_timeout {{ hearth_proxy_timeout }}s;
+        proxy_send_timeout {{ hearth_proxy_timeout }}s;
+        proxy_buffering off;
+        client_max_body_size 20m;
+      locations: []
+      meta: { letsencrypt_agree: false, dns_challenge: false }
+
+- name: Create the proxy host, forwarding to {{ hearth_ip ~ ':' ~ hearth_port }}
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts"
+    method: POST
+    headers: "{{ npm_headers }}"
+    body_format: json
+    status_code: [200, 201]
+    body: "{{ hearth_npm_body }}"
+  changed_when: true
+  when: hearth_npm_existing | length == 0
+
+# Brings an existing host back in line when the GPU host, port or timeout changed.
+- name: Update the proxy host, forwarding to {{ hearth_ip ~ ':' ~ hearth_port }}
+  ansible.builtin.uri:
+    url: "{{ npm_api }}/nginx/proxy-hosts/{{ hearth_npm_existing[0].id }}"
+    method: PUT
+    headers: "{{ npm_headers }}"
+    body_format: json
+    status_code: [200]
+    body: "{{ hearth_npm_body }}"
+  changed_when: true
+  when:
+    - hearth_npm_existing | length > 0
+    - (hearth_npm_existing[0].forward_host != hearth_ip
+       or hearth_npm_existing[0].forward_port | int != hearth_port | int
+       or hearth_npm_existing[0].advanced_config | trim != hearth_npm_body.advanced_config | trim
+       or hearth_npm_existing[0].access_list_id | int != npm_acl_id | int)
+
+- name: NIOS A record
+  module_defaults:
+    ansible.builtin.uri:
+      user: "{{ nios_api_user }}"
+      password: "{{ nios_api_password }}"
+      force_basic_auth: true
+      validate_certs: false
+      body_format: json
+      return_content: true
+      status_code: [200, 201]
+      timeout: 60
+  block:
+    - name: Existing record
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a?name={{ hearth_fqdn }}"
+      register: hearth_a
+
+    - name: A record -> {{ npm_ip }}
+      ansible.builtin.uri:
+        url: "{{ nios_wapi }}/record:a"
+        method: POST
+        status_code: [201]
+        body:
+          name: "{{ hearth_fqdn }}"
+          ipv4addr: "{{ npm_ip }}"
+          view: default
+          comment: "{{ hearth_record_comment }}"
+      changed_when: true
+      when: hearth_a.json | length == 0
+
+    - name: Existing record points elsewhere
+      ansible.builtin.assert:
+        that: hearth_a.json | length == 0 or (hearth_a.json | map(attribute='ipv4addr') | list) == [npm_ip]
+        fail_msg: "{{ hearth_fqdn }} already exists in NIOS with {{ hearth_a.json | map(attribute='ipv4addr') | list }}; expected {{ npm_ip }}."
+        quiet: true

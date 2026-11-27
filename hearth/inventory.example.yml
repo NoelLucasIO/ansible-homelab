@@ -1,0 +1,13 @@
+---
+# Copy to inventory.yml (git-ignored) for CLI runs. In AAP, use your inventory and
+# pass -e hearth_host=<name> (or the survey) for the host that runs the LLM server.
+all:
+  hosts:
+    gpu01:
+      ansible_host: 192.0.2.50
+  vars:
+    hearth_owner: CHANGE_ME
+    hearth_domain: example.com
+    nios_ip: 192.0.2.25
+    npm_api: http://192.0.2.45:81/api
+    npm_ip: 192.0.2.45

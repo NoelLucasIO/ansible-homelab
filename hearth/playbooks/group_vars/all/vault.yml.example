@@ -1,0 +1,8 @@
+---
+# CLI only: copy to vault.yml (git-ignored), fill in, then ansible-vault encrypt vault.yml
+# In AAP these come from the existing homelab-secrets credential (see README.md).
+
+# Shared with ipam-vm / vigil / pki
+nios_api_password: CHANGE_ME
+npm_identity: CHANGE_ME                    # NPM login email
+npm_secret: CHANGE_ME

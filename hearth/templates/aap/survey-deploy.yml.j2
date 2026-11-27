@@ -1,0 +1,8 @@
+- question_name: Host
+  question_description: Inventory host that runs the LLM server ({{ hearth_upstream_unit }} on {{ hearth_upstream }})
+  variable: hearth_host
+  type: text
+  required: true
+  default: {{ hearth_aap_host }}
+  min: 1
+  max: 253

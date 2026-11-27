@@ -1,0 +1,45 @@
+---
+# systemd listens on the LAN address and hands each connection to systemd-socket-proxyd,
+# which relays it to the LLM server on loopback. The server's own unit and flags stay as
+# they are, so whatever else uses it on 127.0.0.1 is unaffected.
+- name: User unit directory
+  ansible.builtin.file:
+    path: "{{ hearth_user_unit_dir }}"
+    state: directory
+    owner: "{{ hearth_owner }}"
+    group: "{{ ansible_facts.getent_passwd[hearth_owner][2] }}"
+    mode: "0755"
+
+- name: Socket and service units
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/systemd/{{ item }}.j2"
+    dest: "{{ hearth_user_unit_dir }}/{{ item | replace('hearth', hearth_name, 1) }}"
+    owner: "{{ hearth_owner }}"
+    group: "{{ ansible_facts.getent_passwd[hearth_owner][2] }}"
+    mode: "0644"
+  loop: [hearth.socket, hearth.service]
+  notify: Restart hearth
+
+# A changed socket or target takes effect only after a restart; the relay keeps its old
+# target until then.
+- name: Apply unit changes now
+  ansible.builtin.meta: flush_handlers
+
+- name: Socket enabled and listening
+  ansible.builtin.systemd_service:
+    name: "{{ hearth_name }}.socket"
+    scope: user
+    enabled: true
+    state: started
+    daemon_reload: true
+  become: true
+  become_user: "{{ hearth_owner }}"
+  environment: "{{ hearth_user_env }}"
+
+- name: The LAN address relays to the server
+  ansible.builtin.uri:
+    url: "http://{{ hearth_ip }}:{{ hearth_port }}/health"
+  register: hearth_relay
+  until: hearth_relay.status == 200
+  retries: 6
+  delay: 5

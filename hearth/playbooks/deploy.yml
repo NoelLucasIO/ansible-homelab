@@ -1,0 +1,42 @@
+---
+# Publish a local OpenAI-compatible LLM server (llama.cpp's llama-server, already running
+# on the host) on the LAN at https://llm.<domain>/v1 through NPM. Safe to rerun.
+#   ansible-playbook playbooks/deploy.yml -e @../site-vars.yml --ask-vault-pass -K -e hearth_host=gpu01
+#   Only part of it:  --tags listener   |   --tags dns   |   --tags verify
+- name: Deploy hearth
+  hosts: "{{ hearth_host | default('gpu01') }}"
+  become: true
+  gather_facts: true
+  module_defaults:
+    ansible.builtin.setup:
+      gather_subset: [min, network]
+  roles:
+    - hearth_defaults
+  pre_tasks:
+    - name: 0. Preflight
+      ansible.builtin.import_tasks: ../tasks/preflight.yml
+      tags: always
+  tasks:
+    - name: 1. LAN listener (systemd socket relaying to the server on loopback)
+      ansible.builtin.import_tasks: ../tasks/listener.yml
+      tags: [listener]
+
+    - name: 2. NPM proxy host and NIOS DNS
+      ansible.builtin.import_tasks: ../tasks/proxy_dns.yml
+      tags: [dns]
+
+    - name: 3. Verify (JSON completion through https)
+      ansible.builtin.import_tasks: ../tasks/verify.yml
+      tags: [verify]
+
+  handlers:
+    - name: Restart hearth
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        scope: user
+        state: restarted
+        daemon_reload: true
+      loop: ["{{ hearth_name }}.socket", "{{ hearth_name }}.service"]
+      become: true
+      become_user: "{{ hearth_owner }}"
+      environment: "{{ hearth_user_env }}"

@@ -12,3 +12,4 @@ backup/playbooks/roles/backup_defaults/defaults/main.yml var-naming[no-role-pref
 backup/playbooks/roles/backup_defaults/defaults/main.yml jinja[spacing]
 vtm-config/playbooks/roles/vtm_config_defaults/defaults/main.yml var-naming[no-role-prefix]
 tideline/playbooks/roles/tideline_defaults/defaults/main.yml var-naming[no-role-prefix]
+hearth/playbooks/roles/hearth_defaults/defaults/main.yml var-naming[no-role-prefix]
